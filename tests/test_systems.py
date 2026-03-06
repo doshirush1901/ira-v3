@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -904,3 +904,291 @@ class TestNemesisTraining:
         assert "[WARN]" in report
         assert "[FAIL]" in report
         assert "5.0/10" in report
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 9. DreamMode — 5-stage cycle
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestDreamModeFiveStages:
+    """Tests for the 5-stage DreamMode cycle with CRM and ProceduralMemory."""
+
+    @pytest.fixture()
+    async def dream(self, tmp_path):
+        from ira.memory.dream_mode import DreamMode
+
+        db = str(tmp_path / "dream_test.db")
+        log_path = tmp_path / "dream_log.json"
+
+        mock_ltm = AsyncMock()
+        mock_ltm.store = AsyncMock(return_value=[])
+
+        mock_conv = AsyncMock()
+        mock_conv._db = None
+        mock_conv.get_history = AsyncMock(return_value=[])
+
+        mock_episodic = AsyncMock()
+        mock_episodic.consolidate_episode = AsyncMock(return_value={
+            "id": 1,
+            "user_id": "contact-1",
+            "narrative": "Customer asked about PF1-C pricing.",
+            "key_topics": ["PF1-C", "pricing"],
+            "decisions_made": [],
+            "commitments": [],
+            "emotional_tone": "neutral",
+            "relationship_impact": "maintained",
+        })
+
+        mock_crm = AsyncMock()
+        mock_procedural = AsyncMock()
+        mock_procedural.learn_procedure = AsyncMock(return_value=MagicMock(
+            id=1, trigger_pattern="pricing inquiry", steps=["look up price"], success_rate=1.0,
+        ))
+
+        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+            dm = DreamMode(
+                long_term=mock_ltm,
+                episodic=mock_episodic,
+                conversation=mock_conv,
+                crm=mock_crm,
+                procedural_memory=mock_procedural,
+                db_path=db,
+                dream_log_path=log_path,
+            )
+        await dm.initialize()
+        yield dm, mock_crm, mock_procedural, mock_episodic, log_path
+        await dm.close()
+
+    @pytest.mark.asyncio
+    async def test_stage1_pulls_crm_interactions(self, dream):
+        dm, mock_crm, _, _, _ = dream
+
+        now = datetime.now(timezone.utc)
+        mock_crm.list_interactions = AsyncMock(return_value=[
+            MagicMock(to_dict=lambda: {
+                "contact_id": "c1", "direction": "OUTBOUND",
+                "subject": "Intro email", "content": "Hello!",
+                "created_at": now.isoformat(),
+            }),
+        ])
+
+        stage_log: dict = {"stages": {}}
+        interactions = await dm._stage1_memory_ingestion(stage_log)
+
+        assert len(interactions) == 1
+        assert stage_log["stages"]["1_memory_ingestion"]["status"] == "ok"
+        mock_crm.list_interactions.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stage1_skips_when_no_crm(self, tmp_path):
+        from ira.memory.dream_mode import DreamMode
+
+        db = str(tmp_path / "no_crm.db")
+        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+            dm = DreamMode(
+                long_term=AsyncMock(),
+                episodic=AsyncMock(),
+                conversation=AsyncMock(),
+                crm=None,
+                db_path=db,
+            )
+        await dm.initialize()
+
+        stage_log: dict = {"stages": {}}
+        interactions = await dm._stage1_memory_ingestion(stage_log)
+
+        assert interactions == []
+        assert stage_log["stages"]["1_memory_ingestion"]["interactions_found"] == 0
+        await dm.close()
+
+    @pytest.mark.asyncio
+    async def test_stage2_consolidates_crm_interactions(self, dream):
+        dm, _, _, mock_episodic, _ = dream
+
+        interactions = [
+            {"contact_id": "c1", "direction": "OUTBOUND", "subject": "Hi", "content": "Hello"},
+            {"contact_id": "c1", "direction": "INBOUND", "subject": "Re: Hi", "content": "Thanks"},
+            {"contact_id": "c2", "direction": "OUTBOUND", "subject": "Intro", "content": "Hey"},
+        ]
+
+        stage_log: dict = {"stages": {}}
+        episodes, consolidated = await dm._stage2_episodic_consolidation(interactions, stage_log)
+
+        assert consolidated >= 2  # one episode per contact group
+        assert mock_episodic.consolidate_episode.await_count >= 2
+        assert stage_log["stages"]["2_episodic_consolidation"]["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_stage3_generates_insights(self, dream):
+        dm, _, _, _, _ = dream
+
+        episodes = [
+            {"user_id": "c1", "narrative": "Customer asked about PF1-C pricing."},
+            {"user_id": "c2", "narrative": "Customer complained about delivery delays."},
+        ]
+
+        insight_json = json.dumps({
+            "patterns": [{"description": "Pricing inquiries increasing", "frequency": 3, "examples": []}],
+            "contradictions": [],
+            "insights": [{"insight": "Market shift toward PF1-C", "confidence": "HIGH", "evidence": []}],
+            "recommendations": [{"action": "Create PF1-C pricing FAQ", "priority": "HIGH", "rationale": "Reduce repetitive queries"}],
+        })
+
+        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=insight_json):
+            stage_log: dict = {"stages": {}}
+            insights, gaps, connections, campaign_insights = await dm._stage3_insight_generation(
+                episodes, stage_log
+            )
+
+        assert len(insights.get("patterns", [])) == 1
+        assert len(insights.get("recommendations", [])) == 1
+        assert stage_log["stages"]["3a_cross_episode_insights"]["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_stage4_creates_procedures_from_insights(self, dream):
+        dm, _, mock_procedural, _, _ = dream
+
+        insights = {
+            "recommendations": [
+                {"action": "Auto-reply to pricing inquiries", "priority": "HIGH", "rationale": "Save time"},
+            ],
+        }
+        episodes = [{"user_id": "c1", "narrative": "Pricing inquiry handled well."}]
+
+        proc_json = json.dumps({
+            "procedures": [
+                {"trigger": "pricing inquiry received", "steps": ["look up price", "draft reply"], "expected_outcome": "fast response", "confidence": "HIGH"},
+            ],
+        })
+
+        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=proc_json):
+            stage_log: dict = {"stages": {}}
+            await dm._stage4_procedural_learning(insights, episodes, stage_log)
+
+        mock_procedural.learn_procedure.assert_awaited_once()
+        assert stage_log["stages"]["4_procedural_learning"]["procedures_created"] == 1
+
+    @pytest.mark.asyncio
+    async def test_stage4_skips_without_procedural_memory(self, tmp_path):
+        from ira.memory.dream_mode import DreamMode
+
+        db = str(tmp_path / "no_proc.db")
+        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+            dm = DreamMode(
+                long_term=AsyncMock(),
+                episodic=AsyncMock(),
+                conversation=AsyncMock(),
+                procedural_memory=None,
+                db_path=db,
+            )
+        await dm.initialize()
+
+        stage_log: dict = {"stages": {}}
+        await dm._stage4_procedural_learning({}, [], stage_log)
+
+        assert stage_log["stages"]["4_procedural_learning"]["status"] == "skipped"
+        await dm.close()
+
+    @pytest.mark.asyncio
+    async def test_stage5_prunes_old_episodes(self, dream):
+        dm, _, _, _, _ = dream
+
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        assert dm._db is not None
+        await dm._db.execute(
+            """CREATE TABLE IF NOT EXISTS episodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT, narrative TEXT, key_topics TEXT,
+                decisions TEXT, commitments TEXT, emotional_tone TEXT,
+                relationship_impact TEXT, created_at TEXT
+            )"""
+        )
+        for i in range(5):
+            await dm._db.execute(
+                "INSERT INTO episodes (user_id, narrative, key_topics, decisions, commitments, emotional_tone, relationship_impact, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"u{i}", f"Old episode {i}", "[]", "[]", "[]", "neutral", "maintained", old_date),
+            )
+        await dm._db.commit()
+
+        prune_json = json.dumps({
+            "keep": [1],
+            "summarise": [{"ids": [2, 3], "summary": "Merged episodes 2 and 3"}],
+            "archive": [4, 5],
+        })
+
+        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=prune_json):
+            stage_log: dict = {"stages": {}}
+            await dm._stage5_memory_pruning(stage_log)
+
+        assert stage_log["stages"]["5_memory_pruning"]["archived"] == 2
+        assert stage_log["stages"]["5_memory_pruning"]["summarised"] == 2
+
+        cursor = await dm._db.execute("SELECT count(*) FROM episodes")
+        row = await cursor.fetchone()
+        assert row[0] == 3  # 5 - 2 archived = 3 remaining
+
+    @pytest.mark.asyncio
+    async def test_full_cycle_produces_report_and_log(self, dream):
+        dm, mock_crm, mock_procedural, _, log_path = dream
+
+        now = datetime.now(timezone.utc)
+        mock_crm.list_interactions = AsyncMock(return_value=[
+            MagicMock(to_dict=lambda: {
+                "contact_id": "c1", "direction": "OUTBOUND",
+                "subject": "Hello", "content": "Hi there",
+                "created_at": now.isoformat(),
+            }),
+        ])
+
+        insight_json = json.dumps({
+            "patterns": [], "contradictions": [],
+            "insights": [], "recommendations": [],
+        })
+        gap_json = json.dumps({"gaps": []})
+        creative_json = json.dumps({"connections": []})
+        proc_json = json.dumps({"procedures": []})
+        prune_json = json.dumps({"keep": [], "summarise": [], "archive": []})
+
+        call_count = 0
+        async def mock_llm(system, user, temperature=0):
+            nonlocal call_count
+            call_count += 1
+            if "cross-episode" in system.lower() or "deep-analysis" in system.lower():
+                return insight_json
+            if "gap" in system.lower():
+                return gap_json
+            if "creative" in system.lower():
+                return creative_json
+            if "process" in system.lower() or "procedur" in system.lower():
+                return proc_json
+            if "curator" in system.lower() or "prun" in system.lower():
+                return prune_json
+            return "{}"
+
+        with patch.object(dm, "_llm_call", side_effect=mock_llm):
+            report = await dm.run_dream_cycle()
+
+        assert report.memories_consolidated >= 1
+        assert isinstance(report.gaps_identified, list)
+        assert isinstance(report.creative_connections, list)
+        assert isinstance(report.campaign_insights, list)
+
+        assert log_path.exists()
+        log_data = json.loads(log_path.read_text())
+        assert isinstance(log_data, list)
+        assert len(log_data) == 1
+        assert "stages" in log_data[0]
+
+    @pytest.mark.asyncio
+    async def test_cycle_resilient_to_stage_failures(self, dream):
+        dm, mock_crm, _, mock_episodic, _ = dream
+
+        mock_crm.list_interactions = AsyncMock(side_effect=RuntimeError("CRM down"))
+        mock_episodic.consolidate_episode = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value="{}"):
+            report = await dm.run_dream_cycle()
+
+        assert report is not None
+        assert report.memories_consolidated == 0

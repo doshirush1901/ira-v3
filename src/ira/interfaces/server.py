@@ -218,6 +218,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         sensory=sensory,
         crm=crm,
         pantheon=pantheon,
+        unified_context=unified_context,
     )
     _services["email_processor"] = email_processor
 
@@ -342,10 +343,10 @@ async def request_timing(request: Request, call_next: Any) -> Any:
 async def query(req: QueryRequest) -> QueryResponse:
     """Route a query through Athena and the Pantheon."""
     pantheon = _svc("pantheon")
-    unified_context = _svc("unified_context")
 
     ctx = req.context or {}
     if req.user_id:
+        unified_context = _svc("unified_context")
         user_ctx = unified_context.get(req.user_id)
         ctx["cross_channel_history"] = unified_context.recent_history(
             req.user_id, limit=10,
@@ -355,6 +356,7 @@ async def query(req: QueryRequest) -> QueryResponse:
     response = await pantheon.process(req.query, ctx)
 
     if req.user_id:
+        unified_context = _svc("unified_context")
         unified_context.record_turn(
             req.user_id, ctx.get("channel", "api"), req.query, response,
         )

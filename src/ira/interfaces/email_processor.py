@@ -444,6 +444,19 @@ class EmailProcessor:
             content=analysis_summary,
         )
 
+        if self._unified_ctx is not None:
+            try:
+                user_id = contact.email
+                summary = f"[{direction.value}] {email.subject}"
+                self._unified_ctx.record_turn(
+                    user_id,
+                    "email",
+                    email.body[:500] if direction is Direction.INBOUND else summary,
+                    analysis_summary[:500] if direction is Direction.INBOUND else email.body[:500],
+                )
+            except Exception:
+                logger.exception("UnifiedContextManager recording failed for email")
+
         return {
             "email_id": email.id,
             "thread_id": email.thread_id,
