@@ -38,6 +38,8 @@ class Channel(str, Enum):
     PHONE = "PHONE"
     MEETING = "MEETING"
     WEB = "WEB"
+    CLI = "CLI"
+    API = "API"
 
 
 class Direction(str, Enum):
