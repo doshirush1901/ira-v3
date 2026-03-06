@@ -18,6 +18,17 @@ aiosqlite = ">=0.20"
 apscheduler = "^3.10"
 flashrank = ">=0.2"
 greenlet = "^3.3.2"
+google-api-python-client = "^2.0"
+google-auth-httplib2 = ">=0.2"
+google-auth-oauthlib = "^1.0"
+typer = ">=0.12"
+rich = ">=13.0"
+fastapi = ">=0.115"
+uvicorn = {version = ">=0.30", extras = ["standard"]}
+python-multipart = ">=0.0.9"
+
+[tool.poetry.scripts]
+ira = "ira.interfaces.cli:app"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

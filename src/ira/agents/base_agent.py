@@ -18,6 +18,8 @@ import httpx
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.message_bus import MessageBus
+from ira.skills import SKILL_MATRIX
+from ira.skills.handlers import use_skill as _use_skill
 
 logger = logging.getLogger(__name__)
 
@@ -165,3 +167,21 @@ class BaseAgent(ABC):
             lines = [l for l in lines if not l.strip().startswith("```")]
             cleaned = "\n".join(lines)
         return json.loads(cleaned)
+
+    # ── skill execution ──────────────────────────────────────────────────
+
+    async def use_skill(self, skill_name: str, **kwargs: Any) -> str:
+        """Execute a skill from the SKILL_MATRIX by name.
+
+        Every agent inherits this method, giving the entire Pantheon
+        uniform access to the shared skill library.
+
+        Raises :class:`ValueError` for unrecognised skill names.
+        """
+        logger.info("Agent '%s' invoking skill '%s'", self.name, skill_name)
+        return await _use_skill(skill_name, **kwargs)
+
+    @staticmethod
+    def available_skills() -> dict[str, str]:
+        """Return the full skill matrix for introspection."""
+        return dict(SKILL_MATRIX)

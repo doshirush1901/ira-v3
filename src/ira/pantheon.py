@@ -35,6 +35,8 @@ from ira.brain.deterministic_router import DeterministicRouter
 from ira.brain.retriever import UnifiedRetriever
 from ira.data.models import BoardMeetingMinutes
 from ira.message_bus import MessageBus
+from ira.skills import SKILL_MATRIX
+from ira.skills.handlers import use_skill
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +213,23 @@ class Pantheon:
         except (json.JSONDecodeError, TypeError):
             pass
         return []
+
+    # ── skill execution ──────────────────────────────────────────────────
+
+    async def use_skill(self, skill_name: str, **kwargs: Any) -> str:
+        """Execute a skill by name at the orchestrator level.
+
+        This is a convenience wrapper so callers that hold a reference to
+        the Pantheon (e.g. the CLI or an API layer) can invoke skills
+        without going through a specific agent.
+        """
+        logger.info("Pantheon invoking skill '%s'", skill_name)
+        return await use_skill(skill_name, **kwargs)
+
+    @staticmethod
+    def available_skills() -> dict[str, str]:
+        """Return the full skill matrix for introspection."""
+        return dict(SKILL_MATRIX)
 
     # ── introspection ────────────────────────────────────────────────────
 

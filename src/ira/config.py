@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class EmailMode(str, Enum):
+    """Operating mode for the EmailProcessor."""
+
+    TRAINING = "TRAINING"
+    OPERATIONAL = "OPERATIONAL"
 
 
 class LLMConfig(BaseSettings):
@@ -63,6 +71,11 @@ class GoogleConfig(BaseSettings):
     credentials_path: Path = Path("credentials.json")
     token_path: Path = Path("token.json")
     ira_email: str = "ira@machinecraft.org"
+    training_email: str = "rushabh@machinecraft.org"
+    email_mode: EmailMode = Field(
+        default=EmailMode.TRAINING,
+        validation_alias="IRA_EMAIL_MODE",
+    )
 
 
 class ExternalAPIsConfig(BaseSettings):
