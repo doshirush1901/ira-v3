@@ -1,0 +1,269 @@
+"""Pricing and quote intelligence for Machinecraft.
+
+Provides price estimation from historical quotes, aggregate pipeline
+analytics, and formal quote-content generation.  All knowledge retrieval
+goes through :class:`~ira.brain.retriever.UnifiedRetriever`; CRM data is
+accessed via a thin repository interface defined here (implemented in
+Phase 4).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Protocol
+
+import httpx
+
+from ira.brain.retriever import UnifiedRetriever
+from ira.config import get_settings
+from ira.data.models import Contact
+
+logger = logging.getLogger(__name__)
+
+_QUOTES_CATEGORY = "01_quotes_and_proposals"
+
+
+# ── CRM repository interface (implemented in Phase 4) ───────────────────────
+
+
+class CRMRepository(Protocol):
+    """Minimal interface the pricing engine needs from the CRM layer."""
+
+    async def get_deals_by_filter(self, filters: dict[str, Any]) -> list[dict[str, Any]]: ...
+    async def get_contact(self, contact_id: str) -> dict[str, Any] | None: ...
+
+
+# ── LLM prompts ─────────────────────────────────────────────────────────────
+
+_ESTIMATE_SYSTEM_PROMPT = """\
+You are a pricing analyst for Machinecraft, an industrial machinery
+manufacturer.  Given SIMILAR HISTORICAL QUOTES and a requested machine
+configuration, produce a price estimate.
+
+Return ONLY valid JSON (no markdown fences):
+{
+  "estimated_price": {"low": 0, "mid": 0, "high": 0, "currency": "USD"},
+  "confidence": "high|medium|low",
+  "reasoning": "brief explanation of how you arrived at the range"
+}"""
+
+_QUOTE_CONTENT_SYSTEM_PROMPT = """\
+You are a professional technical-sales writer for Machinecraft.
+Draft formal quote content for the given machine and configuration.
+
+Return ONLY valid JSON:
+{
+  "reference_number": "QT-YYYYMMDD-XXX (placeholder)",
+  "greeting": "personalised opening paragraph",
+  "scope_of_supply": ["line item 1", "line item 2"],
+  "technical_summary": "paragraph summarising the configuration",
+  "commercial_terms": {
+    "price": "to be filled by sales",
+    "payment_terms": "standard suggestion",
+    "delivery": "estimated lead time",
+    "warranty": "standard terms",
+    "validity": "30 days"
+  },
+  "closing": "professional closing paragraph"
+}"""
+
+
+class PricingEngine:
+    """Pricing estimation, quote analytics, and quote-content generation."""
+
+    def __init__(
+        self,
+        retriever: UnifiedRetriever,
+        crm: CRMRepository | None = None,
+    ) -> None:
+        self._retriever = retriever
+        self._crm = crm
+
+        settings = get_settings()
+        self._openai_key = settings.llm.openai_api_key.get_secret_value()
+        self._openai_model = settings.llm.openai_model
+
+    # ── price estimation ─────────────────────────────────────────────────
+
+    async def estimate_price(
+        self,
+        machine_model: str,
+        configuration: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Estimate a price range based on historical quotes.
+
+        Returns ``estimated_price`` (low/mid/high), ``confidence``,
+        ``similar_quotes``, and ``reasoning``.
+        """
+        config_text = ", ".join(f"{k}: {v}" for k, v in configuration.items() if v)
+        query = f"{machine_model} quote price {config_text}"
+
+        similar = await self._retriever.search_by_category(
+            query=query,
+            category=_QUOTES_CATEGORY,
+            limit=8,
+        )
+
+        context_lines = [
+            f"Machine: {machine_model}",
+            f"Configuration: {config_text}",
+            "",
+            "SIMILAR HISTORICAL QUOTES:",
+        ]
+        for i, r in enumerate(similar, 1):
+            context_lines.append(f"{i}. {r.get('content', '')[:600]}")
+
+        raw = await self._llm_call(_ESTIMATE_SYSTEM_PROMPT, "\n".join(context_lines))
+
+        try:
+            result = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            result = {
+                "estimated_price": {"low": 0, "mid": 0, "high": 0, "currency": "USD"},
+                "confidence": "low",
+                "reasoning": raw,
+            }
+
+        result["similar_quotes"] = [
+            {"content": r.get("content", "")[:300], "score": r.get("score", 0)}
+            for r in similar[:5]
+        ]
+        return result
+
+    # ── quote history analytics ──────────────────────────────────────────
+
+    async def analyze_quote_history(
+        self,
+        filters: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Aggregate statistics over historical deals.
+
+        Supported filter keys: ``region``, ``machine_model``,
+        ``date_from``, ``date_to``, ``stage``.
+
+        Falls back to knowledge-base search when the CRM is not yet
+        connected.
+        """
+        if self._crm is not None:
+            return await self._analyze_from_crm(filters)
+
+        return await self._analyze_from_kb(filters)
+
+    async def _analyze_from_crm(self, filters: dict[str, Any]) -> dict[str, Any]:
+        assert self._crm is not None
+        deals = await self._crm.get_deals_by_filter(filters)
+        if not deals:
+            return self._empty_analysis()
+
+        values = [d.get("value", 0) for d in deals if d.get("value")]
+        won = [d for d in deals if d.get("stage") == "WON"]
+        lost = [d for d in deals if d.get("stage") == "LOST"]
+        total_decided = len(won) + len(lost)
+
+        return {
+            "total_deals": len(deals),
+            "total_value": sum(values),
+            "average_deal_size": sum(values) / len(values) if values else 0,
+            "win_rate": len(won) / total_decided if total_decided else 0,
+            "won_count": len(won),
+            "lost_count": len(lost),
+            "filters_applied": filters,
+        }
+
+    async def _analyze_from_kb(self, filters: dict[str, Any]) -> dict[str, Any]:
+        filter_text = ", ".join(f"{k}: {v}" for k, v in filters.items() if v)
+        query = f"quote history statistics {filter_text}"
+        results = await self._retriever.search_by_category(
+            query=query, category=_QUOTES_CATEGORY, limit=10,
+        )
+        return {
+            "source": "knowledge_base",
+            "note": "CRM not connected — results are approximate",
+            "relevant_excerpts": [r.get("content", "")[:400] for r in results],
+            "filters_applied": filters,
+        }
+
+    @staticmethod
+    def _empty_analysis() -> dict[str, Any]:
+        return {
+            "total_deals": 0,
+            "total_value": 0,
+            "average_deal_size": 0,
+            "win_rate": 0,
+            "won_count": 0,
+            "lost_count": 0,
+        }
+
+    # ── quote content generation ─────────────────────────────────────────
+
+    async def generate_quote_content(
+        self,
+        contact: Contact,
+        machine_model: str,
+        configuration: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Draft formal quote text for a contact and machine configuration."""
+        config_text = ", ".join(f"{k}: {v}" for k, v in configuration.items() if v)
+
+        context_lines = [
+            f"Contact: {contact.name} ({contact.email})",
+            f"Company: {contact.company or 'N/A'}",
+            f"Region: {contact.region or 'N/A'}",
+            f"Industry: {contact.industry or 'N/A'}",
+            "",
+            f"Machine: {machine_model}",
+            f"Configuration: {config_text}",
+        ]
+
+        price_est = await self.estimate_price(machine_model, configuration)
+        if price_est.get("estimated_price"):
+            ep = price_est["estimated_price"]
+            context_lines.append(
+                f"Price guidance: {ep.get('currency', 'USD')} "
+                f"{ep.get('low', '?')} – {ep.get('high', '?')} "
+                f"(mid {ep.get('mid', '?')})"
+            )
+
+        raw = await self._llm_call(
+            _QUOTE_CONTENT_SYSTEM_PROMPT,
+            "\n".join(context_lines),
+        )
+
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Quote content LLM returned non-JSON; wrapping")
+            return {"raw_content": raw}
+
+    # ── LLM helper ───────────────────────────────────────────────────────
+
+    async def _llm_call(self, system: str, user: str) -> str:
+        if not self._openai_key:
+            return "(No OpenAI key configured)"
+
+        headers = {
+            "Authorization": f"Bearer {self._openai_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._openai_model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user[:12_000]},
+            ],
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"]
+        except (httpx.HTTPError, KeyError):
+            logger.exception("LLM call failed in PricingEngine")
+            return "(LLM call failed)"

@@ -1,0 +1,68 @@
+{
+  "machine_catalog": {
+    "PF1-C": {
+      "category": "Panel Forming",
+      "description": "Continuous panel forming line for insulated sandwich panels.",
+      "key_features": [
+        "Continuous lamination",
+        "PU / PIR / mineral wool core",
+        "Speed up to 15 m/min",
+        "Panel thickness 30-200 mm"
+      ]
+    },
+    "PF2": {
+      "category": "Panel Forming",
+      "description": "High-speed double-belt panel forming line for large-volume production.",
+      "key_features": [
+        "Double-belt press",
+        "High output capacity",
+        "Panel thickness 40-250 mm",
+        "Integrated stacking system"
+      ]
+    },
+    "AM-Series": {
+      "category": "Roll Forming",
+      "description": "Advanced roll forming line for architectural metal profiles.",
+      "key_features": [
+        "Quick-change cassette system",
+        "Material thickness 0.3-1.2 mm",
+        "Servo-driven cut-to-length",
+        "Multiple profile capability"
+      ]
+    },
+    "RF-100": {
+      "category": "Roll Forming",
+      "description": "Standard roll forming machine for trapezoidal and corrugated profiles.",
+      "key_features": [
+        "Trapezoidal and corrugated profiles",
+        "Material thickness 0.3-0.8 mm",
+        "Hydraulic cut-off",
+        "Speed up to 40 m/min"
+      ]
+    },
+    "SL-500": {
+      "category": "Slitting",
+      "description": "High-precision coil slitting line for steel and aluminium.",
+      "key_features": [
+        "Coil weight up to 10 tonnes",
+        "Material thickness 0.2-3.0 mm",
+        "Slitting accuracy ±0.05 mm",
+        "Automatic tension control"
+      ]
+    }
+  },
+  "truth_hints": {
+    "AM-Series max material thickness": "12 mm for structural profiles, 1.2 mm for architectural cladding",
+    "PF1-C lead time": "16-20 weeks from order confirmation",
+    "PF2 lead time": "20-24 weeks from order confirmation",
+    "PF1-C minimum order": "Full line only — no partial configurations",
+    "AM-Series minimum order": "Base unit required; cassettes sold separately",
+    "RF-100 power requirement": "380V / 50Hz three-phase supply",
+    "SL-500 max coil weight": "10 tonnes",
+    "warranty_standard": "12 months parts and labour from commissioning date",
+    "installation_included": "Installation supervision included; civil works by customer",
+    "spare_parts_availability": "Critical spares stocked for 10 years after purchase",
+    "PF1-C core materials": "PU, PIR, mineral wool, EPS",
+    "PF2 core materials": "PU, PIR, mineral wool"
+  }
+}
