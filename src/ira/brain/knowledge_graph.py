@@ -16,6 +16,7 @@ import httpx
 from neo4j import AsyncGraphDatabase
 
 from ira.config import LLMConfig, Neo4jConfig, get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 

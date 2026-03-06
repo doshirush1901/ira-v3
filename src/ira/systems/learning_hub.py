@@ -22,6 +22,7 @@ import httpx
 from ira.config import LLMConfig, get_settings
 from ira.data.crm import CRMDatabase
 from ira.memory.procedural import Procedure, ProceduralMemory
+from ira.prompt_loader import load_prompt
 from ira.skills import SKILL_MATRIX
 
 logger = logging.getLogger(__name__)
@@ -29,48 +30,11 @@ logger = logging.getLogger(__name__)
 _FEEDBACK_THRESHOLD_POOR = 3
 _FEEDBACK_THRESHOLD_GOOD = 7
 
-_GAP_ANALYSIS_PROMPT = """\
-You are a skill-gap analyst for an AI assistant called Ira that serves an
-industrial machinery company (Machinecraft).
+_GAP_ANALYSIS_PROMPT = load_prompt("gap_analysis")
 
-Given the interaction below (query, response, and feedback), determine
-whether the poor rating was caused by:
+_CORRECTION_ANALYSIS_PROMPT = load_prompt("correction_analysis")
 
-1. A MISSING SKILL — Ira lacks a capability she should have.
-2. A KNOWLEDGE GAP — Ira had the skill but lacked the data / context.
-3. A QUALITY ISSUE — Ira had the skill and data but the output was poor.
-
-Return ONLY valid JSON (no markdown fences):
-{
-  "gap_type": "MISSING_SKILL" | "KNOWLEDGE_GAP" | "QUALITY_ISSUE",
-  "description": "<one-sentence explanation>",
-  "suggested_skill_name": "<snake_case name or null>",
-  "suggested_skill_description": "<what the skill should do, or null>",
-  "suggested_knowledge_source": "<where to find the missing data, or null>"
-}"""
-
-_CORRECTION_ANALYSIS_PROMPT = """\
-You are a correction analyst for an AI assistant called Ira.
-
-Compare the ORIGINAL response with the USER CORRECTION and produce a
-concise diff summary explaining what was wrong and what the correct
-behaviour should be.
-
-Return ONLY valid JSON (no markdown fences):
-{
-  "error_category": "FACTUAL" | "TONE" | "FORMATTING" | "INCOMPLETE" | "WRONG_AGENT",
-  "what_was_wrong": "<one sentence>",
-  "correct_behaviour": "<one sentence describing the ideal response>"
-}"""
-
-_PROCEDURE_EXTRACTION_PROMPT = """\
-You are a procedure extraction engine for an AI assistant called Ira.
-
-Given a successful interaction (query + response), extract a reusable
-step-by-step procedure that Ira should follow for similar future requests.
-
-Return ONLY a JSON array of step strings (no markdown fences):
-["Step 1: ...", "Step 2: ...", ...]"""
+_PROCEDURE_EXTRACTION_PROMPT = load_prompt("procedure_extraction")
 
 
 @dataclass

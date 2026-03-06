@@ -18,26 +18,13 @@ import httpx
 
 from ira.config import get_settings
 from ira.data.models import BoardMeetingMinutes
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
 _DB_PATH = "board_meetings.db"
 
-_SYNTHESIS_PROMPT = """\
-You are Athena, the CEO of Machinecraft, chairing a board meeting.
-
-You have received contributions from your specialist agents on the
-topic below.  Your job is to:
-1. Identify the key themes across all contributions.
-2. Resolve any disagreements by weighing evidence.
-3. Produce a concise synthesis (2-4 paragraphs).
-4. List concrete action items.
-
-Respond with JSON:
-{
-  "synthesis": "...",
-  "action_items": ["item 1", "item 2"]
-}"""
+_SYNTHESIS_PROMPT = load_prompt("board_meeting_synthesis")
 
 
 class BoardMeeting:

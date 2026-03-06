@@ -18,6 +18,7 @@ import httpx
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.data.models import Contact
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 

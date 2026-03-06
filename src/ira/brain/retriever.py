@@ -19,6 +19,7 @@ from flashrank import Ranker, RerankRequest
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 

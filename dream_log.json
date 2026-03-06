@@ -628,5 +628,131 @@
         "status": "error"
       }
     }
+  },
+  {
+    "timestamp": "2026-03-06T15:31:28.266684+00:00",
+    "cycle_date": "2026-03-06",
+    "memories_consolidated": 1,
+    "gaps_identified": [],
+    "creative_connections": [],
+    "campaign_insights": [],
+    "stages": {
+      "1_memory_ingestion": {
+        "status": "ok",
+        "interactions_found": 0
+      },
+      "2_episodic_consolidation": {
+        "status": "ok",
+        "episodes_created": 1,
+        "memories_consolidated": 1
+      },
+      "3a_cross_episode_insights": {
+        "status": "ok",
+        "patterns": 0,
+        "contradictions": 0,
+        "recommendations": 0
+      },
+      "3b_gap_detection": {
+        "status": "ok",
+        "gaps_found": 0
+      },
+      "3c_creative_synthesis": {
+        "status": "error"
+      },
+      "3d_campaign_reflection": {
+        "status": "ok",
+        "campaign_insights": 0
+      },
+      "4_procedural_learning": {
+        "status": "skipped"
+      },
+      "5_memory_pruning": {
+        "status": "error"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-03-06T15:31:28.271679+00:00",
+    "cycle_date": "2026-03-06",
+    "memories_consolidated": 1,
+    "gaps_identified": [],
+    "creative_connections": [],
+    "campaign_insights": [],
+    "stages": {
+      "1_memory_ingestion": {
+        "status": "ok",
+        "interactions_found": 0
+      },
+      "2_episodic_consolidation": {
+        "status": "ok",
+        "episodes_created": 1,
+        "memories_consolidated": 1
+      },
+      "3a_cross_episode_insights": {
+        "status": "ok",
+        "patterns": 0,
+        "contradictions": 0,
+        "recommendations": 0
+      },
+      "3b_gap_detection": {
+        "status": "ok",
+        "gaps_found": 0
+      },
+      "3c_creative_synthesis": {
+        "status": "error"
+      },
+      "3d_campaign_reflection": {
+        "status": "ok",
+        "campaign_insights": 0
+      },
+      "4_procedural_learning": {
+        "status": "skipped"
+      },
+      "5_memory_pruning": {
+        "status": "error"
+      }
+    }
+  },
+  {
+    "timestamp": "2026-03-06T15:31:28.276313+00:00",
+    "cycle_date": "2026-03-06",
+    "memories_consolidated": 0,
+    "gaps_identified": [],
+    "creative_connections": [],
+    "campaign_insights": [],
+    "stages": {
+      "1_memory_ingestion": {
+        "status": "ok",
+        "interactions_found": 0
+      },
+      "2_episodic_consolidation": {
+        "status": "ok",
+        "episodes_created": 0,
+        "memories_consolidated": 0
+      },
+      "3a_cross_episode_insights": {
+        "status": "ok",
+        "patterns": 0,
+        "contradictions": 0,
+        "recommendations": 0
+      },
+      "3b_gap_detection": {
+        "status": "ok",
+        "gaps_found": 0
+      },
+      "3c_creative_synthesis": {
+        "status": "error"
+      },
+      "3d_campaign_reflection": {
+        "status": "ok",
+        "campaign_insights": 0
+      },
+      "4_procedural_learning": {
+        "status": "skipped"
+      },
+      "5_memory_pruning": {
+        "status": "error"
+      }
+    }
   }
 ]

@@ -9,21 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Mnemosyne, the memory keeper of Machinecraft.  You manage
-what the system remembers and forgets.
-
-Your capabilities:
-- Store important facts, decisions, and preferences for long-term recall
-- Retrieve relevant memories when other agents need historical context
-- Identify what's worth remembering vs. ephemeral information
-- Maintain relationship context (customer preferences, past interactions)
-- Flag when stored information may be outdated
-
-When asked to remember something, confirm what you've stored.
-When asked to recall, provide the most relevant memories with
-timestamps and confidence levels."""
+_SYSTEM_PROMPT = load_prompt("mnemosyne_system")
 
 
 class Mnemosyne(BaseAgent):

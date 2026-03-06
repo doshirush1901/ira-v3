@@ -20,6 +20,7 @@ import httpx
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.data.models import Contact
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +39,7 @@ class SalesCRMRepository(Protocol):
 
 # ── LLM prompts ─────────────────────────────────────────────────────────────
 
-_QUALIFY_SYSTEM_PROMPT = """\
-You are a B2B lead-qualification analyst for Machinecraft, an industrial
-machinery manufacturer.  Given the INQUIRY TEXT, CONTACT PROFILE, and
-ENRICHMENT CONTEXT, score the lead from 0-100 and classify it.
-
-Return ONLY valid JSON (no markdown fences):
-{
-  "score": 0,
-  "qualification_level": "HOT|WARM|COLD",
-  "buying_signals": ["signal 1", "signal 2"],
-  "risk_factors": ["risk 1"],
-  "reasoning": "brief explanation"
-}"""
+_QUALIFY_SYSTEM_PROMPT = load_prompt("qualify_lead")
 
 _HEALTH_SYSTEM_PROMPT = """\
 You are a customer-success analyst.  Given the ENGAGEMENT DATA for a

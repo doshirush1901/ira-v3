@@ -14,15 +14,11 @@ import httpx
 from pydantic import BaseModel
 
 from ira.config import LLMConfig, get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_PATTERN_SYSTEM_PROMPT = (
-    "You are a pattern extraction engine. Given a specific user query, extract a "
-    "generalized trigger pattern that would match similar future queries. Replace "
-    "specific entity names with placeholders like {company}, {machine}, {person}, "
-    "{region}, {amount}. Return ONLY the pattern string, no explanation."
-)
+_PATTERN_SYSTEM_PROMPT = load_prompt("pattern_extraction")
 
 
 class Procedure(BaseModel):
