@@ -777,6 +777,353 @@ class TestServerEndpoints:
 
         assert resp.status_code == 500
 
+    async def test_query_with_user_id_records_context(self, server_app, mock_pantheon):
+        from ira.context import UnifiedContextManager
+
+        app, services = server_app
+        services["pantheon"] = mock_pantheon
+        uctx = UnifiedContextManager()
+        services["unified_context"] = uctx
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/api/query",
+                json={"query": "Hello Ira", "user_id": "alice@test.com"},
+            )
+
+        assert resp.status_code == 200
+        history = uctx.recent_history("alice@test.com")
+        assert len(history) == 2
+        assert history[0]["role"] == "user"
+        assert history[0]["content"] == "Hello Ira"
+
+    async def test_query_without_user_id_skips_context(self, server_app, mock_pantheon):
+        from ira.context import UnifiedContextManager
+
+        app, services = server_app
+        services["pantheon"] = mock_pantheon
+        uctx = UnifiedContextManager()
+        services["unified_context"] = uctx
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/query", json={"query": "Hello"})
+
+        assert resp.status_code == 200
+        assert uctx.all_users() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dashboard
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestDashboardEndpoint:
+    """Test the /dashboard/ HTML endpoint."""
+
+    @pytest.fixture()
+    def server_app(self):
+        from ira.interfaces.server import app, _services
+        _services.clear()
+        yield app, _services
+        _services.clear()
+
+    async def test_dashboard_returns_html(self, server_app):
+        app, services = server_app
+
+        ix1 = SimpleNamespace(
+            created_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+            content='{"route": "deterministic", "agents": ["prometheus"]}',
+        )
+        ix2 = SimpleNamespace(
+            created_at=datetime(2025, 6, 2, tzinfo=timezone.utc),
+            content='{"route": "llm", "agents": ["athena"]}',
+        )
+
+        crm = AsyncMock()
+        crm.list_interactions = AsyncMock(return_value=[ix1, ix2])
+        crm.get_pipeline_summary = AsyncMock(return_value={
+            "stages": {
+                "NEW": {"count": 3, "total_value": 5000},
+                "QUALIFIED": {"count": 2, "total_value": 20000},
+                "WON": {"count": 1, "total_value": 50000},
+            },
+        })
+        crm.list_campaigns = AsyncMock(return_value=[SimpleNamespace(name="EU")])
+
+        learning_hub = MagicMock()
+        learning_hub.get_all_feedback.return_value = []
+
+        services["crm"] = crm
+        services["learning_hub"] = learning_hub
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/dashboard/")
+
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        body = resp.text
+        assert "Ira" in body
+        assert "Chart" in body or "chart" in body.lower()
+
+    async def test_dashboard_metrics_computed(self, server_app):
+        app, services = server_app
+
+        ix = SimpleNamespace(
+            created_at=datetime(2025, 6, 1, tzinfo=timezone.utc),
+            content='{"route": "deterministic"}',
+        )
+
+        crm = AsyncMock()
+        crm.list_interactions = AsyncMock(return_value=[ix, ix, ix])
+        crm.get_pipeline_summary = AsyncMock(return_value={
+            "stages": {"QUALIFIED": {"count": 5, "total_value": 100000}},
+        })
+        crm.list_campaigns = AsyncMock(return_value=[])
+
+        from ira.systems.learning_hub import FeedbackRecord
+
+        fb = FeedbackRecord(interaction_id="i1", feedback_score=8)
+        learning_hub = MagicMock()
+        learning_hub.get_all_feedback.return_value = [fb]
+
+        services["crm"] = crm
+        services["learning_hub"] = learning_hub
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/dashboard/")
+
+        assert resp.status_code == 200
+        body = resp.text
+        assert "3" in body  # total_interactions
+        assert "5" in body  # leads_qualified
+        assert "8" in body  # avg_feedback (8.0)
+
+    async def test_dashboard_empty_data(self, server_app):
+        app, services = server_app
+
+        crm = AsyncMock()
+        crm.list_interactions = AsyncMock(return_value=[])
+        crm.get_pipeline_summary = AsyncMock(return_value={"stages": {}})
+        crm.list_campaigns = AsyncMock(return_value=[])
+
+        learning_hub = MagicMock()
+        learning_hub.get_all_feedback.return_value = []
+
+        services["crm"] = crm
+        services["learning_hub"] = learning_hub
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/dashboard/")
+
+        assert resp.status_code == 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Telegram Bot — inline keyboards and campaign commands
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTelegramCallbacks:
+    """Test Telegram inline keyboard callbacks and campaign commands."""
+
+    @pytest.fixture(autouse=True)
+    def _inject_services(self):
+        import ira.interfaces.telegram_bot as tg
+
+        self._tg = tg
+        self._orig_pantheon = tg._pantheon
+        self._orig_bm = tg._board_meeting
+        self._orig_crm = tg._crm
+        self._orig_uctx = tg._unified_context
+
+        tg._pantheon = MagicMock()
+        tg._board_meeting = AsyncMock()
+        tg._crm = AsyncMock()
+        tg._unified_context = None
+
+        yield
+
+        tg._pantheon = self._orig_pantheon
+        tg._board_meeting = self._orig_bm
+        tg._crm = self._orig_crm
+        tg._unified_context = self._orig_uctx
+
+    def _make_update(self, text: str = "", chat_id: int = 42, args: list | None = None):
+        """Build a minimal mock Update for command handlers."""
+        update = MagicMock()
+        update.effective_message = MagicMock()
+        update.effective_message.chat_id = chat_id
+        update.effective_message.text = text
+        update.effective_message.reply_text = AsyncMock()
+
+        ctx = MagicMock()
+        ctx.args = args
+        return update, ctx
+
+    def _make_callback_update(self, data: str, chat_id: int = 42):
+        """Build a minimal mock Update for CallbackQueryHandler."""
+        update = MagicMock()
+        update.callback_query = MagicMock()
+        update.callback_query.data = data
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message = MagicMock()
+        update.callback_query.message.chat_id = chat_id
+
+        ctx = MagicMock()
+        return update, ctx
+
+    # ── Draft approve / reject ────────────────────────────────────────
+
+    async def test_draft_approve_with_cached_draft(self):
+        self._tg._pending_drafts[42] = {"context": "test", "body": "Draft body"}
+
+        update, ctx = self._make_callback_update("draft_approve", chat_id=42)
+        await self._tg.on_draft_callback(update, ctx)
+
+        update.callback_query.answer.assert_awaited_once()
+        update.callback_query.edit_message_text.assert_awaited_once()
+        text = update.callback_query.edit_message_text.call_args[0][0]
+        assert "approved" in text.lower()
+        assert "Draft body" in text
+        assert 42 not in self._tg._pending_drafts
+
+    async def test_draft_approve_without_cached_draft(self):
+        update, ctx = self._make_callback_update("draft_approve", chat_id=99)
+        await self._tg.on_draft_callback(update, ctx)
+
+        text = update.callback_query.edit_message_text.call_args[0][0]
+        assert "approved" in text.lower()
+
+    async def test_draft_reject(self):
+        self._tg._pending_drafts[42] = {"context": "test", "body": "Draft body"}
+
+        update, ctx = self._make_callback_update("draft_reject", chat_id=42)
+        await self._tg.on_draft_callback(update, ctx)
+
+        text = update.callback_query.edit_message_text.call_args[0][0]
+        assert "rejected" in text.lower()
+
+    # ── /campaign start ───────────────────────────────────────────────
+
+    async def test_campaign_start_missing_args(self):
+        update, ctx = self._make_update(args=["start"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        reply = update.effective_message.reply_text
+        reply.assert_awaited()
+        assert "Usage" in reply.call_args[0][0]
+
+    async def test_campaign_start_contact_not_found(self):
+        hermes = AsyncMock()
+        hermes.handle = AsyncMock(return_value="plan")
+        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
+        self._tg._crm.get_contact_by_email = AsyncMock(return_value=None)
+
+        update, ctx = self._make_update(args=["start", "TestCampaign", "nobody@test.com"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        calls = update.effective_message.reply_text.call_args_list
+        texts = [c[0][0] for c in calls]
+        assert any("not found" in t.lower() for t in texts)
+
+    async def test_campaign_start_success(self):
+        hermes = AsyncMock()
+        hermes.handle = AsyncMock(return_value="3-step campaign plan")
+        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
+
+        contact = MagicMock()
+        contact.name = "Alice"
+        contact.lead_score = 75.0
+        contact.company_id = "comp-1"
+        self._tg._crm.get_contact_by_email = AsyncMock(return_value=contact)
+
+        update, ctx = self._make_update(args=["start", "EULaunch", "alice@test.com"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        hermes.handle.assert_awaited_once()
+        calls = update.effective_message.reply_text.call_args_list
+        texts = " ".join(c[0][0] for c in calls)
+        assert "Campaign Plan" in texts
+
+    # ── /campaign status ──────────────────────────────────────────────
+
+    async def test_campaign_status_not_found(self):
+        hermes = AsyncMock()
+        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
+        self._tg._crm.list_campaigns = AsyncMock(return_value=[])
+
+        update, ctx = self._make_update(args=["status", "NoSuchCampaign"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        calls = update.effective_message.reply_text.call_args_list
+        texts = [c[0][0] for c in calls]
+        assert any("not found" in t.lower() or "No campaign" in t for t in texts)
+
+    async def test_campaign_status_success(self):
+        hermes = AsyncMock()
+        hermes.handle = AsyncMock(return_value="Campaign is performing well.")
+        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
+
+        campaign = MagicMock()
+        campaign.name = "EULaunch"
+        campaign.id = "camp-1"
+        campaign.status = MagicMock(value="ACTIVE")
+        self._tg._crm.list_campaigns = AsyncMock(return_value=[campaign])
+
+        step = MagicMock()
+        step.sent_at = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        step.reply_received = False
+        self._tg._crm.list_drip_steps = AsyncMock(return_value=[step])
+
+        update, ctx = self._make_update(args=["status", "EULaunch"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        calls = update.effective_message.reply_text.call_args_list
+        texts = " ".join(c[0][0] for c in calls)
+        assert "EULaunch" in texts
+        assert "1 sent" in texts
+
+    # ── /campaign unknown sub-command ─────────────────────────────────
+
+    async def test_campaign_unknown_subcommand(self):
+        hermes = AsyncMock()
+        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
+
+        update, ctx = self._make_update(args=["delete", "SomeCampaign"])
+        await self._tg.cmd_campaign(update, ctx)
+
+        text = update.effective_message.reply_text.call_args[0][0]
+        assert "Unknown" in text
+
+    # ── /board ────────────────────────────────────────────────────────
+
+    async def test_board_returns_minutes(self):
+        minutes = SimpleNamespace(
+            topic="Q3 Strategy",
+            participants=["athena", "prometheus"],
+            contributions={"prometheus": "Revenue is up."},
+            synthesis="We should expand.",
+            action_items=["Hire more reps"],
+        )
+        self._tg._board_meeting.run_meeting = AsyncMock(return_value=minutes)
+
+        update, ctx = self._make_update(args=["Q3", "Strategy"])
+        await self._tg.cmd_board(update, ctx)
+
+        calls = update.effective_message.reply_text.call_args_list
+        texts = " ".join(c[0][0] for c in calls)
+        assert "Board Meeting" in texts
+        assert "prometheus" in texts
+        assert "expand" in texts
+
+    async def test_board_no_topic(self):
+        update, ctx = self._make_update(args=[])
+        await self._tg.cmd_board(update, ctx)
+
+        text = update.effective_message.reply_text.call_args[0][0]
+        assert "Usage" in text
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RequestPipeline — full 11-step end-to-end

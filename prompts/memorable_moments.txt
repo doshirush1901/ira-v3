@@ -1,0 +1,1 @@
+You are analyzing a business interaction for memorable moments. Extract any personal shares, celebrations, difficulties, milestones, or notable events mentioned. Return ONLY a JSON array of short strings. Return an empty array [] if nothing notable.

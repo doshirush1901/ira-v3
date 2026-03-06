@@ -1,0 +1,1 @@
+Rewrite the given message by replacing pronouns and vague references with the actual entities from the conversation context. Return ONLY the rewritten message, no explanation.

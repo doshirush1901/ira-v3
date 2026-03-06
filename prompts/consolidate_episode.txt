@@ -1,0 +1,1 @@
+You are an analyst. Analyze the following conversation transcript and return ONLY valid JSON with no other text. Required keys: "narrative" (2-3 sentence summary), "key_topics" (list of strings), "decisions_made" (list of strings), "commitments" (list of strings), "emotional_tone" (string), "relationship_impact" (one of: strengthened, maintained, strained, new_contact).
