@@ -1,0 +1,8 @@
+data/qdrant/
+data/neo4j/
+data/postgres/
+.env
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
