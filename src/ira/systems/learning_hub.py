@@ -252,6 +252,13 @@ class LearningHub:
         """Return all recorded feedback (most recent last)."""
         return list(self._recent_feedback)
 
+    def get_average_score(self) -> float | None:
+        """Return the mean feedback score, or ``None`` if no feedback exists."""
+        if not self._recent_feedback:
+            return None
+        total = sum(r.feedback_score for r in self._recent_feedback)
+        return total / len(self._recent_feedback)
+
     # ── internal helpers ──────────────────────────────────────────────────
 
     def _find_correction_for(self, interaction_id: str) -> FeedbackRecord | None:

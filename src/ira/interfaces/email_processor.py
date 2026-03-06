@@ -7,8 +7,11 @@ Supports two modes controlled by the ``IRA_EMAIL_MODE`` environment variable:
   through the DigestiveSystem, resolves sender identity, and logs interactions
   in the CRM.  **Never** sends, drafts, or modifies emails.
 
-* **OPERATIONAL**: Stub for ``ira@machinecraft.org`` — will be implemented
-  during the graduation phase.
+* **OPERATIONAL**: Active processing of ``ira@machinecraft.org``.  Fetches
+  unread emails, runs the full analysis pipeline, generates reply drafts via
+  Pantheon agents for actionable intents, saves drafts to Gmail, sends a
+  Telegram notification, and marks originals as read.  Human-in-the-loop:
+  drafts must be manually reviewed and sent.
 """
 
 from __future__ import annotations
@@ -18,10 +21,12 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any
 
+import httpx
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -33,6 +38,15 @@ from ira.data.models import Channel, Direction, Email
 logger = logging.getLogger(__name__)
 
 _TRAINING_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+_OPERATIONAL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
+]
+
+_REPLY_INTENTS = frozenset({
+    "QUOTE_REQUEST", "SUPPORT", "GENERAL_INQUIRY",
+    "PARTNERSHIP", "COMPLAINT", "FOLLOW_UP",
+})
 
 
 class EmailProcessor:
@@ -45,49 +59,50 @@ class EmailProcessor:
         sensory: Any,
         crm: Any,
         *,
+        pantheon: Any = None,
+        unified_context: Any = None,
         settings: Any | None = None,
     ) -> None:
         cfg = settings or get_settings()
         self._google = cfg.google
         self._mode = self._google.email_mode
 
-        if self._mode is EmailMode.OPERATIONAL:
-            logger.warning(
-                "EmailProcessor started in OPERATIONAL mode — "
-                "all methods are stubbed until graduation phase"
-            )
-            self._delphi = None
-            self._digestive = None
-            self._sensory = None
-            self._crm = None
-            self._service = None
-            return
-
-        assert self._mode is EmailMode.TRAINING, (
-            f"Unknown email mode: {self._mode}"
-        )
-
         self._delphi = delphi
         self._digestive = digestive
         self._sensory = sensory
         self._crm = crm
+        self._pantheon = pantheon
+        self._unified_ctx = unified_context
         self._service: Any | None = None
-        self._training_email = self._google.training_email
 
-        logger.info(
-            "EmailProcessor initialised in TRAINING mode for %s",
-            self._training_email,
-        )
+        if self._mode is EmailMode.OPERATIONAL:
+            self._operational_email = self._google.ira_email
+            logger.info(
+                "EmailProcessor initialised in OPERATIONAL mode for %s",
+                self._operational_email,
+            )
+        else:
+            assert self._mode is EmailMode.TRAINING, (
+                f"Unknown email mode: {self._mode}"
+            )
+            self._training_email = self._google.training_email
+            logger.info(
+                "EmailProcessor initialised in TRAINING mode for %s",
+                self._training_email,
+            )
 
     # ── Gmail authentication ──────────────────────────────────────────────
 
     async def _build_gmail_service(self) -> Any:
-        """Authenticate with Gmail API (readonly) and cache the service."""
+        """Authenticate with Gmail API and cache the service."""
         if self._service is not None:
             return self._service
 
-        if self._mode is EmailMode.OPERATIONAL:
-            raise NotImplementedError("OPERATIONAL mode not yet implemented")
+        scopes = (
+            _OPERATIONAL_SCOPES
+            if self._mode is EmailMode.OPERATIONAL
+            else _TRAINING_SCOPES
+        )
 
         creds_path = Path(self._google.credentials_path)
         token_path = Path(self._google.token_path)
@@ -97,14 +112,14 @@ class EmailProcessor:
 
             if token_path.exists():
                 creds = Credentials.from_authorized_user_file(
-                    str(token_path), _TRAINING_SCOPES,
+                    str(token_path), scopes,
                 )
 
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             elif not creds or not creds.valid:
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    str(creds_path), _TRAINING_SCOPES,
+                    str(creds_path), scopes,
                 )
                 creds = flow.run_local_server(port=0)
 
@@ -112,10 +127,10 @@ class EmailProcessor:
             return build("gmail", "v1", credentials=creds)
 
         self._service = await asyncio.to_thread(_authenticate)
-        logger.info("Gmail service built (readonly scope)")
+        logger.info("Gmail service built (mode=%s)", self._mode.value)
         return self._service
 
-    # ── Inbox observation ─────────────────────────────────────────────────
+    # ── Inbox observation (TRAINING) ──────────────────────────────────────
 
     async def observe_inbox(self, max_results: int = 20) -> list[dict[str, Any]]:
         """Fetch recent sent and received emails and run the analysis pipeline.
@@ -174,13 +189,162 @@ class EmailProcessor:
 
         return await asyncio.to_thread(_list_and_get)
 
+    # ── Inbox processing (OPERATIONAL) ────────────────────────────────────
+
+    async def process_inbox(self, max_results: int = 20) -> list[dict[str, Any]]:
+        """Fetch unread emails, analyse, draft replies, and mark as read.
+
+        OPERATIONAL mode entry point.  Creates Gmail drafts for actionable
+        intents and sends a Telegram notification for each.  Never sends
+        emails directly — a human must review and send each draft.
+        """
+        service = await self._build_gmail_service()
+        messages = await self._fetch_unread(service, max_results)
+        logger.info("Fetched %d unread messages", len(messages))
+
+        results: list[dict[str, Any]] = []
+        for raw_msg in messages:
+            try:
+                email = self._parse_message(raw_msg)
+                analysis = await self._analyze_email(email)
+                classification = analysis.get("classification", {})
+                intent = classification.get("intent", "")
+
+                draft_created = False
+                if intent in _REPLY_INTENTS:
+                    reply_body = await self._generate_reply(email, classification)
+                    if reply_body:
+                        await self._create_draft(
+                            service, email.from_address, email.subject,
+                            reply_body, email.thread_id,
+                        )
+                        await self._send_telegram_notification(email.subject)
+                        draft_created = True
+
+                await self._mark_as_read(service, email.id)
+                analysis["draft_created"] = draft_created
+                results.append(analysis)
+            except Exception:
+                logger.exception(
+                    "Failed to process message %s", raw_msg.get("id", "unknown"),
+                )
+
+        logger.info(
+            "Processing complete: %d/%d emails handled", len(results), len(messages),
+        )
+        return results
+
+    async def _fetch_unread(
+        self, service: Any, max_results: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Fetch unread messages from the inbox."""
+
+        def _list_and_get() -> list[dict[str, Any]]:
+            resp = (
+                service.users()
+                .messages()
+                .list(userId="me", q="is:unread", maxResults=max_results)
+                .execute()
+            )
+            stubs = resp.get("messages", [])
+            return [
+                service.users()
+                .messages()
+                .get(userId="me", id=s["id"], format="full")
+                .execute()
+                for s in stubs
+            ]
+
+        return await asyncio.to_thread(_list_and_get)
+
+    async def _generate_reply(
+        self, email: Email, classification: dict[str, Any],
+    ) -> str:
+        """Route to the suggested Pantheon agent and generate a reply."""
+        agent_name = classification.get("suggested_agent", "athena")
+        agent = self._pantheon.get_agent(agent_name) if self._pantheon else None
+        if agent is None and self._pantheon:
+            agent = self._pantheon.get_agent("athena")
+        if agent is None:
+            return ""
+
+        context = {
+            "task": "draft_email_reply",
+            "original_from": email.from_address,
+            "original_subject": email.subject,
+            "intent": classification.get("intent", "GENERAL_INQUIRY"),
+            "urgency": classification.get("urgency", "MEDIUM"),
+        }
+        return await agent.handle(
+            f"Draft a professional reply to this email:\n\n{email.body}",
+            context,
+        )
+
+    async def _create_draft(
+        self,
+        service: Any,
+        to: str,
+        subject: str,
+        body: str,
+        thread_id: str | None,
+    ) -> dict[str, Any]:
+        """Create a Gmail draft with the given reply content."""
+        msg = MIMEText(body)
+        msg["to"] = to
+        msg["subject"] = f"Re: {subject}" if not subject.startswith("Re:") else subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+        draft_body: dict[str, Any] = {"message": {"raw": raw}}
+        if thread_id:
+            draft_body["message"]["threadId"] = thread_id
+
+        def _create() -> dict[str, Any]:
+            return (
+                service.users()
+                .drafts()
+                .create(userId="me", body=draft_body)
+                .execute()
+            )
+
+        return await asyncio.to_thread(_create)
+
+    async def _mark_as_read(self, service: Any, message_id: str) -> None:
+        """Remove the UNREAD label from a message."""
+
+        def _modify() -> None:
+            service.users().messages().modify(
+                userId="me", id=message_id,
+                body={"removeLabelIds": ["UNREAD"]},
+            ).execute()
+
+        await asyncio.to_thread(_modify)
+
+    async def _send_telegram_notification(self, subject: str) -> None:
+        """Notify the admin that a new draft has been created."""
+        settings = get_settings()
+        token = settings.telegram.bot_token.get_secret_value()
+        chat_id = settings.telegram.admin_chat_id
+
+        if not token or not chat_id:
+            logger.warning("Telegram not configured — skipping draft notification")
+            return
+
+        text = (
+            f"New draft email created for [{subject}]. "
+            "Please review and send."
+        )
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(url, json={"chat_id": chat_id, "text": text})
+                resp.raise_for_status()
+        except Exception:
+            logger.exception("Failed to send Telegram draft notification")
+
     # ── Thread retrieval ──────────────────────────────────────────────────
 
     async def get_thread(self, thread_id: str) -> list[Email]:
         """Fetch a full email thread and return as a sorted list of Email models."""
-        if self._mode is EmailMode.OPERATIONAL:
-            raise NotImplementedError("OPERATIONAL mode not yet implemented")
-
         service = await self._build_gmail_service()
 
         def _fetch_thread() -> dict[str, Any]:
@@ -201,20 +365,23 @@ class EmailProcessor:
     # ── Polling ───────────────────────────────────────────────────────────
 
     async def poll_inbox(self, interval_seconds: int = 300) -> None:
-        """Continuously observe the inbox at a fixed interval.
+        """Continuously observe/process the inbox at a fixed interval.
 
         Runs forever; designed to be launched as a background task.
+        Delegates to ``observe_inbox`` in TRAINING mode and
+        ``process_inbox`` in OPERATIONAL mode.
         """
-        if self._mode is EmailMode.OPERATIONAL:
-            logger.warning("poll_inbox called in OPERATIONAL mode — no-op")
-            return
-
         logger.info(
-            "Starting inbox polling every %d seconds", interval_seconds,
+            "Starting inbox polling every %d seconds (mode=%s)",
+            interval_seconds,
+            self._mode.value,
         )
         while True:
             try:
-                results = await self.observe_inbox()
+                if self._mode is EmailMode.OPERATIONAL:
+                    results = await self.process_inbox()
+                else:
+                    results = await self.observe_inbox()
                 logger.info(
                     "Poll cycle complete — %d emails processed", len(results),
                 )
@@ -353,9 +520,14 @@ class EmailProcessor:
             return datetime.now(timezone.utc)
 
     def _infer_direction(self, email: Email) -> Direction:
-        """Determine if an email is inbound or outbound relative to the training mailbox."""
+        """Determine if an email is inbound or outbound relative to the active mailbox."""
         _, from_email = parseaddr(email.from_address)
-        if from_email.lower() == self._training_email.lower():
+        reference = (
+            self._training_email
+            if self._mode is EmailMode.TRAINING
+            else self._operational_email
+        )
+        if from_email.lower() == reference.lower():
             return Direction.OUTBOUND
         return Direction.INBOUND
 

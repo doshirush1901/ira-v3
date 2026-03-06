@@ -45,6 +45,8 @@ class RespiratorySystem:
         inhale_minute: int = 0,
         exhale_hour: int = 22,
         exhale_minute: int = 0,
+        dream_hour: int = 3,
+        dream_minute: int = 0,
         heartbeat_interval_seconds: int = 300,
     ) -> None:
         self._digestive = digestive
@@ -58,6 +60,8 @@ class RespiratorySystem:
         self._inhale_minute = inhale_minute
         self._exhale_hour = exhale_hour
         self._exhale_minute = exhale_minute
+        self._dream_hour = dream_hour
+        self._dream_minute = dream_minute
         self._heartbeat_interval = heartbeat_interval_seconds
 
         self._scheduler = AsyncIOScheduler()
@@ -124,6 +128,26 @@ class RespiratorySystem:
                 logger.exception("INHALE email processing failed")
         else:
             logger.debug("INHALE skipping email processing (no EmailProcessor)")
+
+    # ── DREAM ─────────────────────────────────────────────────────────────
+
+    async def _dream(self) -> None:
+        """Run the nightly DreamMode consolidation cycle (scheduled at 3 AM)."""
+        if self._dream_mode is None:
+            logger.debug("DREAM skipping (DreamMode not configured)")
+            return
+
+        logger.info("DREAM cycle starting (scheduled)")
+        try:
+            report = await self._dream_mode.run_dream_cycle()
+            logger.info(
+                "DREAM cycle complete: consolidated=%d gaps=%d connections=%d",
+                report.memories_consolidated,
+                len(report.gaps_identified),
+                len(report.creative_connections),
+            )
+        except Exception:
+            logger.exception("DREAM cycle failed")
 
     # ── EXHALE ────────────────────────────────────────────────────────────
 
@@ -208,6 +232,12 @@ class RespiratorySystem:
             self._exhale,
             CronTrigger(hour=self._exhale_hour, minute=self._exhale_minute),
             id="exhale",
+            replace_existing=True,
+        )
+        self._scheduler.add_job(
+            self._dream,
+            CronTrigger(hour=self._dream_hour, minute=self._dream_minute),
+            id="dream",
             replace_existing=True,
         )
         self._scheduler.start()

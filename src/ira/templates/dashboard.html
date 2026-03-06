@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ira — Performance Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      color: #f5f5f5;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 1.25rem;
+      text-align: center;
+    }
+
+    .card .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #7c8cf8;
+    }
+
+    .card .label {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-top: 0.35rem;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    .chart-box {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+
+    .chart-box h2 {
+      font-size: 1rem;
+      font-weight: 500;
+      margin-bottom: 1rem;
+      color: #ccc;
+    }
+
+    .chart-box.wide { grid-column: 1 / -1; }
+
+    canvas { width: 100% !important; }
+
+    @media (max-width: 768px) {
+      .charts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Ira — Performance Dashboard</h1>
+
+  <!-- Summary cards -->
+  <section class="cards">
+    <div class="card">
+      <div class="value">{{ total_interactions }}</div>
+      <div class="label">Total Interactions</div>
+    </div>
+    <div class="card">
+      <div class="value">{{ avg_feedback }}</div>
+      <div class="label">Avg Feedback Score</div>
+    </div>
+    <div class="card">
+      <div class="value">{{ intents_classified }}</div>
+      <div class="label">Intents Classified</div>
+    </div>
+    <div class="card">
+      <div class="value">{{ leads_qualified }}</div>
+      <div class="label">Leads Qualified</div>
+    </div>
+    <div class="card">
+      <div class="value">{{ active_campaigns }}</div>
+      <div class="label">Active Campaigns</div>
+    </div>
+  </section>
+
+  <!-- Charts -->
+  <section class="charts">
+    <div class="chart-box wide">
+      <h2>Interactions Over Time</h2>
+      <canvas id="interactionsChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Intent Distribution</h2>
+      <canvas id="intentChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Feedback Score Trend</h2>
+      <canvas id="feedbackChart"></canvas>
+    </div>
+  </section>
+
+  <script>
+    const GRID_COLOR = "rgba(255,255,255,0.06)";
+    const TICK_COLOR = "#888";
+
+    // --- Interactions Over Time (line) ---
+    const intLabels = {{ interactions_by_day_labels | tojson }};
+    const intData   = {{ interactions_by_day_values | tojson }};
+
+    new Chart(document.getElementById("interactionsChart"), {
+      type: "line",
+      data: {
+        labels: intLabels,
+        datasets: [{
+          label: "Interactions",
+          data: intData,
+          borderColor: "#7c8cf8",
+          backgroundColor: "rgba(124,140,248,0.15)",
+          fill: true,
+          tension: 0.35,
+          pointRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: TICK_COLOR }, grid: { color: GRID_COLOR } },
+          y: { beginAtZero: true, ticks: { color: TICK_COLOR, precision: 0 }, grid: { color: GRID_COLOR } }
+        }
+      }
+    });
+
+    // --- Intent Distribution (pie) ---
+    const pieLabels = {{ intent_labels | tojson }};
+    const pieData   = {{ intent_values | tojson }};
+    const PIE_COLORS = [
+      "#7c8cf8", "#f87c8c", "#8cf87c", "#f8d87c",
+      "#8cf8f8", "#d87cf8", "#f8a87c", "#7cf8b8",
+      "#c8c8c8", "#f87cf8"
+    ];
+
+    new Chart(document.getElementById("intentChart"), {
+      type: "pie",
+      data: {
+        labels: pieLabels,
+        datasets: [{
+          data: pieData,
+          backgroundColor: PIE_COLORS.slice(0, pieLabels.length),
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "bottom", labels: { color: TICK_COLOR, boxWidth: 12, padding: 12 } }
+        }
+      }
+    });
+
+    // --- Feedback Score Trend (line) ---
+    const fbLabels = {{ feedback_trend_labels | tojson }};
+    const fbData   = {{ feedback_trend_values | tojson }};
+
+    new Chart(document.getElementById("feedbackChart"), {
+      type: "line",
+      data: {
+        labels: fbLabels,
+        datasets: [{
+          label: "Avg Score",
+          data: fbData,
+          borderColor: "#f8d87c",
+          backgroundColor: "rgba(248,216,124,0.15)",
+          fill: true,
+          tension: 0.35,
+          pointRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: TICK_COLOR }, grid: { color: GRID_COLOR } },
+          y: { beginAtZero: true, max: 10, ticks: { color: TICK_COLOR }, grid: { color: GRID_COLOR } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

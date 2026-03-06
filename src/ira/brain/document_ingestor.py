@@ -215,22 +215,35 @@ class DocumentIngestor:
 
     # ── single-file ingestion ────────────────────────────────────────────
 
+    def is_already_ingested(self, file_info: dict[str, Any]) -> bool:
+        """Check whether a file has already been ingested with the same hash."""
+        path = Path(file_info["path"])
+        return self._already_ingested(str(path), _file_hash(path))
+
     async def ingest_file(
         self,
         file_info: dict[str, Any],
         *,
+        force: bool = False,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         overlap: int = _DEFAULT_OVERLAP,
     ) -> int:
-        """Read, chunk, and upsert one file.  Returns the chunk count."""
+        """Read, chunk, and upsert one file.  Returns the chunk count.
+
+        When *force* is ``True`` the ledger check is skipped and any
+        existing Qdrant points for this source path are deleted first.
+        """
         path = Path(file_info["path"])
         category = file_info["category"]
         ext = file_info["extension"]
 
         current_hash = _file_hash(path)
-        if self._already_ingested(str(path), current_hash):
+        if not force and self._already_ingested(str(path), current_hash):
             logger.debug("Skipping already-ingested file: %s", path)
             return 0
+
+        if force:
+            await self._qdrant.delete_by_source(str(path))
 
         reader = _READERS.get(ext)
         if reader is None:
@@ -268,33 +281,40 @@ class DocumentIngestor:
     async def ingest_all(
         self,
         base_path: str = "data/imports",
+        *,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Process every supported file under *base_path*.
 
-        Returns a summary with ``total_files``, ``total_chunks``, and
-        per-category chunk counts.
+        Returns a summary dict with keys ``files_processed``,
+        ``files_skipped``, ``total_chunks``, ``per_category``, and
+        ``errors`` (a list of ``{"path": ..., "error": ...}`` dicts).
         """
         files = self.discover_files(base_path)
 
-        total_files = 0
+        files_processed = 0
+        files_skipped = 0
         total_chunks = 0
         per_category: dict[str, int] = {}
-        errors: list[str] = []
+        errors: list[dict[str, str]] = []
 
         for file_info in files:
             try:
-                n = await self.ingest_file(file_info)
+                n = await self.ingest_file(file_info, force=force)
                 if n > 0:
-                    total_files += 1
+                    files_processed += 1
                     total_chunks += n
                     cat = file_info["category"]
                     per_category[cat] = per_category.get(cat, 0) + n
-            except Exception:
+                else:
+                    files_skipped += 1
+            except Exception as exc:
                 logger.exception("Failed to ingest %s", file_info["path"])
-                errors.append(file_info["path"])
+                errors.append({"path": file_info["path"], "error": str(exc)})
 
-        summary = {
-            "total_files": total_files,
+        summary: dict[str, Any] = {
+            "files_processed": files_processed,
+            "files_skipped": files_skipped,
             "total_chunks": total_chunks,
             "per_category": per_category,
             "errors": errors,

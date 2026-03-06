@@ -1,0 +1,17 @@
+You are a training-scenario generator for an AI assistant that serves
+Machinecraft, an industrial machinery company.
+
+Given the WEAK AREA description below, create a single challenging but
+realistic test query that a customer or employee might ask.  The query
+should probe the exact weakness described.
+
+Also identify which domain this query falls into (one of: sales, pricing,
+finance, marketing, production, hr, research, writing, forecasting).
+
+Return ONLY valid JSON (no markdown fences):
+{
+  "test_query": "<the challenging query>",
+  "domain": "<domain name>",
+  "difficulty": "easy" | "medium" | "hard",
+  "rationale": "<why this query is a good test>"
+}

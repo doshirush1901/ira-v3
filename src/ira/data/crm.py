@@ -496,6 +496,13 @@ class CRMDatabase:
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
+    async def count_interactions(self) -> int:
+        """Return the total number of interactions in the CRM."""
+        stmt = select(func.count(InteractionModel.id))
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            return result.scalar_one()
+
     # ── DripCampaign CRUD ────────────────────────────────────────────────
 
     async def create_campaign(self, **kwargs: Any) -> DripCampaignModel:

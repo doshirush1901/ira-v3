@@ -53,6 +53,7 @@ class RequestPipeline:
         endocrine: Any | None = None,
         crm: Any | None = None,
         musculoskeletal: Any | None = None,
+        unified_context: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -66,6 +67,7 @@ class RequestPipeline:
         self._endocrine = endocrine
         self._crm = crm
         self._musculoskeletal = musculoskeletal
+        self._unified_ctx = unified_context
 
         self._router = pantheon._router
 
@@ -127,9 +129,19 @@ class RequestPipeline:
             except Exception:
                 logger.exception("Coreference resolution failed")
 
+        cross_channel_history: list[dict[str, Any]] = []
+        if self._unified_ctx is not None:
+            try:
+                cross_channel_history = self._unified_ctx.recent_history(
+                    contact_email, limit=10,
+                )
+            except Exception:
+                logger.exception("UnifiedContextManager lookup failed")
+
         logger.info(
-            "REMEMBER | history=%d msgs | goal=%s",
+            "REMEMBER | history=%d msgs | cross_channel=%d | goal=%s",
             len(history),
+            len(cross_channel_history),
             active_goal.goal_type.value if active_goal else "none",
         )
 
@@ -169,6 +181,7 @@ class RequestPipeline:
         context: dict[str, Any] = {
             "perception": perception,
             "history": history[-5:],
+            "cross_channel_history": cross_channel_history[-5:],
             "channel": channel,
         }
         if active_goal is not None:
@@ -436,5 +449,13 @@ class RequestPipeline:
                     self._endocrine.boost("confidence", 0.01)
             except Exception:
                 logger.debug("Endocrine update failed (non-critical)")
+
+        if self._unified_ctx is not None:
+            try:
+                self._unified_ctx.record_turn(
+                    contact_email, channel, raw_input, raw_response,
+                )
+            except Exception:
+                logger.exception("UnifiedContextManager recording failed")
 
         logger.info("LEARN | recorded for %s", contact_email)

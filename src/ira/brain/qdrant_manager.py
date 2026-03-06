@@ -190,6 +190,34 @@ class QdrantManager:
 
         return [_hit_to_dict(hit) for hit in hits]
 
+    # ── deletion ─────────────────────────────────────────────────────────
+
+    async def delete_by_source(
+        self,
+        source: str,
+        collection: str | None = None,
+    ) -> None:
+        """Delete all points whose ``source`` payload matches *source*."""
+        col = collection or self._default_collection
+        try:
+            await self._client.delete(
+                collection_name=col,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="source",
+                                match=models.MatchValue(value=source),
+                            )
+                        ]
+                    )
+                ),
+            )
+            logger.info("Deleted points with source='%s' from '%s'", source, col)
+        except Exception:
+            logger.exception("Failed to delete points for source '%s'", source)
+            raise
+
     # ── cleanup ──────────────────────────────────────────────────────────
 
     async def close(self) -> None:

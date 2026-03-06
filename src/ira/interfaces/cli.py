@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -31,7 +33,14 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 console = Console()
@@ -129,6 +138,32 @@ def _build_email_processor(pantheon: Any, digestive: Any) -> Any:
     )
 
 
+_GRAD_MIN_INTERACTIONS = 1000
+_GRAD_MIN_AVG_SCORE = 4.5
+_GRAD_MIN_PROCEDURES = 10
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _update_env_file(updates: dict[str, str]) -> None:
+    """Insert or replace key=value pairs in the project ``.env`` file."""
+    env_path = _PROJECT_ROOT / ".env"
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+
+    for key, value in updates.items():
+        pattern = re.compile(rf"^{re.escape(key)}=.*", re.MULTILINE)
+        replaced = False
+        for i, line in enumerate(lines):
+            if pattern.match(line):
+                lines[i] = f"{key}={value}"
+                replaced = True
+                break
+        if not replaced:
+            lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(lines) + "\n")
+
+
 # ── Commands ──────────────────────────────────────────────────────────────
 
 
@@ -151,6 +186,11 @@ def chat(
     pantheon = _build_pantheon()
 
     async def _session() -> None:
+        from ira.context import UnifiedContextManager
+
+        unified_ctx = UnifiedContextManager()
+        user_id = "cli-user"
+
         async with pantheon:
             while True:
                 try:
@@ -164,6 +204,13 @@ def chat(
                 if text.lower() in ("/quit", "/exit", "/q"):
                     break
 
+                ctx: dict[str, Any] = {
+                    "channel": "cli",
+                    "cross_channel_history": unified_ctx.recent_history(
+                        user_id, limit=10,
+                    ),
+                }
+
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[bold green]Consulting agents..."),
@@ -171,7 +218,9 @@ def chat(
                     transient=True,
                 ) as progress:
                     progress.add_task("thinking", total=None)
-                    response = await pantheon.process(text)
+                    response = await pantheon.process(text, ctx)
+
+                unified_ctx.record_turn(user_id, "cli", text, response)
 
                 console.print()
                 console.print(Panel(Markdown(response), title="Ira", border_style="green"))
@@ -192,6 +241,18 @@ def ask(
     pantheon = _build_pantheon()
 
     async def _ask() -> None:
+        from ira.context import UnifiedContextManager
+
+        unified_ctx = UnifiedContextManager()
+        user_id = "cli-user"
+
+        ctx: dict[str, Any] = {
+            "channel": "cli",
+            "cross_channel_history": unified_ctx.recent_history(
+                user_id, limit=10,
+            ),
+        }
+
         async with pantheon:
             with Progress(
                 SpinnerColumn(),
@@ -200,8 +261,9 @@ def ask(
                 transient=True,
             ) as progress:
                 progress.add_task("thinking", total=None)
-                response = await pantheon.process(query)
+                response = await pantheon.process(query, ctx)
 
+        unified_ctx.record_turn(user_id, "cli", query, response)
         console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
     _run(_ask())
@@ -340,9 +402,15 @@ def email_learn(
 @app.command()
 def ingest(
     path: Optional[str] = typer.Argument(None, help="Path to ingest. Defaults to data/imports/."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-ingest documents already in the vector store."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Run document ingestion on a file or directory."""
+    """Run document ingestion on a file or directory.
+
+    Walks all subdirectories under the target path, ingests every supported
+    file (PDF, XLSX, DOCX, CSV, TXT), and displays a live progress bar.
+    Files that fail to parse are logged and skipped without crashing.
+    """
     _configure_logging(verbose)
 
     target = path or "data/imports"
@@ -354,28 +422,89 @@ def ingest(
 
     _digestive, ingestor, _qdrant = _build_digestive()
 
+    files = ingestor.discover_files(str(target_path))
+    if not files:
+        console.print(f"[yellow]No supported files found under {target_path}.[/yellow]")
+        raise typer.Exit(0)
+
+    categories = {f["category"] for f in files}
+    total_size_mb = sum(f["size"] for f in files) / (1024 * 1024)
+    console.print(
+        Panel(
+            f"[bold]Path:[/bold]        {target_path}\n"
+            f"[bold]Files:[/bold]       {len(files)}\n"
+            f"[bold]Directories:[/bold] {len(categories)}\n"
+            f"[bold]Total size:[/bold]  {total_size_mb:.1f} MB\n"
+            f"[bold]Force:[/bold]       {'yes' if force else 'no'}",
+            title="Ingestion Plan",
+            border_style="blue",
+        )
+    )
+
+    succeeded: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    failed: list[dict[str, str]] = []
+
     async def _ingest() -> None:
         with Progress(
             SpinnerColumn(),
-            TextColumn(f"[bold green]Ingesting from {target_path}..."),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
             console=err_console,
-            transient=True,
         ) as progress:
-            progress.add_task("ingest", total=None)
-            result = await ingestor.ingest_all(str(target_path))
-
-        table = Table(title="Ingestion Report")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green", justify="right")
-
-        table.add_row("Files processed", str(result.get("files_processed", 0)))
-        table.add_row("Files skipped", str(result.get("files_skipped", 0)))
-        table.add_row("Chunks created", str(result.get("total_chunks", 0)))
-        table.add_row("Errors", str(result.get("errors", 0)))
-
-        console.print(table)
+            task = progress.add_task("Ingesting files", total=len(files))
+            for file_info in files:
+                file_path = file_info["path"]
+                short_name = Path(file_path).name
+                progress.update(task, description=f"[bold green]{short_name}")
+                try:
+                    n = await ingestor.ingest_file(file_info, force=force)
+                    if n > 0:
+                        succeeded.append({"path": file_path, "chunks": n, "category": file_info["category"]})
+                    else:
+                        skipped.append(file_path)
+                except Exception as exc:
+                    logger.exception("Failed to ingest %s", file_path)
+                    failed.append({"path": file_path, "error": str(exc)})
+                progress.advance(task)
 
     _run(_ingest())
+
+    summary_table = Table(title="Ingestion Report")
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", style="green", justify="right")
+
+    total_chunks = sum(s["chunks"] for s in succeeded)
+    summary_table.add_row("Files processed", str(len(succeeded)))
+    summary_table.add_row("Files skipped", str(len(skipped)))
+    summary_table.add_row("Files failed", str(len(failed)))
+    summary_table.add_row("Chunks created", str(total_chunks))
+
+    console.print(summary_table)
+
+    if succeeded:
+        cat_counts: dict[str, int] = {}
+        for s in succeeded:
+            cat_counts[s["category"]] = cat_counts.get(s["category"], 0) + s["chunks"]
+        cat_table = Table(title="Chunks by Category")
+        cat_table.add_column("Category", style="cyan")
+        cat_table.add_column("Chunks", style="green", justify="right")
+        for cat, count in sorted(cat_counts.items()):
+            cat_table.add_row(cat, str(count))
+        console.print(cat_table)
+
+    if failed:
+        err_table = Table(title="Failed Files")
+        err_table.add_column("#", style="dim", width=3)
+        err_table.add_column("File", style="red")
+        err_table.add_column("Error")
+        for i, f in enumerate(failed, 1):
+            err_table.add_row(str(i), f["path"], f["error"])
+        console.print(err_table)
+
+    ingestor.close()
 
 
 # ── Dream ─────────────────────────────────────────────────────────────────
@@ -563,6 +692,103 @@ def train(
         await procedural.close()
 
     _run(_train())
+
+
+# ── Graduation ────────────────────────────────────────────────────────────
+
+
+@app.command()
+def graduate(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Self-assess readiness and promote Ira to OPERATIONAL email mode."""
+    _configure_logging(verbose)
+
+    async def _graduate() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.memory.procedural import ProceduralMemory
+        from ira.systems.learning_hub import LearningHub
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        procedural = ProceduralMemory()
+        await procedural.initialize()
+
+        learning_hub = LearningHub(crm=crm, procedural_memory=procedural)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Running self-assessment..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("assess", total=None)
+            total_interactions = await crm.count_interactions()
+            avg_score = learning_hub.get_average_score()
+            num_procedures = await procedural.count_procedures()
+
+        await procedural.close()
+
+        table = Table(title="Graduation Self-Assessment")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", justify="right", style="green")
+        table.add_column("Threshold", justify="right", style="yellow")
+        table.add_column("Status", width=8)
+
+        def _status(ok: bool) -> str:
+            return "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
+
+        pass_interactions = total_interactions > _GRAD_MIN_INTERACTIONS
+        pass_score = avg_score is not None and avg_score > _GRAD_MIN_AVG_SCORE
+        pass_procedures = num_procedures >= _GRAD_MIN_PROCEDURES
+
+        table.add_row(
+            "Total interactions",
+            str(total_interactions),
+            f"> {_GRAD_MIN_INTERACTIONS}",
+            _status(pass_interactions),
+        )
+        table.add_row(
+            "Avg feedback score",
+            f"{avg_score:.2f}" if avg_score is not None else "N/A",
+            f"> {_GRAD_MIN_AVG_SCORE}",
+            _status(pass_score),
+        )
+        table.add_row(
+            "Procedures learned",
+            str(num_procedures),
+            f">= {_GRAD_MIN_PROCEDURES}",
+            _status(pass_procedures),
+        )
+        console.print(table)
+
+        if not (pass_interactions and pass_score and pass_procedures):
+            console.print(Panel(
+                "[red bold]Graduation blocked.[/red bold]\n\n"
+                "The thresholds above must all pass before Ira can move to "
+                "OPERATIONAL mode. Continue training and accumulating feedback.",
+                title="Assessment Failed",
+                border_style="red",
+            ))
+            raise typer.Exit(1)
+
+        _update_env_file({
+            "IRA_EMAIL_MODE": "OPERATIONAL",
+            "IRA_EMAIL": "ira@machinecraft.org",
+        })
+
+        console.print(Panel(
+            "[green bold]Graduation successful. Restarting in OPERATIONAL mode.[/green bold]",
+            title="Assessment Passed",
+            border_style="green",
+        ))
+
+        scripts_dir = _PROJECT_ROOT / "scripts"
+        subprocess.run([str(scripts_dir / "stop.sh")], check=False)
+        subprocess.run([str(scripts_dir / "start.sh")], check=False)
+
+    _run(_graduate())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

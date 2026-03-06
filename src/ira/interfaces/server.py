@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
     query: str
+    user_id: str | None = None
     context: dict[str, Any] | None = None
 
 
@@ -179,6 +180,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["musculoskeletal"] = musculoskeletal
     _services["dream_mode"] = dream_mode
 
+    # ── Learning hub ──────────────────────────────────────────────────
+    from ira.memory.procedural import ProceduralMemory
+    from ira.systems.learning_hub import LearningHub
+
+    procedural_memory = ProceduralMemory()
+    learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
+
+    _services["procedural_memory"] = procedural_memory
+    _services["learning_hub"] = learning_hub
+
+    # ── Unified context ───────────────────────────────────────────────
+    from ira.context import UnifiedContextManager
+
+    unified_context = UnifiedContextManager()
+    _services["unified_context"] = unified_context
+
     # ── Board meeting system ──────────────────────────────────────────
     from ira.systems.board_meeting import BoardMeeting
 
@@ -200,6 +217,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         digestive=digestive,
         sensory=sensory,
         crm=crm,
+        pantheon=pantheon,
     )
     _services["email_processor"] = email_processor
 
@@ -217,12 +235,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["respiratory"] = respiratory
 
     # ── Email polling background task ─────────────────────────────────
-    email_poll_task: asyncio.Task[None] | None = None
-    from ira.config import EmailMode
-
-    if settings.google.email_mode is EmailMode.TRAINING:
-        email_poll_task = asyncio.create_task(email_processor.poll_inbox())
-        logger.info("Email polling started (TRAINING mode)")
+    email_poll_task = asyncio.create_task(email_processor.poll_inbox())
+    logger.info(
+        "Email polling started (mode=%s)", settings.google.email_mode.value,
+    )
 
     # ── Immune startup validation ─────────────────────────────────────
     try:
@@ -284,6 +300,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from ira.interfaces.dashboard import router as dashboard_router  # noqa: E402
+
+app.include_router(dashboard_router)
+
 
 # ── Middleware ─────────────────────────────────────────────────────────────
 
@@ -322,7 +342,23 @@ async def request_timing(request: Request, call_next: Any) -> Any:
 async def query(req: QueryRequest) -> QueryResponse:
     """Route a query through Athena and the Pantheon."""
     pantheon = _svc("pantheon")
-    response = await pantheon.process(req.query, req.context)
+    unified_context = _svc("unified_context")
+
+    ctx = req.context or {}
+    if req.user_id:
+        user_ctx = unified_context.get(req.user_id)
+        ctx["cross_channel_history"] = unified_context.recent_history(
+            req.user_id, limit=10,
+        )
+        ctx["last_channel"] = user_ctx.last_channel
+
+    response = await pantheon.process(req.query, ctx)
+
+    if req.user_id:
+        unified_context.record_turn(
+            req.user_id, ctx.get("channel", "api"), req.query, response,
+        )
+
     return QueryResponse(response=response)
 
 

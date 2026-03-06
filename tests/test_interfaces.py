@@ -161,10 +161,8 @@ class TestEmailProcessorTraining:
         assert training_processor._mode is EmailMode.TRAINING
         assert training_processor._training_email == "rushabh@machinecraft.org"
 
-    def test_no_send_method_exists(self, training_processor):
+    def test_no_public_send_method_exists(self, training_processor):
         assert not hasattr(training_processor, "send_email")
-        assert not hasattr(training_processor, "create_draft")
-        assert not hasattr(training_processor, "mark_as_read")
 
     def test_parse_message_extracts_fields(self, training_processor):
         raw = _make_gmail_raw_message()
@@ -244,28 +242,179 @@ class TestEmailProcessorTraining:
 
 
 class TestEmailProcessorOperational:
-    """EmailProcessor in OPERATIONAL mode: everything stubbed."""
+    """EmailProcessor in OPERATIONAL mode: drafts, notifications, no direct send."""
 
-    def test_operational_mode_stubs_dependencies(self):
+    @pytest.fixture()
+    def operational_processor(self):
         settings = _make_settings(EmailMode.OPERATIONAL)
-        from ira.interfaces.email_processor import EmailProcessor
-        proc = EmailProcessor(None, None, None, None, settings=settings)
-        assert proc._mode is EmailMode.OPERATIONAL
-        assert proc._delphi is None
+        delphi = AsyncMock()
+        delphi.handle = AsyncMock(
+            return_value='{"intent":"QUOTE_REQUEST","urgency":"HIGH",'
+            '"suggested_agent":"plutus","summary":"Pricing inquiry"}',
+        )
+        digestive = AsyncMock()
+        digestive.ingest_email = AsyncMock(
+            return_value={"chunks_created": 2, "entities_found": {"companies": 1}},
+        )
+        sensory = AsyncMock()
+        sensory.resolve_identity = AsyncMock(return_value=Contact(
+            name="Test Client", email="client@example.com", source="test",
+        ))
+        crm = AsyncMock()
+        crm.create_interaction = AsyncMock()
 
-    async def test_operational_observe_inbox_returns_empty(self):
-        settings = _make_settings(EmailMode.OPERATIONAL)
+        plutus = AsyncMock()
+        plutus.handle = AsyncMock(return_value="Thank you for your inquiry. Here is the quote.")
+        athena = AsyncMock()
+        athena.handle = AsyncMock(return_value="Athena fallback reply.")
+
+        pantheon = MagicMock()
+        def _get_agent(name: str):
+            if name == "plutus":
+                return plutus
+            if name == "athena":
+                return athena
+            return None
+        pantheon.get_agent = MagicMock(side_effect=_get_agent)
+
         from ira.interfaces.email_processor import EmailProcessor
-        proc = EmailProcessor(None, None, None, None, settings=settings)
-        result = await proc.observe_inbox()
+        proc = EmailProcessor(
+            delphi, digestive, sensory, crm,
+            pantheon=pantheon, settings=settings,
+        )
+        proc._plutus = plutus
+        proc._athena = athena
+        return proc
+
+    def test_operational_mode_initialises(self, operational_processor):
+        assert operational_processor._mode is EmailMode.OPERATIONAL
+        assert operational_processor._operational_email == "ira@machinecraft.org"
+
+    def test_operational_stores_dependencies(self, operational_processor):
+        assert operational_processor._delphi is not None
+        assert operational_processor._pantheon is not None
+
+    async def test_observe_inbox_returns_empty_in_operational(self, operational_processor):
+        result = await operational_processor.observe_inbox()
         assert result == []
 
-    async def test_operational_get_thread_raises(self):
-        settings = _make_settings(EmailMode.OPERATIONAL)
-        from ira.interfaces.email_processor import EmailProcessor
-        proc = EmailProcessor(None, None, None, None, settings=settings)
-        with pytest.raises(NotImplementedError):
-            await proc.get_thread("thread_123")
+    async def test_process_inbox_creates_draft_for_reply_intent(self, operational_processor):
+        """Verify that process_inbox creates a draft and does NOT send directly."""
+        raw_msg = _make_gmail_raw_message(
+            to_addr="ira@machinecraft.org",
+            body="I need a quote for the PF1-C machine.",
+        )
+
+        mock_service = MagicMock()
+        mock_service.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+            "messages": [{"id": "msg_001"}],
+        }
+        mock_service.users.return_value.messages.return_value.get.return_value.execute.return_value = raw_msg
+        mock_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+            "id": "draft_001",
+        }
+        mock_service.users.return_value.messages.return_value.modify.return_value.execute.return_value = {}
+
+        operational_processor._service = mock_service
+
+        with patch.object(operational_processor, "_send_telegram_notification", new_callable=AsyncMock) as mock_tg:
+            results = await operational_processor.process_inbox()
+
+        assert len(results) == 1
+        assert results[0]["draft_created"] is True
+
+        mock_service.users.return_value.drafts.return_value.create.assert_called_once()
+        mock_service.users.return_value.messages.return_value.modify.assert_called_once()
+        mock_tg.assert_awaited_once()
+
+        send_mock = mock_service.users.return_value.messages.return_value.send
+        send_mock.assert_not_called()
+
+    async def test_process_inbox_skips_draft_for_spam(self, operational_processor):
+        """SPAM intent should not create a draft."""
+        operational_processor._delphi.handle = AsyncMock(
+            return_value='{"intent":"SPAM","urgency":"LOW","suggested_agent":"","summary":"Spam"}',
+        )
+        raw_msg = _make_gmail_raw_message(
+            to_addr="ira@machinecraft.org",
+            body="Buy cheap watches now!",
+        )
+
+        mock_service = MagicMock()
+        mock_service.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+            "messages": [{"id": "msg_spam"}],
+        }
+        mock_service.users.return_value.messages.return_value.get.return_value.execute.return_value = raw_msg
+        mock_service.users.return_value.messages.return_value.modify.return_value.execute.return_value = {}
+
+        operational_processor._service = mock_service
+
+        with patch.object(operational_processor, "_send_telegram_notification", new_callable=AsyncMock) as mock_tg:
+            results = await operational_processor.process_inbox()
+
+        assert len(results) == 1
+        assert results[0]["draft_created"] is False
+        mock_service.users.return_value.drafts.return_value.create.assert_not_called()
+        mock_tg.assert_not_awaited()
+
+    async def test_telegram_notification_sent_with_subject(self, operational_processor):
+        """Verify the Telegram notification includes the email subject."""
+        with patch("ira.interfaces.email_processor.get_settings") as mock_gs:
+            mock_gs.return_value.telegram.bot_token.get_secret_value.return_value = "fake-token"
+            mock_gs.return_value.telegram.admin_chat_id = "12345"
+
+            with patch("ira.interfaces.email_processor.httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_resp = MagicMock()
+                mock_resp.raise_for_status = MagicMock()
+                mock_client.post = AsyncMock(return_value=mock_resp)
+                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client.__aexit__ = AsyncMock(return_value=False)
+                mock_client_cls.return_value = mock_client
+
+                await operational_processor._send_telegram_notification("PF1-C Quote Request")
+
+                mock_client.post.assert_awaited_once()
+                call_kwargs = mock_client.post.call_args
+                payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+                assert "PF1-C Quote Request" in payload["text"]
+                assert "review and send" in payload["text"].lower()
+
+    async def test_mark_as_read_removes_unread_label(self, operational_processor):
+        mock_service = MagicMock()
+        mock_service.users.return_value.messages.return_value.modify.return_value.execute.return_value = {}
+        await operational_processor._mark_as_read(mock_service, "msg_001")
+
+        mock_service.users.return_value.messages.return_value.modify.assert_called_once()
+        call_kwargs = mock_service.users.return_value.messages.return_value.modify.call_args
+        assert call_kwargs.kwargs["body"] == {"removeLabelIds": ["UNREAD"]}
+
+    async def test_create_draft_includes_thread_id(self, operational_processor):
+        mock_service = MagicMock()
+        mock_service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {
+            "id": "draft_001",
+        }
+        await operational_processor._create_draft(
+            mock_service, "client@example.com", "Test", "Reply body", "thread_001",
+        )
+
+        call_kwargs = mock_service.users.return_value.drafts.return_value.create.call_args
+        draft_body = call_kwargs.kwargs.get("body") or call_kwargs[1].get("body")
+        assert draft_body["message"]["threadId"] == "thread_001"
+
+    def test_infer_direction_operational_inbound(self, operational_processor):
+        email = _make_email(
+            from_addr="client@example.com",
+            to_addr="ira@machinecraft.org",
+        )
+        assert operational_processor._infer_direction(email) is Direction.INBOUND
+
+    def test_infer_direction_operational_outbound(self, operational_processor):
+        email = _make_email(
+            from_addr="ira@machinecraft.org",
+            to_addr="client@example.com",
+        )
+        assert operational_processor._infer_direction(email) is Direction.OUTBOUND
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -289,7 +438,7 @@ class TestCLI:
     def test_help_shows_all_commands(self, runner, cli_app):
         result = runner.invoke(cli_app, ["--help"])
         assert result.exit_code == 0
-        for cmd in ("chat", "ask", "agents", "email", "pipeline", "health", "board", "dream", "ingest"):
+        for cmd in ("chat", "ask", "agents", "email", "pipeline", "health", "board", "dream", "ingest", "graduate"):
             assert cmd in result.output
 
     def test_email_subcommands_exist(self, runner, cli_app):
@@ -351,6 +500,174 @@ class TestCLI:
         assert "client@example.com" in result.output
         assert "Follow-up" in result.output
         assert "Dear Client" in result.output
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI — Graduate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCLIGraduate:
+    """Test the ``ira graduate`` command with mocked CRM and file I/O."""
+
+    @pytest.fixture()
+    def runner(self):
+        from typer.testing import CliRunner
+        return CliRunner()
+
+    @pytest.fixture()
+    def cli_app(self):
+        from ira.interfaces.cli import app
+        return app
+
+    @patch("ira.interfaces.cli.subprocess.run")
+    @patch("ira.interfaces.cli._update_env_file")
+    def test_graduate_passes_when_thresholds_met(
+        self, mock_env, mock_subproc, runner, cli_app,
+    ):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=2000)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=15)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = 5.0
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert result.exit_code == 0
+        assert "Graduation successful" in result.output
+        mock_env.assert_called_once_with({
+            "IRA_EMAIL_MODE": "OPERATIONAL",
+            "IRA_EMAIL": "ira@machinecraft.org",
+        })
+        assert mock_subproc.call_count == 2
+
+    def test_graduate_fails_when_interactions_too_low(self, runner, cli_app):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=500)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=15)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = 5.0
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert result.exit_code == 1
+        assert "Graduation blocked" in result.output
+
+    def test_graduate_fails_when_avg_score_too_low(self, runner, cli_app):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=2000)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=15)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = 3.0
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert result.exit_code == 1
+        assert "FAIL" in result.output
+
+    def test_graduate_fails_when_no_feedback(self, runner, cli_app):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=2000)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=15)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = None
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert result.exit_code == 1
+
+    def test_graduate_fails_when_procedures_too_few(self, runner, cli_app):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=2000)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=3)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = 5.0
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert result.exit_code == 1
+        assert "Graduation blocked" in result.output
+
+    def test_graduate_shows_assessment_table(self, runner, cli_app):
+        mock_crm = AsyncMock()
+        mock_crm.create_tables = AsyncMock()
+        mock_crm.count_interactions = AsyncMock(return_value=500)
+
+        mock_procedural = AsyncMock()
+        mock_procedural.initialize = AsyncMock()
+        mock_procedural.count_procedures = AsyncMock(return_value=5)
+        mock_procedural.close = AsyncMock()
+
+        mock_hub = MagicMock()
+        mock_hub.get_average_score.return_value = 3.2
+
+        with (
+            patch("ira.data.crm.CRMDatabase", return_value=mock_crm),
+            patch("ira.memory.procedural.ProceduralMemory", return_value=mock_procedural),
+            patch("ira.systems.learning_hub.LearningHub", return_value=mock_hub),
+        ):
+            result = runner.invoke(cli_app, ["graduate"])
+
+        assert "Total interactions" in result.output
+        assert "Avg feedback score" in result.output
+        assert "Procedures learned" in result.output
+        assert "500" in result.output
+        assert "3.20" in result.output
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

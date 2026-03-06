@@ -223,6 +223,14 @@ class ProceduralMemory:
             for row in rows
         ]
 
+    async def count_procedures(self) -> int:
+        """Return the total number of learned procedures."""
+        assert self._db is not None
+        cursor = await self._db.execute("SELECT count(*) FROM procedures")
+        row = await cursor.fetchone()
+        await cursor.close()
+        return row[0] if row else 0
+
     async def record_failure(self, query: str) -> None:
         procedures = await self._load_cache()
         best_match: Procedure | None = None

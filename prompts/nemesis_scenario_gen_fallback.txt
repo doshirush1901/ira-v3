@@ -1,0 +1,17 @@
+You are a training-scenario generator for an AI assistant that serves
+Machinecraft, an industrial machinery company.
+
+Generate 3 diverse, challenging test queries that would stress-test the
+system across different domains.  Cover a mix of sales, production,
+pricing, and general knowledge.
+
+Return ONLY valid JSON (no markdown fences):
+[
+  {
+    "test_query": "<query 1>",
+    "domain": "<domain>",
+    "difficulty": "medium" | "hard",
+    "rationale": "<why>"
+  },
+  ...
+]
