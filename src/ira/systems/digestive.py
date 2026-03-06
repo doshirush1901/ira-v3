@@ -20,6 +20,7 @@ import httpx
 from ira.brain.document_ingestor import DocumentIngestor, chunk_text
 from ira.brain.embeddings import EmbeddingService
 from ira.brain.knowledge_graph import KnowledgeGraph
+from ira.brain.quality_filter import QualityFilter
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
 from ira.data.models import Email, KnowledgeItem
@@ -46,20 +47,66 @@ class DigestiveSystem:
         self._graph = knowledge_graph
         self._embeddings = embedding_service
         self._qdrant = qdrant
+        self._quality_filter = QualityFilter(
+            qdrant_manager=qdrant, embedding_service=embedding_service,
+        )
 
         settings = get_settings()
         self._openai_key = settings.llm.openai_api_key.get_secret_value()
         self._openai_model = settings.llm.openai_model
 
+    _WINDOW_SIZE = 10_000
+    _WINDOW_OVERLAP = 500
+
     # ── STOMACH: nutrient extraction ──────────────────────────────────────
 
     async def _extract_nutrients(self, raw_data: str) -> dict[str, list[str]]:
-        """Use an LLM to classify text into protein / carbs / waste."""
-        empty: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": []}
+        """Use an LLM to classify text into protein / carbs / waste.
 
+        Long documents are split into overlapping windows so that every
+        part of the text is seen by the model.  Results from each window
+        are merged into a single nutrient dict.
+        """
         if not self._openai_key:
             logger.warning("No OpenAI API key — skipping nutrient extraction")
             return {"protein": [raw_data], "carbs": [], "waste": []}
+
+        windows = self._split_windows(raw_data)
+        merged: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": []}
+
+        for i, window in enumerate(windows):
+            result = await self._classify_window(window)
+            for key in ("protein", "carbs", "waste"):
+                merged[key].extend(result.get(key, []))
+            if len(windows) > 1:
+                logger.debug(
+                    "Nutrient window %d/%d: protein=%d carbs=%d waste=%d",
+                    i + 1, len(windows),
+                    len(result.get("protein", [])),
+                    len(result.get("carbs", [])),
+                    len(result.get("waste", [])),
+                )
+
+        return merged
+
+    def _split_windows(self, text: str) -> list[str]:
+        """Split *text* into overlapping character windows for nutrient extraction."""
+        if len(text) <= self._WINDOW_SIZE:
+            return [text]
+
+        windows: list[str] = []
+        start = 0
+        while start < len(text):
+            end = min(start + self._WINDOW_SIZE, len(text))
+            windows.append(text[start:end])
+            if end == len(text):
+                break
+            start += self._WINDOW_SIZE - self._WINDOW_OVERLAP
+        return windows
+
+    async def _classify_window(self, text: str) -> dict[str, list[str]]:
+        """Send a single text window to the LLM for nutrient classification."""
+        empty: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": []}
 
         headers = {
             "Authorization": f"Bearer {self._openai_key}",
@@ -70,12 +117,12 @@ class DigestiveSystem:
             "temperature": 0,
             "messages": [
                 {"role": "system", "content": _NUTRIENT_SYSTEM_PROMPT},
-                {"role": "user", "content": raw_data[:12_000]},
+                {"role": "user", "content": text},
             ],
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     json=payload,
@@ -89,7 +136,7 @@ class DigestiveSystem:
                         result[key] = []
                 return result
         except (httpx.HTTPError, json.JSONDecodeError, KeyError):
-            logger.exception("Nutrient extraction failed")
+            logger.exception("Nutrient classification failed for window")
             return empty
 
     # ── SMALL INTESTINE: absorption ───────────────────────────────────────
@@ -131,19 +178,15 @@ class DigestiveSystem:
         if not items:
             return 0
 
-        try:
-            from ira.brain.quality_filter import QualityFilter
-            qf = QualityFilter(qdrant_manager=self._qdrant, embedding_service=self._embeddings)
-            filtered = []
-            for item in items:
-                result = qf.filter_chunk(item.content)
-                if result["pass"]:
-                    filtered.append(item)
-                else:
-                    logger.debug("Quality filter rejected chunk: %s", result["reason"])
-            items = filtered
-        except Exception:
-            logger.debug("Quality filter not available, skipping")
+        filtered = []
+        for item in items:
+            result = self._quality_filter.filter_chunk(item.content)
+            if result["pass"]:
+                filtered.append(item)
+            else:
+                logger.debug("Quality filter rejected chunk (score=%.2f): %s",
+                             result["quality_score"], result["reason"])
+        items = filtered
 
         if not items:
             return 0

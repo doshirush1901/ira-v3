@@ -1008,15 +1008,15 @@ def graduate(
 @app.command("populate-crm")
 def populate_crm(
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify contacts but don't insert into CRM."),
-    source: str = typer.Option("all", "--source", "-s", help="Data source: all, csv, neo4j."),
+    source: str = typer.Option("all", "--source", "-s", help="Data source: all, gmail, kb, neo4j."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Classify contacts and populate the CRM with eligible entries.
 
-    Reads contacts from CSVs (leads, LinkedIn) and Neo4j, classifies
-    each via Delphi, and inserts only live customers, past customers,
-    and sales leads into the CRM.  Vendors, partners, and internal
-    contacts are filtered out.
+    Extracts contacts from Gmail inbox, the Qdrant knowledge base, and
+    Neo4j.  Delphi classifies each contact (with Clio-style KB cross-
+    referencing for evidence), and only live customers, past customers,
+    and sales leads are inserted.
     """
     _configure_logging(verbose)
 
@@ -1048,7 +1048,7 @@ def populate_crm(
         mode_label = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
         console.print(Panel(
             f"Mode: {mode_label}\nSources: {source}\n\n"
-            "Delphi will classify each contact as:\n"
+            "Delphi will classify each contact (with KB evidence) as:\n"
             "  [green]LIVE_CUSTOMER[/green] | [green]PAST_CUSTOMER[/green] | "
             "[green]LEAD_WITH_INTERACTIONS[/green] | [green]LEAD_NO_INTERACTIONS[/green]\n"
             "  [red]VENDOR[/red] | [red]PARTNER[/red] | [red]OWN_COMPANY[/red] | [red]OTHER[/red] → rejected",
@@ -1058,7 +1058,7 @@ def populate_crm(
 
         with Progress(
             SpinnerColumn(),
-            TextColumn("[bold green]Classifying and importing contacts..."),
+            TextColumn("[bold green]Extracting, cross-referencing, and classifying contacts..."),
             console=err_console,
             transient=True,
         ) as progress:
@@ -1080,7 +1080,117 @@ def populate_crm(
 
         console.print(table)
 
+        classifications = result.get("classifications", [])
+        if classifications:
+            console.print(f"\n[dim]Classification details ({len(classifications)} contacts):[/dim]")
+            ct_table = Table(show_header=True)
+            ct_table.add_column("Email", style="cyan", width=30)
+            ct_table.add_column("Company", width=20)
+            ct_table.add_column("Type", width=24)
+            ct_table.add_column("Conf", width=6)
+            ct_table.add_column("Reasoning", width=50)
+
+            for c in classifications:
+                ct = c.get("contact_type", "?")
+                style = "green" if ct in ("LIVE_CUSTOMER", "PAST_CUSTOMER", "LEAD_WITH_INTERACTIONS", "LEAD_NO_INTERACTIONS") else "red"
+                ct_table.add_row(
+                    c.get("email", "?")[:30],
+                    (c.get("company") or "")[:20],
+                    f"[{style}]{ct}[/{style}]",
+                    c.get("confidence", "?"),
+                    (c.get("reasoning") or "")[:50],
+                )
+
+            console.print(ct_table)
+
     _run(_populate())
+
+
+@app.command("crm-review")
+def crm_review(
+    contact_type: str = typer.Option("", "--type", "-t", help="Filter by contact type (e.g. LIVE_CUSTOMER)."),
+    override_email: str = typer.Option("", "--override", help="Email address to reclassify."),
+    new_type: str = typer.Option("", "--new-type", help="New contact type for --override."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Review CRM contacts and optionally reclassify them.
+
+    Without flags, lists all contacts grouped by type.
+    With --override and --new-type, reclassifies a specific contact.
+    """
+    _configure_logging(verbose)
+
+    async def _review() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.data.models import ContactType
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        if override_email and new_type:
+            try:
+                ct = ContactType(new_type)
+            except ValueError:
+                console.print(f"[red]Invalid contact type: {new_type}[/red]")
+                console.print(f"Valid types: {', '.join(t.value for t in ContactType)}")
+                raise typer.Exit(1)
+
+            contact = await crm.get_contact_by_email(override_email)
+            if not contact:
+                console.print(f"[red]Contact not found: {override_email}[/red]")
+                raise typer.Exit(1)
+
+            await crm.update_contact(str(contact.id), contact_type=ct)
+            console.print(
+                f"[green]Updated {override_email} → {new_type}[/green]"
+            )
+            return
+
+        filters = {}
+        if contact_type:
+            filters["contact_type"] = contact_type
+
+        contacts = await crm.list_contacts(filters or None)
+
+        if not contacts:
+            console.print("[yellow]No contacts in CRM.[/yellow]")
+            return
+
+        by_type: dict[str, list] = {}
+        for c in contacts:
+            ct_val = c.contact_type.value if c.contact_type else "UNCLASSIFIED"
+            by_type.setdefault(ct_val, []).append(c)
+
+        for ct_name, group in sorted(by_type.items()):
+            style = "green" if ct_name in ("LIVE_CUSTOMER", "PAST_CUSTOMER") else "cyan" if "LEAD" in ct_name else "yellow"
+            console.print(f"\n[{style} bold]{ct_name}[/{style} bold] ({len(group)})")
+
+            table = Table(show_header=True, padding=(0, 1))
+            table.add_column("#", style="dim", width=3)
+            table.add_column("Name", width=20)
+            table.add_column("Email", style="cyan", width=30)
+            table.add_column("Source", width=15)
+            table.add_column("Score", justify="right", width=6)
+
+            for i, c in enumerate(group, 1):
+                table.add_row(
+                    str(i),
+                    (c.name or "")[:20],
+                    (c.email or "")[:30],
+                    (c.source or "")[:15],
+                    f"{c.lead_score:.0f}",
+                )
+
+            console.print(table)
+
+        total = len(contacts)
+        console.print(f"\n[bold]Total contacts in CRM: {total}[/bold]")
+        console.print(
+            "[dim]To reclassify: ira crm-review --override email@example.com "
+            "--new-type PAST_CUSTOMER[/dim]"
+        )
+
+    _run(_review())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

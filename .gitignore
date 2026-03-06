@@ -1,12 +1,61 @@
+# ──────────────────────────────────────────────
+# Secrets & credentials
+# ──────────────────────────────────────────────
 .env
 credentials.json
 credentials_rushabh.json
 token.json
+Neo4j-*.txt
+*_api_key.txt
+*_api_key*.txt
+
+# ──────────────────────────────────────────────
+# Company data (documents, brain state, DBs)
+# ──────────────────────────────────────────────
+data/imports/
+data/brain/
+data/qdrant/
+data/neo4j/
+data/postgres/
+data/qdrant_locked/
+data/ingested_files.db
+
+# ──────────────────────────────────────────────
+# Local databases
+# ──────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ──────────────────────────────────────────────
+# Runtime & logs
+# ──────────────────────────────────────────────
+dream_log.json
+
+# ──────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 *.egg-info/
 dist/
 build/
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
+
+# ──────────────────────────────────────────────
+# IDE / OS
+# ──────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ──────────────────────────────────────────────
+# Migration scripts with hardcoded creds
+# ──────────────────────────────────────────────
+scripts/migrate_neo4j.py

@@ -31,6 +31,7 @@ class IntentCategory(str, Enum):
     QUALITY_MANAGEMENT = "QUALITY_MANAGEMENT"
     CASE_STUDY = "CASE_STUDY"
     QUOTE_GENERATION = "QUOTE_GENERATION"
+    ARCHIVE_SEARCH = "ARCHIVE_SEARCH"
     GENERAL = "GENERAL"
 
 
@@ -81,7 +82,7 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     ),
     IntentCategory.RESEARCH: RoutingConfig(
         required_agents=("clio",),
-        optional_agents=("iris", "vera"),
+        optional_agents=("iris", "vera", "alexandros"),
         required_tools=("retriever",),
     ),
     IntentCategory.QUOTE_REQUEST: RoutingConfig(
@@ -114,9 +115,14 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
         optional_agents=("calliope",),
         required_tools=("pricing_engine", "retriever"),
     ),
+    IntentCategory.ARCHIVE_SEARCH: RoutingConfig(
+        required_agents=("alexandros",),
+        optional_agents=("clio",),
+        required_tools=("retriever",),
+    ),
     IntentCategory.GENERAL: RoutingConfig(
         required_agents=("clio",),
-        optional_agents=("sphinx",),
+        optional_agents=("sphinx", "alexandros"),
         required_tools=("retriever",),
     ),
 }
@@ -249,6 +255,20 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bquote\s+PDF\b", IntentCategory.QUOTE_GENERATION, 3.0),
     (r"\bformal\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
     (r"\bquote\s+document\b", IntentCategory.QUOTE_GENERATION, 2.5),
+
+    # Archive / document search
+    (r"\barchive\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bimports?\b", IntentCategory.ARCHIVE_SEARCH, 2.0),
+    (r"\bbrowse\s+documents?\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bbrowse\s+files?\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bfind\s+the\s+file\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bfind\s+the\s+document\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bread\s+the\s+document\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\braw\s+document\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\bdata/imports\b", IntentCategory.ARCHIVE_SEARCH, 3.0),
+    (r"\blook\s+up\s+file\b", IntentCategory.ARCHIVE_SEARCH, 2.5),
+    (r"\boriginal\s+(file|document|pdf)\b", IntentCategory.ARCHIVE_SEARCH, 2.5),
+    (r"\bsource\s+document\b", IntentCategory.ARCHIVE_SEARCH, 2.5),
 ])
 
 _CONFIDENCE_THRESHOLD = 3.0

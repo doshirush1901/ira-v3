@@ -75,7 +75,7 @@ class GoogleConfig(BaseSettings):
     credentials_path: Path = Path("credentials.json")
     token_path: Path = Path("token.json")
     ira_email: str = "ira@machinecraft.org"
-    training_email: str = "rushabh@machinecraft.org"
+    training_email: str = ""
     email_mode: EmailMode = Field(
         default=EmailMode.TRAINING,
         validation_alias="IRA_EMAIL_MODE",

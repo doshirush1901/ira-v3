@@ -302,12 +302,32 @@ class DripStepModel(Base):
 class CRMDatabase:
     """Async CRM service backed by PostgreSQL (or SQLite for tests)."""
 
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(self, database_url: str | None = None, event_bus: Any | None = None) -> None:
         url = database_url or get_settings().database.url
         self._engine = create_async_engine(url, echo=False)
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine, expire_on_commit=False
         )
+        self._event_bus = event_bus
+
+    def set_event_bus(self, event_bus: Any) -> None:
+        """Late-bind the event bus after construction."""
+        self._event_bus = event_bus
+
+    async def _emit(self, event_type: str, entity_type: str, entity_id: str, payload: dict[str, Any]) -> None:
+        if self._event_bus is None:
+            return
+        from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
+        try:
+            await self._event_bus.emit(DataEvent(
+                event_type=EventType(event_type),
+                entity_type=entity_type,
+                entity_id=entity_id,
+                payload=payload,
+                source_store=SourceStore.CRM,
+            ))
+        except Exception:
+            logger.debug("CRM event emission failed for %s", event_type, exc_info=True)
 
     @property
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
@@ -325,6 +345,7 @@ class CRMDatabase:
             session.add(company)
             await session.commit()
             await session.refresh(company)
+        await self._emit("company_created", "company", str(company.id), company.to_dict())
         return company
 
     async def get_company(self, company_id: str | UUID) -> CompanyModel | None:
@@ -365,6 +386,7 @@ class CRMDatabase:
             session.add(contact)
             await session.commit()
             await session.refresh(contact)
+        await self._emit("contact_created", "contact", str(contact.id), contact.to_dict())
         return contact
 
     async def get_contact(self, contact_id: str | UUID) -> ContactModel | None:
@@ -389,6 +411,7 @@ class CRMDatabase:
                 setattr(contact, k, v)
             await session.commit()
             await session.refresh(contact)
+        await self._emit("contact_updated", "contact", str(contact.id), contact.to_dict())
         return contact
 
     async def list_contacts(
@@ -432,6 +455,7 @@ class CRMDatabase:
             session.add(deal)
             await session.commit()
             await session.refresh(deal)
+        await self._emit("deal_created", "deal", str(deal.id), deal.to_dict())
         return deal
 
     async def get_deal(self, deal_id: str | UUID) -> DealModel | None:

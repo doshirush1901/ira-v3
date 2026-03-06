@@ -140,7 +140,7 @@ ira dream
 
 ## 3. Training Ira
 
-Ira starts in **TRAINING** mode, where she observes email threads on `rushabh@machinecraft.org` (read-only) and learns from your interactions. The goal is to accumulate enough supervised experience before graduating to autonomous operation.
+Ira starts in **TRAINING** mode, where she observes email threads on `admin@machinecraft.org` (read-only) and learns from your interactions. The goal is to accumulate enough supervised experience before graduating to autonomous operation.
 
 ### Daily Workflow
 
@@ -394,7 +394,7 @@ Campaign activity is visible on the dashboard at `/dashboard/`. The drip engine 
 
 **Symptom:** Health check reports Neo4j as `unhealthy` with an auth error.
 
-**Fix:** Ensure `NEO4J_PASSWORD` in `.env` matches the password set in `docker-compose.yml` (default: `ira_password`). If you changed it in one place, update the other. Then restart:
+**Fix:** Ensure `NEO4J_PASSWORD` in `.env` matches the password set in `docker-compose.yml` (default: `<your-neo4j-password>`). If you changed it in one place, update the other. Then restart:
 
 ```bash
 docker-compose down && docker-compose up -d
@@ -468,7 +468,7 @@ Graduation is the transition from **TRAINING** mode (Ira observes, you act) to *
 
 | Aspect | Training Mode | Operational Mode |
 |--------|--------------|-----------------|
-| Email account | `rushabh@machinecraft.org` (read-only) | `ira@machinecraft.org` (read + write) |
+| Email account | `admin@machinecraft.org` (read-only) | `ira@machinecraft.org` (read + write) |
 | Gmail permissions | `gmail.readonly` | `gmail.modify`, `gmail.compose` |
 | Email handling | Observe and learn only | Classify, draft replies, create Gmail drafts |
 | Drip campaigns | Manual execution | Autonomous send via Gmail |

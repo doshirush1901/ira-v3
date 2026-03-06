@@ -2,7 +2,7 @@
 
 Supports two modes controlled by the ``IRA_EMAIL_MODE`` environment variable:
 
-* **TRAINING** (default): Read-only observation of ``rushabh@machinecraft.org``.
+* **TRAINING** (default): Read-only observation of the training email address.
   Fetches sent and received emails, classifies them via Delphi, digests them
   through the DigestiveSystem, resolves sender identity, and logs interactions
   in the CRM.  **Never** sends, drafts, or modifies emails.

@@ -284,8 +284,8 @@ Include proper docstrings for every model and field descriptions.
 Create a docker-compose.yml file at the project root with three services:
 
 1. qdrant: image qdrant/qdrant:latest, port 6333:6333, volume ./data/qdrant:/qdrant/storage
-2. neo4j: image neo4j:5, ports 7474:7474 and 7687:7687, environment NEO4J_AUTH=neo4j/ira_password, volume ./data/neo4j:/data
-3. postgres: image postgres:16, port 5432:5432, environment POSTGRES_USER=ira, POSTGRES_PASSWORD=ira, POSTGRES_DB=ira_crm, volume ./data/postgres:/var/lib/postgresql/data
+2. neo4j: image neo4j:5, ports 7474:7474 and 7687:7687, environment NEO4J_AUTH=neo4j/<your-neo4j-password>, volume ./data/neo4j:/data
+3. postgres: image postgres:16, port 5432:5432, environment POSTGRES_USER=ira, POSTGRES_PASSWORD=<your-postgres-password>, POSTGRES_DB=ira_crm, volume ./data/postgres:/var/lib/postgresql/data
 
 Add a shared network called ira-network.
 ```
