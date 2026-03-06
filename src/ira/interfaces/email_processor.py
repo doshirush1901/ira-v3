@@ -556,3 +556,57 @@ class EmailProcessor:
             return json.loads(cleaned)
         except (json.JSONDecodeError, TypeError):
             return {"raw_response": raw}
+
+
+class GmailDraftSender:
+    """Adapter that satisfies the DripEngine's ``GmailSenderProtocol``.
+
+    Creates Gmail drafts (never sends directly) and notifies the admin
+    via Telegram so a human can review before sending.
+    """
+
+    def __init__(self, email_processor: EmailProcessor) -> None:
+        self._processor = email_processor
+
+    async def create_draft(
+        self, to: str, subject: str, body: str,
+    ) -> dict[str, Any]:
+        service = await self._processor._build_gmail_service()
+        return await self._processor._create_draft(
+            service, to, subject, body, thread_id=None,
+        )
+
+    async def send_notification(self, message: str) -> None:
+        settings = get_settings()
+        token = settings.telegram.bot_token.get_secret_value()
+        chat_id = settings.telegram.admin_chat_id
+
+        if not token or not chat_id:
+            logger.warning("Telegram not configured — skipping drip notification")
+            return
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(url, json={"chat_id": chat_id, "text": message})
+                resp.raise_for_status()
+        except Exception:
+            logger.exception("Failed to send Telegram drip notification")
+
+    async def check_replies(self, thread_id: str) -> list[dict[str, Any]]:
+        service = await self._processor._build_gmail_service()
+
+        def _list() -> list[dict[str, Any]]:
+            resp = (
+                service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="metadata")
+                .execute()
+            )
+            return resp.get("messages", [])
+
+        try:
+            return await asyncio.to_thread(_list)
+        except Exception:
+            logger.exception("Failed to check replies for thread %s", thread_id)
+            return []

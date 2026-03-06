@@ -26,6 +26,11 @@ import tiktoken
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.models import KnowledgeItem
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ira.brain.knowledge_graph import KnowledgeGraph
+
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".docx", ".txt", ".csv"}
@@ -180,9 +185,11 @@ class DocumentIngestor:
         self,
         qdrant: QdrantManager,
         *,
+        knowledge_graph: "KnowledgeGraph | None" = None,
         ledger_path: Path = _LEDGER_PATH,
     ) -> None:
         self._qdrant = qdrant
+        self._graph = knowledge_graph
         self._ledger = _init_ledger(ledger_path)
 
     # ── discovery ────────────────────────────────────────────────────────
@@ -272,6 +279,10 @@ class DocumentIngestor:
         ]
 
         upserted = await self._qdrant.upsert_items(items)
+
+        if self._graph is not None:
+            await self._extract_and_store_entities(text, str(path))
+
         self._record_ingestion(str(path), current_hash, upserted)
         logger.info("Ingested %s -> %d chunks (category: %s)", path, upserted, category)
         return upserted
@@ -321,6 +332,56 @@ class DocumentIngestor:
         }
         logger.info("Ingestion complete: %s", summary)
         return summary
+
+    # ── entity extraction ─────────────────────────────────────────────────
+
+    async def _extract_and_store_entities(self, text: str, source: str) -> None:
+        """Extract entities from document text and store them in Neo4j."""
+        assert self._graph is not None
+        try:
+            entities = await self._graph.extract_entities_from_text(text)
+        except Exception:
+            logger.exception("Entity extraction failed for %s", source)
+            return
+
+        for company in entities.get("companies", []):
+            try:
+                await self._graph.add_company(
+                    name=company.get("name", ""),
+                    region=company.get("region", ""),
+                    industry=company.get("industry", ""),
+                )
+            except Exception:
+                logger.warning("Failed to add company from %s: %s", source, company)
+
+        for person in entities.get("people", []):
+            try:
+                await self._graph.add_person(
+                    name=person.get("name", ""),
+                    email=person.get("email", ""),
+                    company_name=person.get("company", ""),
+                    role=person.get("role", ""),
+                )
+            except Exception:
+                logger.warning("Failed to add person from %s: %s", source, person)
+
+        for machine in entities.get("machines", []):
+            try:
+                await self._graph.add_machine(
+                    model=machine.get("model", ""),
+                    category=machine.get("category", ""),
+                    description=machine.get("description", ""),
+                )
+            except Exception:
+                logger.warning("Failed to add machine from %s: %s", source, machine)
+
+        logger.info(
+            "Extracted entities from %s: %d companies, %d people, %d machines",
+            source,
+            len(entities.get("companies", [])),
+            len(entities.get("people", [])),
+            len(entities.get("machines", [])),
+        )
 
     # ── ledger helpers ───────────────────────────────────────────────────
 

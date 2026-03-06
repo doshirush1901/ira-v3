@@ -94,7 +94,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     qdrant = QdrantManager(embedding_service=embedding)
     graph = KnowledgeGraph()
     retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
-    ingestor = DocumentIngestor(qdrant=qdrant)
+    ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
 
     _services["embedding"] = embedding
     _services["qdrant"] = qdrant
@@ -162,7 +162,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     long_term = LongTermMemory()
     episodic = EpisodicMemory(long_term=long_term)
+    await episodic.initialize()
     conversation = ConversationMemory()
+    await conversation.initialize()
     musculoskeletal = MusculoskeletalSystem()
     await musculoskeletal.create_tables()
 
@@ -190,11 +192,52 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["procedural_memory"] = procedural_memory
     _services["learning_hub"] = learning_hub
 
+    # ── Additional memory systems ─────────────────────────────────────
+    from ira.memory.emotional_intelligence import EmotionalIntelligence
+    from ira.memory.goal_manager import GoalManager
+    from ira.memory.inner_voice import InnerVoice
+    from ira.memory.metacognition import Metacognition
+    from ira.memory.relationship import RelationshipMemory
+
+    relationship_memory = RelationshipMemory()
+    await relationship_memory.initialize()
+    goal_manager = GoalManager()
+    await goal_manager.initialize()
+    metacognition = Metacognition()
+    await metacognition.initialize()
+    inner_voice = InnerVoice()
+    await inner_voice.initialize()
+
+    _services["relationship_memory"] = relationship_memory
+    _services["goal_manager"] = goal_manager
+    _services["metacognition"] = metacognition
+    _services["inner_voice"] = inner_voice
+
     # ── Unified context ───────────────────────────────────────────────
     from ira.context import UnifiedContextManager
 
     unified_context = UnifiedContextManager()
     _services["unified_context"] = unified_context
+
+    # ── Request pipeline ──────────────────────────────────────────────
+    from ira.pipeline import RequestPipeline
+
+    request_pipeline = RequestPipeline(
+        sensory=sensory,
+        conversation_memory=conversation,
+        relationship_memory=relationship_memory,
+        goal_manager=goal_manager,
+        procedural_memory=procedural_memory,
+        metacognition=metacognition,
+        inner_voice=inner_voice,
+        pantheon=pantheon,
+        voice=voice,
+        endocrine=endocrine,
+        crm=crm,
+        musculoskeletal=musculoskeletal,
+        unified_context=unified_context,
+    )
+    _services["pipeline"] = request_pipeline
 
     # ── Board meeting system ──────────────────────────────────────────
     from ira.systems.board_meeting import BoardMeeting
@@ -222,6 +265,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     _services["email_processor"] = email_processor
 
+    # ── Drip engine ────────────────────────────────────────────────────
+    from ira.interfaces.email_processor import GmailDraftSender
+    from ira.systems.drip_engine import AutonomousDripEngine
+
+    gmail_sender = GmailDraftSender(email_processor=email_processor)
+    drip_engine = AutonomousDripEngine(
+        crm=crm,
+        quotes=quotes,
+        message_bus=bus,
+        gmail=gmail_sender,
+    )
+    _services["drip_engine"] = drip_engine
+
     # ── Respiratory system (background tasks) ─────────────────────────
     from ira.systems.respiratory import RespiratorySystem
 
@@ -229,6 +285,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         digestive=digestive,
         ingestor=ingestor,
         dream_mode=dream_mode,
+        drip_engine=drip_engine,
         immune_system=immune,
         email_processor=email_processor,
     )
@@ -341,25 +398,36 @@ async def request_timing(request: Request, call_next: Any) -> Any:
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query(req: QueryRequest) -> QueryResponse:
-    """Route a query through Athena and the Pantheon."""
-    pantheon = _svc("pantheon")
+    """Route a query through the full 11-step request pipeline."""
+    pipeline = _services.get("pipeline")
 
-    ctx = req.context or {}
-    if req.user_id:
-        unified_context = _svc("unified_context")
-        user_ctx = unified_context.get(req.user_id)
-        ctx["cross_channel_history"] = unified_context.recent_history(
-            req.user_id, limit=10,
+    sender_id = req.user_id or "anonymous"
+    channel = (req.context or {}).get("channel", "API").upper()
+    metadata = req.context or {}
+
+    if pipeline is not None:
+        response = await pipeline.process_request(
+            raw_input=req.query,
+            channel=channel,
+            sender_id=sender_id,
+            metadata=metadata,
         )
-        ctx["last_channel"] = user_ctx.last_channel
-
-    response = await pantheon.process(req.query, ctx)
-
-    if req.user_id:
-        unified_context = _svc("unified_context")
-        unified_context.record_turn(
-            req.user_id, ctx.get("channel", "api"), req.query, response,
-        )
+    else:
+        pantheon = _svc("pantheon")
+        ctx = metadata.copy()
+        if req.user_id:
+            unified_context = _services.get("unified_context")
+            if unified_context is not None:
+                ctx["cross_channel_history"] = unified_context.recent_history(
+                    req.user_id, limit=10,
+                )
+        response = await pantheon.process(req.query, ctx)
+        if req.user_id:
+            unified_context = _services.get("unified_context")
+            if unified_context is not None:
+                unified_context.record_turn(
+                    req.user_id, channel, req.query, response,
+                )
 
     return QueryResponse(response=response)
 

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_FILE = Path("data/machine_knowledge.json")
 
-_SPECS_CATEGORY = "04_machine_manuals_and_specs"
+_SPECS_CATEGORY = "machine_manuals_and_specs"
 
 _RECOMMEND_SYSTEM_PROMPT = load_prompt("recommend_machine")
 

@@ -62,7 +62,8 @@ def mock_bus():
 @pytest.fixture()
 def mock_gmail():
     gmail = AsyncMock()
-    gmail.send_email = AsyncMock(return_value={"status": "sent"})
+    gmail.create_draft = AsyncMock(return_value={"id": "draft_123"})
+    gmail.send_notification = AsyncMock()
     gmail.check_replies = AsyncMock(return_value=[])
     return gmail
 
@@ -247,7 +248,7 @@ class TestCampaignCycleExecution:
         sent = await engine.run_campaign_cycle()
 
         assert sent >= 1
-        mock_gmail.send_email.assert_called()
+        mock_gmail.create_draft.assert_called()
         mock_bus.send.assert_called()
 
         msg = mock_bus.send.call_args[0][0]
@@ -271,7 +272,7 @@ class TestCampaignCycleExecution:
         sent = await engine.run_campaign_cycle()
 
         assert sent == 0
-        mock_gmail.send_email.assert_not_called()
+        mock_gmail.create_draft.assert_not_called()
 
     async def test_skips_paused_campaigns(self, crm_db, engine, mock_gmail):
         co = await _make_company(crm_db, name="PausedCo", region="EU")
@@ -291,7 +292,7 @@ class TestCampaignCycleExecution:
         sent = await engine.run_campaign_cycle()
 
         assert sent == 0
-        mock_gmail.send_email.assert_not_called()
+        mock_gmail.create_draft.assert_not_called()
 
     async def test_records_interaction_after_send(self, crm_db, engine, mock_bus, mock_gmail):
         co = await _make_company(crm_db, name="LogCo", region="EU")
@@ -343,7 +344,7 @@ class TestCampaignCycleExecution:
         assert updated.sent_at is not None
 
     async def test_handles_gmail_failure_gracefully(self, crm_db, engine, mock_bus, mock_gmail):
-        mock_gmail.send_email = AsyncMock(side_effect=RuntimeError("SMTP error"))
+        mock_gmail.create_draft = AsyncMock(side_effect=RuntimeError("SMTP error"))
 
         co = await _make_company(crm_db, name="FailCo", region="EU")
         contact = await _make_contact(crm_db, company_id=str(co.id))

@@ -22,7 +22,7 @@ from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_QUOTES_CATEGORY = "01_quotes_and_proposals"
+_QUOTES_CATEGORY = "quotes_and_proposals"
 
 
 # ── CRM repository interface (implemented in Phase 4) ───────────────────────

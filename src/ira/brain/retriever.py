@@ -138,25 +138,77 @@ class UnifiedRetriever:
         return await self._qdrant.hybrid_search(query, limit=limit)
 
     async def _search_graph(self, query: str) -> list[dict[str, Any]]:
-        """Extract key terms from the query and look them up in Neo4j."""
-        subgraph = await self._graph.find_related_entities(query, max_hops=1)
-        nodes = subgraph.get("nodes", [])
-        if not nodes:
+        """Extract entities from the query via LLM, then look each up in Neo4j."""
+        entity_names = await self._extract_entity_names(query)
+        if not entity_names:
+            entity_names = [query]
+
+        all_results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for name in entity_names:
+            subgraph = await self._graph.find_related_entities(name, max_hops=1)
+            nodes = subgraph.get("nodes", [])
+            for node in nodes:
+                props = dict(node) if hasattr(node, "__iter__") else {"value": str(node)}
+                content_parts = [f"{k}: {v}" for k, v in props.items() if v]
+                content = ", ".join(content_parts)
+                if content in seen:
+                    continue
+                seen.add(content)
+                all_results.append(
+                    {
+                        "content": content,
+                        "score": 0.5,
+                        "source": "neo4j",
+                        "metadata": props,
+                    }
+                )
+        return all_results
+
+    async def _extract_entity_names(self, query: str) -> list[str]:
+        """Use the LLM to pull entity names (companies, people, machines) from a query."""
+        if not self._openai_key:
             return []
 
-        results: list[dict[str, Any]] = []
-        for node in nodes:
-            props = dict(node) if hasattr(node, "__iter__") else {"value": str(node)}
-            content_parts = [f"{k}: {v}" for k, v in props.items() if v]
-            results.append(
+        headers = {
+            "Authorization": f"Bearer {self._openai_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._openai_model,
+            "temperature": 0,
+            "messages": [
                 {
-                    "content": ", ".join(content_parts),
-                    "score": 0.5,
-                    "source": "neo4j",
-                    "metadata": props,
-                }
-            )
-        return results
+                    "role": "system",
+                    "content": (
+                        "Extract entity names from the user query. Return a JSON "
+                        "array of strings — company names, person names, email "
+                        "addresses, machine model numbers, and quote IDs. Return "
+                        "only the JSON array, nothing else. If no entities are "
+                        "found, return an empty array []."
+                    ),
+                },
+                {"role": "user", "content": query},
+            ],
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                names = json.loads(content)
+                if isinstance(names, list) and all(isinstance(n, str) for n in names):
+                    return names
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+            logger.debug("Entity name extraction failed for graph search; using raw query")
+
+        return []
 
     async def _search_mem0(self, query: str, limit: int) -> list[dict[str, Any]]:
         if self._mem0 is None:

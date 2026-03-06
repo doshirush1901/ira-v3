@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # module level, keeping the module importable without a running server.
 
 _pantheon: Any = None
+_pipeline: Any = None
 _board_meeting: Any = None
 _crm: Any = None
 _unified_context: Any = None
@@ -106,16 +107,21 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("Thinking ...")
 
     try:
-        ctx: dict[str, Any] = {"channel": "telegram"}
-        if _unified_context is not None:
-            ctx["cross_channel_history"] = _unified_context.recent_history(
-                user_id, limit=10,
+        if _pipeline is not None:
+            response = await _pipeline.process_request(
+                raw_input=query,
+                channel="telegram",
+                sender_id=user_id,
             )
-
-        response = await _pantheon.process(query, ctx)
-
-        if _unified_context is not None:
-            _unified_context.record_turn(user_id, "telegram", query, response)
+        else:
+            ctx: dict[str, Any] = {"channel": "telegram"}
+            if _unified_context is not None:
+                ctx["cross_channel_history"] = _unified_context.recent_history(
+                    user_id, limit=10,
+                )
+            response = await _pantheon.process(query, ctx)
+            if _unified_context is not None:
+                _unified_context.record_turn(user_id, "telegram", query, response)
 
         await update.effective_message.reply_text(_truncate(response))
     except Exception:
@@ -365,16 +371,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = str(update.effective_message.chat_id)
 
     try:
-        ctx: dict[str, Any] = {"channel": "telegram"}
-        if _unified_context is not None:
-            ctx["cross_channel_history"] = _unified_context.recent_history(
-                user_id, limit=10,
+        if _pipeline is not None:
+            response = await _pipeline.process_request(
+                raw_input=text,
+                channel="telegram",
+                sender_id=user_id,
             )
-
-        response = await _pantheon.process(text, ctx)
-
-        if _unified_context is not None:
-            _unified_context.record_turn(user_id, "telegram", text, response)
+        else:
+            ctx: dict[str, Any] = {"channel": "telegram"}
+            if _unified_context is not None:
+                ctx["cross_channel_history"] = _unified_context.recent_history(
+                    user_id, limit=10,
+                )
+            response = await _pantheon.process(text, ctx)
+            if _unified_context is not None:
+                _unified_context.record_turn(user_id, "telegram", text, response)
 
         await update.effective_message.reply_text(_truncate(response))
     except Exception:
@@ -392,6 +403,7 @@ async def start_bot(
     board_meeting: Any,
     crm: Any,
     unified_context: Any = None,
+    pipeline: Any = None,
 ) -> Application:  # type: ignore[type-arg]
     """Build, configure, and return the Telegram Application.
 
@@ -408,9 +420,12 @@ async def start_bot(
         A fully initialised :class:`~ira.data.crm.CRMDatabase`.
     unified_context:
         Optional :class:`~ira.context.UnifiedContextManager` for cross-channel state.
+    pipeline:
+        Optional :class:`~ira.pipeline.RequestPipeline` for full 11-step processing.
     """
-    global _pantheon, _board_meeting, _crm, _unified_context  # noqa: PLW0603
+    global _pantheon, _pipeline, _board_meeting, _crm, _unified_context  # noqa: PLW0603
     _pantheon = pantheon
+    _pipeline = pipeline
     _board_meeting = board_meeting
     _crm = crm
     _unified_context = unified_context

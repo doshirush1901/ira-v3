@@ -67,6 +67,15 @@ logger = logging.getLogger(__name__)
 
 def _run(coro: Any) -> Any:
     """Run an async coroutine from synchronous CLI context."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
     return asyncio.run(coro)
 
 
@@ -96,6 +105,59 @@ def _build_pantheon() -> Any:
     return Pantheon(retriever=retriever, bus=bus)
 
 
+async def _build_pipeline(pantheon: Any) -> Any:
+    """Construct a full RequestPipeline for CLI use."""
+    from ira.brain.knowledge_graph import KnowledgeGraph
+    from ira.context import UnifiedContextManager
+    from ira.data.crm import CRMDatabase
+    from ira.memory.conversation import ConversationMemory
+    from ira.memory.goal_manager import GoalManager
+    from ira.memory.inner_voice import InnerVoice
+    from ira.memory.metacognition import Metacognition
+    from ira.memory.procedural import ProceduralMemory
+    from ira.memory.relationship import RelationshipMemory
+    from ira.pipeline import RequestPipeline
+    from ira.systems.endocrine import EndocrineSystem
+    from ira.systems.sensory import SensorySystem
+    from ira.systems.voice import VoiceSystem
+
+    graph = KnowledgeGraph()
+    sensory = SensorySystem(knowledge_graph=graph)
+    await sensory.create_tables()
+    conversation = ConversationMemory()
+    await conversation.initialize()
+    relationship_memory = RelationshipMemory()
+    await relationship_memory.initialize()
+    goal_manager = GoalManager()
+    await goal_manager.initialize()
+    procedural_memory = ProceduralMemory()
+    await procedural_memory.initialize()
+    metacognition = Metacognition()
+    await metacognition.initialize()
+    inner_voice = InnerVoice()
+    await inner_voice.initialize()
+    voice = VoiceSystem()
+    endocrine = EndocrineSystem()
+    crm = CRMDatabase()
+    await crm.create_tables()
+    unified_context = UnifiedContextManager()
+
+    return RequestPipeline(
+        sensory=sensory,
+        conversation_memory=conversation,
+        relationship_memory=relationship_memory,
+        goal_manager=goal_manager,
+        procedural_memory=procedural_memory,
+        metacognition=metacognition,
+        inner_voice=inner_voice,
+        pantheon=pantheon,
+        voice=voice,
+        endocrine=endocrine,
+        crm=crm,
+        unified_context=unified_context,
+    )
+
+
 def _build_digestive() -> tuple[Any, Any, Any]:
     """Return (digestive_system, document_ingestor, qdrant_manager)."""
     from ira.brain.document_ingestor import DocumentIngestor
@@ -107,7 +169,7 @@ def _build_digestive() -> tuple[Any, Any, Any]:
     embedding = EmbeddingService()
     qdrant = QdrantManager(embedding_service=embedding)
     graph = KnowledgeGraph()
-    ingestor = DocumentIngestor(qdrant=qdrant)
+    ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
     digestive = DigestiveSystem(
         ingestor=ingestor,
         knowledge_graph=graph,
@@ -186,12 +248,11 @@ def chat(
     pantheon = _build_pantheon()
 
     async def _session() -> None:
-        from ira.context import UnifiedContextManager
-
-        unified_ctx = UnifiedContextManager()
         user_id = "cli-user"
 
         async with pantheon:
+            pipeline = await _build_pipeline(pantheon)
+
             while True:
                 try:
                     user_input = console.input("[bold cyan]You:[/bold cyan] ")
@@ -204,13 +265,6 @@ def chat(
                 if text.lower() in ("/quit", "/exit", "/q"):
                     break
 
-                ctx: dict[str, Any] = {
-                    "channel": "cli",
-                    "cross_channel_history": unified_ctx.recent_history(
-                        user_id, limit=10,
-                    ),
-                }
-
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[bold green]Consulting agents..."),
@@ -218,9 +272,11 @@ def chat(
                     transient=True,
                 ) as progress:
                     progress.add_task("thinking", total=None)
-                    response = await pantheon.process(text, ctx)
-
-                unified_ctx.record_turn(user_id, "cli", text, response)
+                    response = await pipeline.process_request(
+                        raw_input=text,
+                        channel="cli",
+                        sender_id=user_id,
+                    )
 
                 console.print()
                 console.print(Panel(Markdown(response), title="Ira", border_style="green"))
@@ -241,19 +297,11 @@ def ask(
     pantheon = _build_pantheon()
 
     async def _ask() -> None:
-        from ira.context import UnifiedContextManager
-
-        unified_ctx = UnifiedContextManager()
         user_id = "cli-user"
 
-        ctx: dict[str, Any] = {
-            "channel": "cli",
-            "cross_channel_history": unified_ctx.recent_history(
-                user_id, limit=10,
-            ),
-        }
-
         async with pantheon:
+            pipeline = await _build_pipeline(pantheon)
+
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[bold green]Thinking..."),
@@ -261,9 +309,12 @@ def ask(
                 transient=True,
             ) as progress:
                 progress.add_task("thinking", total=None)
-                response = await pantheon.process(query, ctx)
+                response = await pipeline.process_request(
+                    raw_input=query,
+                    channel="cli",
+                    sender_id=user_id,
+                )
 
-        unified_ctx.record_turn(user_id, "cli", query, response)
         console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
     _run(_ask())
@@ -817,23 +868,23 @@ def pipeline(
         table.add_column("Count", justify="right", style="green")
         table.add_column("Value", justify="right", style="yellow")
 
-        by_stage = summary.get("by_stage", {})
-        if isinstance(by_stage, dict):
-            for stage, data in by_stage.items():
+        stages = summary.get("stages", {})
+        if isinstance(stages, dict):
+            for stage, data in stages.items():
                 if isinstance(data, dict):
                     table.add_row(
                         stage,
                         str(data.get("count", 0)),
-                        f"${data.get('value', 0):,.0f}",
+                        f"${data.get('total_value', 0):,.0f}",
                     )
                 else:
                     table.add_row(stage, str(data), "—")
 
         console.print(table)
 
-        total_deals = summary.get("total_deals", 0)
+        total_count = summary.get("total_count", 0)
         total_value = summary.get("total_value", 0)
-        console.print(f"\n[bold]Total deals:[/bold] {total_deals}  |  [bold]Total value:[/bold] ${total_value:,.0f}")
+        console.print(f"\n[bold]Total deals:[/bold] {total_count}  |  [bold]Total value:[/bold] ${total_value:,.0f}")
 
     _run(_pipeline())
 

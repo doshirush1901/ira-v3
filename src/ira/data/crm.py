@@ -667,20 +667,24 @@ class CRMDatabase:
     async def get_deal_velocity(self) -> dict[str, Any]:
         stmt = select(
             DealModel.stage,
-            func.avg(
-                func.julianday(DealModel.updated_at)
-                - func.julianday(DealModel.created_at)
-            ).label("avg_days"),
-        ).group_by(DealModel.stage)
+            DealModel.created_at,
+            DealModel.updated_at,
+        )
 
         async with self._session_factory() as session:
             result = await session.execute(stmt)
             rows = result.all()
 
-        velocity: dict[str, float] = {}
-        for stage, avg_days in rows:
+        stage_days: dict[str, list[float]] = {}
+        for stage, created_at, updated_at in rows:
             stage_name = stage.value if isinstance(stage, DealStage) else stage
-            velocity[stage_name] = round(float(avg_days or 0), 2)
+            if created_at and updated_at:
+                delta = (updated_at - created_at).total_seconds() / 86400.0
+                stage_days.setdefault(stage_name, []).append(delta)
+
+        velocity: dict[str, float] = {}
+        for stage_name, days_list in stage_days.items():
+            velocity[stage_name] = round(sum(days_list) / len(days_list), 2) if days_list else 0.0
 
         return {"stage_velocity_days": velocity}
 

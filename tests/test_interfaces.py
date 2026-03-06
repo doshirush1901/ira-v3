@@ -447,8 +447,9 @@ class TestCLI:
         assert "draft" in result.output
         assert "learn" in result.output
 
+    @patch("ira.interfaces.cli._build_pipeline")
     @patch("ira.interfaces.cli._build_pantheon")
-    def test_ask_invokes_pantheon(self, mock_build, runner, cli_app):
+    def test_ask_invokes_pantheon(self, mock_build, mock_build_pipeline, runner, cli_app):
         mock_pantheon = MagicMock()
         mock_pantheon.process = AsyncMock(return_value="Test response from Ira")
         mock_pantheon.start = AsyncMock()
@@ -456,6 +457,10 @@ class TestCLI:
         mock_pantheon.__aenter__ = AsyncMock(return_value=mock_pantheon)
         mock_pantheon.__aexit__ = AsyncMock(return_value=False)
         mock_build.return_value = mock_pantheon
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.process_request = AsyncMock(return_value="Test response from Ira")
+        mock_build_pipeline.return_value = mock_pipeline
 
         result = runner.invoke(cli_app, ["ask", "What machines do we sell?"])
         assert result.exit_code == 0

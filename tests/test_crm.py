@@ -61,7 +61,8 @@ async def drip_engine(crm_db, quote_manager):
         )
     )
     mock_gmail = AsyncMock()
-    mock_gmail.send_email = AsyncMock(return_value={"status": "sent"})
+    mock_gmail.create_draft = AsyncMock(return_value={"id": "draft_123"})
+    mock_gmail.send_notification = AsyncMock()
     mock_gmail.check_replies = AsyncMock(return_value=[])
 
     with patch("ira.systems.drip_engine.get_settings") as mock_settings:
@@ -599,8 +600,8 @@ class TestDripEngine:
         msg = mock_bus.send.call_args[0][0]
         assert msg.to_agent == "hermes"
 
-        mock_gmail.send_email.assert_called()
-        call_kwargs = mock_gmail.send_email.call_args
+        mock_gmail.create_draft.assert_called()
+        call_kwargs = mock_gmail.create_draft.call_args
         assert call_kwargs[1]["to"] == "send@test.com" or call_kwargs[0][0] == "send@test.com"
 
         interactions = await crm_db.list_interactions(
@@ -629,7 +630,7 @@ class TestDripEngine:
         sent_count = await engine.run_campaign_cycle()
 
         assert sent_count == 0
-        mock_gmail.send_email.assert_not_called()
+        mock_gmail.create_draft.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_campaign_cycle_checks_replies(self, crm_db, drip_engine):

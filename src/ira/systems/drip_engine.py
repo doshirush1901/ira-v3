@@ -39,9 +39,11 @@ class MessageBusProtocol(Protocol):
 
 
 class GmailSenderProtocol(Protocol):
-    async def send_email(
+    async def create_draft(
         self, to: str, subject: str, body: str
     ) -> dict[str, Any]: ...
+
+    async def send_notification(self, message: str) -> None: ...
 
     async def check_replies(self, thread_id: str) -> list[dict[str, Any]]: ...
 
@@ -243,14 +245,24 @@ class AutonomousDripEngine:
                 )
 
                 try:
-                    await self._gmail.send_email(
+                    await self._gmail.create_draft(
                         to=contact.email,
                         subject=email_content["subject"],
                         body=email_content["body"],
                     )
                 except Exception:
-                    logger.exception("Failed to send email to %s", contact.email)
+                    logger.exception("Failed to create draft for %s", contact.email)
                     continue
+
+                try:
+                    await self._gmail.send_notification(
+                        f"Drip campaign '{campaign.name}' step {step.step_number}: "
+                        f"Draft created for {contact.email} — "
+                        f"Subject: {email_content['subject']}. "
+                        f"Please review and send from Gmail."
+                    )
+                except Exception:
+                    logger.warning("Telegram notification failed for drip step")
 
                 await self._crm.update_drip_step(
                     str(step.id),
