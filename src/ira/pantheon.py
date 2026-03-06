@@ -1,0 +1,222 @@
+"""Pantheon — top-level orchestrator for the Ira agent system.
+
+Initialises all agents, the message bus, and brain services, then
+routes incoming queries through the deterministic router (fast path)
+or Athena (LLM path).  Also supports "board meeting" mode where
+multiple agents collaborate on a topic.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+from ira.agents.arachne import Arachne
+from ira.agents.athena import Athena
+from ira.agents.calliope import Calliope
+from ira.agents.clio import Clio
+from ira.agents.delphi import Delphi
+from ira.agents.hephaestus import Hephaestus
+from ira.agents.hermes import Hermes
+from ira.agents.iris import Iris
+from ira.agents.mnemosyne import Mnemosyne
+from ira.agents.nemesis import Nemesis
+from ira.agents.plutus import Plutus
+from ira.agents.prometheus import Prometheus
+from ira.agents.sophia import Sophia
+from ira.agents.sphinx import Sphinx
+from ira.agents.themis import Themis
+from ira.agents.tyche import Tyche
+from ira.agents.vera import Vera
+from ira.agents.base_agent import BaseAgent
+from ira.brain.deterministic_router import DeterministicRouter
+from ira.brain.retriever import UnifiedRetriever
+from ira.data.models import BoardMeetingMinutes
+from ira.message_bus import MessageBus
+
+logger = logging.getLogger(__name__)
+
+_AGENT_CLASSES: list[type[BaseAgent]] = [
+    Athena, Clio, Prometheus, Plutus, Hermes, Hephaestus, Themis,
+    Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
+    Nemesis, Arachne,
+]
+
+
+class Pantheon:
+    """Top-level orchestrator that ties agents, brain, and bus together."""
+
+    def __init__(
+        self,
+        retriever: UnifiedRetriever,
+        bus: MessageBus | None = None,
+    ) -> None:
+        self._bus = bus or MessageBus()
+        self._retriever = retriever
+        self._router = DeterministicRouter()
+
+        self._agents: dict[str, BaseAgent] = {}
+        for cls in _AGENT_CLASSES:
+            agent = cls(retriever=retriever, bus=self._bus)
+            self._agents[agent.name] = agent
+
+        self._athena: Athena = self._agents["athena"]  # type: ignore[assignment]
+
+    # ── lifecycle ────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        await self._bus.start()
+        logger.info("Pantheon started with %d agents", len(self._agents))
+
+    async def stop(self) -> None:
+        await self._bus.stop()
+        logger.info("Pantheon stopped")
+
+    async def __aenter__(self) -> Pantheon:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.stop()
+
+    # ── main entry point ─────────────────────────────────────────────────
+
+    async def process(self, query: str, context: dict[str, Any] | None = None) -> str:
+        """Process a user query and return the final response.
+
+        1. Try the deterministic router for a fast-path match.
+        2. If no match, ask Athena to route via LLM.
+        3. Dispatch to the selected agents and synthesise.
+        """
+        ctx = context or {}
+
+        routing = self._router.route(query)
+        if routing:
+            return await self._dispatch_routed(query, routing, ctx)
+
+        return await self._dispatch_athena(query, ctx)
+
+    # ── routing strategies ───────────────────────────────────────────────
+
+    async def _dispatch_routed(
+        self,
+        query: str,
+        routing: dict[str, Any],
+        context: dict[str, Any],
+    ) -> str:
+        """Dispatch to agents selected by the deterministic router."""
+        agent_names = routing["required_agents"]
+        logger.info(
+            "Deterministic route: %s -> %s",
+            routing["intent"],
+            agent_names,
+        )
+
+        if len(agent_names) == 1:
+            agent = self._agents.get(agent_names[0])
+            if agent:
+                return await agent.handle(query, context)
+
+        responses = await self._gather_responses(agent_names, query, context)
+
+        if len(responses) == 1:
+            return next(iter(responses.values()))
+
+        return await self._athena.handle(
+            query, {"agent_responses": responses},
+        )
+
+    async def _dispatch_athena(
+        self,
+        query: str,
+        context: dict[str, Any],
+    ) -> str:
+        """Let Athena decide which agents to consult via LLM."""
+        logger.info("LLM routing via Athena")
+        routing_response = await self._athena.handle(query, context)
+
+        agent_names = self._parse_agent_list(routing_response)
+        if not agent_names:
+            return routing_response
+
+        responses = await self._gather_responses(agent_names, query, context)
+        if len(responses) == 1:
+            return next(iter(responses.values()))
+
+        return await self._athena.handle(
+            query, {"agent_responses": responses},
+        )
+
+    # ── board meeting mode ───────────────────────────────────────────────
+
+    async def board_meeting(
+        self,
+        topic: str,
+        participants: list[str] | None = None,
+    ) -> BoardMeetingMinutes:
+        """Run a board meeting where multiple agents discuss a topic.
+
+        Each participant contributes their perspective, then Athena
+        synthesises a final decision.
+        """
+        agent_names = participants or list(self._agents.keys())
+        agent_names = [n for n in agent_names if n in self._agents and n != "athena"]
+
+        contributions = await self._gather_responses(agent_names, topic, {})
+
+        synthesis = await self._athena.handle(
+            topic, {"agent_responses": contributions},
+        )
+
+        return BoardMeetingMinutes(
+            topic=topic,
+            participants=["athena"] + list(contributions.keys()),
+            contributions=contributions,
+            synthesis=synthesis,
+        )
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    async def _gather_responses(
+        self,
+        agent_names: list[str],
+        query: str,
+        context: dict[str, Any],
+    ) -> dict[str, str]:
+        """Run agents in parallel and collect their responses."""
+        async def _run(name: str) -> tuple[str, str]:
+            agent = self._agents.get(name)
+            if not agent:
+                return name, f"(Agent '{name}' not found)"
+            try:
+                response = await agent.handle(query, context)
+                return name, response
+            except Exception:
+                logger.exception("Agent '%s' failed", name)
+                return name, f"(Agent '{name}' encountered an error)"
+
+        tasks = [_run(n) for n in agent_names]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
+
+    def _parse_agent_list(self, routing_response: str) -> list[str]:
+        """Try to extract agent names from Athena's routing JSON."""
+        try:
+            data = json.loads(routing_response)
+            if isinstance(data, dict) and "agents" in data:
+                names = data["agents"]
+                return [n for n in names if n in self._agents]
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return []
+
+    # ── introspection ────────────────────────────────────────────────────
+
+    @property
+    def agents(self) -> dict[str, BaseAgent]:
+        return dict(self._agents)
+
+    def get_agent(self, name: str) -> BaseAgent | None:
+        return self._agents.get(name)

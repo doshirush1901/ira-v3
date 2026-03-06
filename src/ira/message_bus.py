@@ -1,120 +1,137 @@
-"""Async message bus for agent-to-agent communication.
+"""Async pub/sub message bus for inter-agent communication.
 
-The :class:`MessageBus` is the backbone of the Pantheon's internal
-communication.  It routes :class:`~ira.data.models.AgentMessage` objects
-between agents, maintains a conversation trace for debugging, and supports
-parallel fan-out via :meth:`broadcast`.
-
-A module-level singleton ``bus`` is provided — every part of the
-application should import and use this single instance.
+Every agent publishes and receives :class:`~ira.data.models.AgentMessage`
+objects through the bus.  Messages can be directed (to a specific agent)
+or broadcast (to all subscribers).  A full message log is kept for
+debugging and auditing.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
 from ira.data.models import AgentMessage
 
 logger = logging.getLogger(__name__)
 
+MessageHandler = Callable[[AgentMessage], Awaitable[None]]
+
+_BROADCAST = "__broadcast__"
+
 
 class MessageBus:
-    """Simple async message bus backed by :class:`asyncio.Queue`."""
+    """Async message bus using :class:`asyncio.Queue`."""
 
-    def __init__(self) -> None:
-        self._handlers: dict[str, Callable[..., Any]] = {}
-        self._trace: list[AgentMessage] = []
-        self._queue: asyncio.Queue[AgentMessage] = asyncio.Queue()
+    def __init__(self, maxsize: int = 1000) -> None:
+        self._queue: asyncio.Queue[AgentMessage] = asyncio.Queue(maxsize=maxsize)
+        self._handlers: dict[str, list[MessageHandler]] = defaultdict(list)
+        self._log: list[AgentMessage] = []
+        self._running = False
+        self._task: asyncio.Task[None] | None = None
 
-    # ── registration ──────────────────────────────────────────────────────
+    # ── subscription ─────────────────────────────────────────────────────
 
-    def register_agent(self, agent_name: str, handler: Callable[..., Any]) -> None:
-        """Register *handler* as the receiver for messages sent to *agent_name*.
+    def subscribe(self, agent_name: str, handler: MessageHandler) -> None:
+        """Register *handler* to receive messages addressed to *agent_name*."""
+        self._handlers[agent_name].append(handler)
+        logger.debug("Subscribed handler for '%s'", agent_name)
 
-        Raises :class:`ValueError` if the agent is already registered.
-        """
-        if agent_name in self._handlers:
-            raise ValueError(f"Agent '{agent_name}' is already registered on the bus")
-        self._handlers[agent_name] = handler
-        logger.info("Registered agent '%s' on the message bus", agent_name)
+    def subscribe_broadcast(self, handler: MessageHandler) -> None:
+        """Register *handler* to receive all broadcast messages."""
+        self._handlers[_BROADCAST].append(handler)
 
-    # ── send ──────────────────────────────────────────────────────────────
+    # ── publishing ───────────────────────────────────────────────────────
 
-    async def send(self, message: AgentMessage) -> AgentMessage:
-        """Route *message* to the target agent and return the filled message.
-
-        The handler registered for ``message.to_agent`` is awaited with
-        *message*.  On return the handler's result is written into
-        ``message.response``.
-
-        Raises :class:`KeyError` if no handler is registered for the
-        target agent.
-        """
-        self._trace.append(message)
-
+    async def publish(self, message: AgentMessage) -> None:
+        """Enqueue a message for delivery."""
+        await self._queue.put(message)
         logger.debug(
-            "MessageBus: %s -> %s | %.120s",
+            "Published message from '%s' to '%s'",
             message.from_agent,
             message.to_agent,
-            message.query,
         )
 
-        handler = self._handlers.get(message.to_agent)
-        if handler is None:
-            raise KeyError(
-                f"No handler registered for agent '{message.to_agent}'. "
-                f"Registered agents: {list(self._handlers)}"
-            )
-
-        response = await handler(message)
-        message.response = response
-        return message
-
-    # ── broadcast ─────────────────────────────────────────────────────────
+    async def send(
+        self,
+        from_agent: str,
+        to_agent: str,
+        query: str,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Convenience: build and publish an :class:`AgentMessage`."""
+        msg = AgentMessage(
+            from_agent=from_agent,
+            to_agent=to_agent,
+            query=query,
+            context=context or {},
+        )
+        await self.publish(msg)
 
     async def broadcast(
         self,
         from_agent: str,
         query: str,
-        target_agents: list[str],
-    ) -> dict[str, str]:
-        """Send the same *query* to every agent in *target_agents* in parallel.
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish a message to all broadcast subscribers."""
+        await self.send(from_agent, _BROADCAST, query, context)
 
-        Returns a mapping of ``agent_name -> response_text``.
-        """
-        messages = [
-            AgentMessage(from_agent=from_agent, to_agent=target, query=query)
-            for target in target_agents
-        ]
+    # ── lifecycle ────────────────────────────────────────────────────────
 
-        results = await asyncio.gather(
-            *(self.send(m) for m in messages),
-            return_exceptions=True,
-        )
+    async def start(self) -> None:
+        """Start the dispatch loop."""
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._dispatch_loop())
+        logger.info("MessageBus started")
 
-        responses: dict[str, str] = {}
-        for target, result in zip(target_agents, results):
-            if isinstance(result, BaseException):
-                logger.error("Broadcast to '%s' failed: %s", target, result)
-                responses[target] = f"Error: {result}"
-            else:
-                responses[target] = result.response or ""
+    async def stop(self) -> None:
+        """Drain remaining messages and stop the dispatch loop."""
+        self._running = False
+        if self._task is not None:
+            await self._queue.put(None)  # type: ignore[arg-type]
+            await self._task
+            self._task = None
+        logger.info("MessageBus stopped")
 
-        return responses
+    # ── dispatch ─────────────────────────────────────────────────────────
 
-    # ── trace ─────────────────────────────────────────────────────────────
+    async def _dispatch_loop(self) -> None:
+        while self._running:
+            message = await self._queue.get()
+            if message is None:
+                break
+            self._log.append(message)
+            await self._dispatch(message)
+            self._queue.task_done()
 
-    def get_trace(self) -> list[AgentMessage]:
-        """Return a copy of the full conversation trace."""
-        return list(self._trace)
+    async def _dispatch(self, message: AgentMessage) -> None:
+        target = message.to_agent
+        handlers = list(self._handlers.get(target, []))
+        if target != _BROADCAST:
+            handlers.extend(self._handlers.get(_BROADCAST, []))
 
-    def clear_trace(self) -> None:
-        """Reset the conversation trace."""
-        self._trace.clear()
+        for handler in handlers:
+            try:
+                await handler(message)
+            except Exception:
+                logger.exception(
+                    "Handler failed for message from '%s' to '%s'",
+                    message.from_agent,
+                    target,
+                )
 
+    # ── introspection ────────────────────────────────────────────────────
 
-# ── module-level singleton ────────────────────────────────────────────────
+    @property
+    def message_log(self) -> list[AgentMessage]:
+        return list(self._log)
 
-bus = MessageBus()
+    @property
+    def pending_count(self) -> int:
+        return self._queue.qsize()
