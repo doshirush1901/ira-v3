@@ -120,10 +120,12 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bconversion\s+rate\b", IntentCategory.SALES_PIPELINE, 1.5),
     (r"\bwin\s+rate\b", IntentCategory.SALES_PIPELINE, 1.5),
 
-    # Quote / pricing
-    (r"\bquote\b", IntentCategory.QUOTE_REQUEST, 2.0),
-    (r"\bpric(e|ing)\b", IntentCategory.QUOTE_REQUEST, 2.0),
-    (r"\bcost\b", IntentCategory.QUOTE_REQUEST, 1.5),
+    # Quote / pricing — checked before machine specs so that queries
+    # mentioning both a model name and a pricing keyword route here.
+    (r"\bquote\b", IntentCategory.QUOTE_REQUEST, 3.0),
+    (r"\bpric(e|ing)\b", IntentCategory.QUOTE_REQUEST, 3.0),
+    (r"\bcost\b", IntentCategory.QUOTE_REQUEST, 2.5),
+    (r"\bhow\s+much\b", IntentCategory.QUOTE_REQUEST, 3.0),
     (r"\bproposal\b", IntentCategory.QUOTE_REQUEST, 1.5),
     (r"\bestimate\b", IntentCategory.QUOTE_REQUEST, 1.0),
     (r"\bbudget\b", IntentCategory.QUOTE_REQUEST, 1.0),
@@ -132,11 +134,11 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bmachine\b", IntentCategory.MACHINE_SPECS, 1.5),
     (r"\bspecs?\b", IntentCategory.MACHINE_SPECS, 2.0),
     (r"\bspecification", IntentCategory.MACHINE_SPECS, 2.0),
-    (r"\bPF[12]\b", IntentCategory.MACHINE_SPECS, 2.5),
-    (r"\bPF1-C\b", IntentCategory.MACHINE_SPECS, 2.5),
-    (r"\bAM[\s-]?series\b", IntentCategory.MACHINE_SPECS, 2.5),
-    (r"\bRF-100\b", IntentCategory.MACHINE_SPECS, 2.5),
-    (r"\bSL-500\b", IntentCategory.MACHINE_SPECS, 2.5),
+    (r"\bPF[12](?!-)\b", IntentCategory.MACHINE_SPECS, 2.0),
+    (r"\bPF1-C\b", IntentCategory.MACHINE_SPECS, 2.0),
+    (r"\bAM[\s-]?series\b", IntentCategory.MACHINE_SPECS, 2.0),
+    (r"\bRF-100\b", IntentCategory.MACHINE_SPECS, 2.0),
+    (r"\bSL-500\b", IntentCategory.MACHINE_SPECS, 2.0),
     (r"\broll\s*form", IntentCategory.MACHINE_SPECS, 1.5),
     (r"\bpanel\s*form", IntentCategory.MACHINE_SPECS, 1.5),
 
