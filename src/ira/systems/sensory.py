@@ -104,7 +104,9 @@ class SensorySystem:
         # Conversation history
         if self._conversation_memory is not None:
             try:
-                history = await self._conversation_memory.get_history(contact.email, limit=10)
+                history = await self._conversation_memory.get_history(
+                    contact.email, event.channel.value, limit=10,
+                )
             except Exception:
                 logger.exception("Conversation history retrieval failed")
                 history = []

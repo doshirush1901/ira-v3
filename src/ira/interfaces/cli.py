@@ -89,20 +89,53 @@ def _configure_logging(verbose: bool = False) -> None:
 
 
 def _build_pantheon() -> Any:
-    """Construct a Pantheon with minimal wiring for CLI use."""
+    """Construct a Pantheon with full service wiring for CLI use."""
     from ira.brain.embeddings import EmbeddingService
     from ira.brain.knowledge_graph import KnowledgeGraph
+    from ira.brain.pricing_engine import PricingEngine
     from ira.brain.qdrant_manager import QdrantManager
     from ira.brain.retriever import UnifiedRetriever
+    from ira.config import get_settings
+    from ira.data.crm import CRMDatabase
+    from ira.data.quotes import QuoteManager
     from ira.message_bus import MessageBus
     from ira.pantheon import Pantheon
+    from ira.skills.handlers import bind_services as bind_skill_services
+
+    settings = get_settings()
 
     embedding = EmbeddingService()
     qdrant = QdrantManager(embedding_service=embedding)
     graph = KnowledgeGraph()
-    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
+
+    mem0_client = None
+    mem0_key = settings.memory.api_key.get_secret_value()
+    if mem0_key:
+        try:
+            from mem0 import MemoryClient
+            mem0_client = MemoryClient(api_key=mem0_key)
+        except Exception:
+            pass
+
+    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
     bus = MessageBus()
-    return Pantheon(retriever=retriever, bus=bus)
+
+    crm = CRMDatabase()
+    quotes = QuoteManager(session_factory=crm.session_factory)
+    pricing_engine = PricingEngine(retriever=retriever, crm=crm)
+
+    pantheon = Pantheon(retriever=retriever, bus=bus)
+
+    shared_services = {
+        "crm": crm,
+        "quotes": quotes,
+        "pricing_engine": pricing_engine,
+        "retriever": retriever,
+    }
+    pantheon.inject_services(shared_services)
+    bind_skill_services(shared_services)
+
+    return pantheon
 
 
 async def _build_pipeline(pantheon: Any) -> Any:
@@ -447,6 +480,59 @@ def email_learn(
     _run(_learn())
 
 
+# ── Metadata Index ────────────────────────────────────────────────────────
+
+
+@app.command(name="index-imports")
+def index_imports(
+    no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM summaries (fast local-only extraction)."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force rebuild all entries."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Build or update the LLM metadata index for data/imports/.
+
+    Scans every file in the imports directory and generates structured
+    metadata (summary, doc_type, machines, entities, keywords) using
+    GPT-4.1-mini.  The index powers Alexandros's hybrid search.
+    """
+    _configure_logging(verbose)
+
+    async def _index() -> None:
+        from ira.brain.imports_metadata_index import build_index, get_index_stats
+
+        def progress(done: int, total: int, name: str) -> None:
+            console.print(f"  [{done}/{total}] {name}")
+
+        console.print(Panel(
+            f"[bold]LLM summaries:[/bold] {'disabled' if no_llm else 'enabled'}\n"
+            f"[bold]Force rebuild:[/bold] {'yes' if force else 'no'}",
+            title="Metadata Index Build",
+            border_style="blue",
+        ))
+
+        stats = await build_index(
+            use_llm=not no_llm,
+            force=force,
+            progress_callback=progress,
+        )
+
+        summary_table = Table(title="Index Build Report")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="green", justify="right")
+        summary_table.add_row("Total files scanned", str(stats["total"]))
+        summary_table.add_row("Newly indexed", str(stats["new"]))
+        summary_table.add_row("Skipped (unchanged)", str(stats["skipped"]))
+        summary_table.add_row("Errors", str(stats["errors"]))
+        console.print(summary_table)
+
+        idx_stats = get_index_stats()
+        if idx_stats.get("indexed", 0) > 0:
+            console.print(f"\n[green]Index now contains {idx_stats['indexed']} files "
+                          f"({idx_stats.get('unique_machines', 0)} unique machines).[/green]")
+
+    _run(_index())
+
+
 # ── Ingestion ─────────────────────────────────────────────────────────────
 
 
@@ -454,13 +540,17 @@ def email_learn(
 def ingest(
     path: Optional[str] = typer.Argument(None, help="Path to ingest. Defaults to data/imports/."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingest documents already in the vector store."),
+    raw: bool = typer.Option(False, "--raw", help="Skip nutrient extraction; ingest all text as-is."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Run document ingestion on a file or directory.
+    """Run intelligent document ingestion on a file or directory.
 
-    Walks all subdirectories under the target path, ingests every supported
-    file (PDF, XLSX, DOCX, CSV, TXT), and displays a live progress bar.
-    Files that fail to parse are logged and skipped without crashing.
+    Each file is read, then passed through the DigestiveSystem:
+      STOMACH  — LLM classifies text as protein / carbs / waste
+      INTESTINE — only protein + carbs are chunked, embedded, and stored
+      LIVER    — entities (companies, people, machines) extracted into Neo4j
+
+    Use ``--raw`` to bypass nutrient extraction and ingest everything.
     """
     _configure_logging(verbose)
 
@@ -471,7 +561,7 @@ def ingest(
         console.print(f"[red]Path not found:[/red] {target_path}")
         raise typer.Exit(1)
 
-    _digestive, ingestor, _qdrant = _build_digestive()
+    digestive, ingestor, _qdrant = _build_digestive()
 
     files = ingestor.discover_files(str(target_path))
     if not files:
@@ -480,12 +570,14 @@ def ingest(
 
     categories = {f["category"] for f in files}
     total_size_mb = sum(f["size"] for f in files) / (1024 * 1024)
+    mode_label = "[yellow]raw (no nutrient extraction)[/yellow]" if raw else "[green]intelligent (protein + carbs only)[/green]"
     console.print(
         Panel(
             f"[bold]Path:[/bold]        {target_path}\n"
             f"[bold]Files:[/bold]       {len(files)}\n"
             f"[bold]Directories:[/bold] {len(categories)}\n"
             f"[bold]Total size:[/bold]  {total_size_mb:.1f} MB\n"
+            f"[bold]Mode:[/bold]        {mode_label}\n"
             f"[bold]Force:[/bold]       {'yes' if force else 'no'}",
             title="Ingestion Plan",
             border_style="blue",
@@ -495,8 +587,14 @@ def ingest(
     succeeded: list[dict[str, Any]] = []
     skipped: list[str] = []
     failed: list[dict[str, str]] = []
+    total_protein = 0
+    total_carbs = 0
+    total_waste = 0
 
     async def _ingest() -> None:
+        nonlocal total_protein, total_carbs, total_waste
+        from ira.brain.document_ingestor import _READERS
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -511,11 +609,55 @@ def ingest(
                 short_name = Path(file_path).name
                 progress.update(task, description=f"[bold green]{short_name}")
                 try:
-                    n = await ingestor.ingest_file(file_info, force=force)
-                    if n > 0:
-                        succeeded.append({"path": file_path, "chunks": n, "category": file_info["category"]})
+                    if raw:
+                        n = await ingestor.ingest_file(file_info, force=force)
+                        if n > 0:
+                            succeeded.append({"path": file_path, "chunks": n, "category": file_info["category"]})
+                        else:
+                            skipped.append(file_path)
                     else:
-                        skipped.append(file_path)
+                        if not force and ingestor.is_already_ingested(file_info):
+                            skipped.append(file_path)
+                            progress.advance(task)
+                            continue
+
+                        reader = _READERS.get(file_info["extension"])
+                        if reader is None:
+                            skipped.append(file_path)
+                            progress.advance(task)
+                            continue
+
+                        text = reader(Path(file_path))
+                        if not text.strip():
+                            skipped.append(file_path)
+                            progress.advance(task)
+                            continue
+
+                        result = await digestive.ingest(
+                            raw_data=text,
+                            source=file_path,
+                            source_category=file_info["category"],
+                        )
+                        chunks = result["chunks_created"]
+                        nutrients = result["nutrients_extracted"]
+                        total_protein += nutrients.get("protein", 0)
+                        total_carbs += nutrients.get("carbs", 0)
+                        total_waste += nutrients.get("waste", 0)
+
+                        if chunks > 0:
+                            ingestor._record_ingestion(
+                                file_path,
+                                ingestor._file_hash_for(file_info),
+                                chunks,
+                            )
+                            succeeded.append({
+                                "path": file_path,
+                                "chunks": chunks,
+                                "category": file_info["category"],
+                                "entities": result.get("entities_found", {}),
+                            })
+                        else:
+                            skipped.append(file_path)
                 except Exception as exc:
                     logger.exception("Failed to ingest %s", file_path)
                     failed.append({"path": file_path, "error": str(exc)})
@@ -533,6 +675,11 @@ def ingest(
     summary_table.add_row("Files failed", str(len(failed)))
     summary_table.add_row("Chunks created", str(total_chunks))
 
+    if not raw:
+        summary_table.add_row("Protein items", f"[green]{total_protein}[/green]")
+        summary_table.add_row("Carbs items", f"[yellow]{total_carbs}[/yellow]")
+        summary_table.add_row("Waste discarded", f"[red]{total_waste}[/red]")
+
     console.print(summary_table)
 
     if succeeded:
@@ -545,6 +692,19 @@ def ingest(
         for cat, count in sorted(cat_counts.items()):
             cat_table.add_row(cat, str(count))
         console.print(cat_table)
+
+    if not raw and succeeded:
+        entity_totals: dict[str, int] = {}
+        for s in succeeded:
+            for k, v in s.get("entities", {}).items():
+                entity_totals[k] = entity_totals.get(k, 0) + v
+        if entity_totals:
+            ent_table = Table(title="Entities Extracted (Neo4j)")
+            ent_table.add_column("Type", style="cyan")
+            ent_table.add_column("Count", style="green", justify="right")
+            for etype, count in sorted(entity_totals.items()):
+                ent_table.add_row(etype, str(count))
+            console.print(ent_table)
 
     if failed:
         err_table = Table(title="Failed Files")
@@ -840,6 +1000,87 @@ def graduate(
         subprocess.run([str(scripts_dir / "start.sh")], check=False)
 
     _run(_graduate())
+
+
+# ── CRM Population ────────────────────────────────────────────────────────
+
+
+@app.command("populate-crm")
+def populate_crm(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify contacts but don't insert into CRM."),
+    source: str = typer.Option("all", "--source", "-s", help="Data source: all, csv, neo4j."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Classify contacts and populate the CRM with eligible entries.
+
+    Reads contacts from CSVs (leads, LinkedIn) and Neo4j, classifies
+    each via Delphi, and inserts only live customers, past customers,
+    and sales leads into the CRM.  Vendors, partners, and internal
+    contacts are filtered out.
+    """
+    _configure_logging(verbose)
+
+    async def _populate() -> None:
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.knowledge_graph import KnowledgeGraph
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.brain.retriever import UnifiedRetriever
+        from ira.data.crm import CRMDatabase
+        from ira.message_bus import MessageBus
+        from ira.systems.crm_populator import CRMPopulator
+
+        embedding = EmbeddingService()
+        qdrant = QdrantManager(embedding_service=embedding)
+        graph = KnowledgeGraph()
+        retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
+        bus = MessageBus()
+
+        from ira.agents.delphi import Delphi
+        delphi = Delphi(retriever=retriever, bus=bus)
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        sources = None if source == "all" else [source]
+
+        populator = CRMPopulator(delphi=delphi, crm=crm, dry_run=dry_run)
+
+        mode_label = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
+        console.print(Panel(
+            f"Mode: {mode_label}\nSources: {source}\n\n"
+            "Delphi will classify each contact as:\n"
+            "  [green]LIVE_CUSTOMER[/green] | [green]PAST_CUSTOMER[/green] | "
+            "[green]LEAD_WITH_INTERACTIONS[/green] | [green]LEAD_NO_INTERACTIONS[/green]\n"
+            "  [red]VENDOR[/red] | [red]PARTNER[/red] | [red]OWN_COMPANY[/red] | [red]OTHER[/red] → rejected",
+            title="CRM Population Pipeline",
+            border_style="cyan",
+        ))
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Classifying and importing contacts..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("populate", total=None)
+            result = await populator.populate(sources)
+
+        stats = result["stats"]
+        table = Table(title="Population Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", justify="right", style="green")
+
+        table.add_row("Total extracted", str(stats["total_extracted"]))
+        table.add_row("Classified", str(stats["classified"]))
+        table.add_row("Inserted into CRM", str(stats["inserted"]))
+        table.add_row("Skipped (duplicate)", str(stats["skipped_duplicate"]))
+        table.add_row("Skipped (rejected)", str(stats["skipped_rejected"]))
+        table.add_row("Skipped (no email)", str(stats["skipped_no_email"]))
+        table.add_row("Errors", str(stats["errors"]))
+
+        console.print(table)
+
+    _run(_populate())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

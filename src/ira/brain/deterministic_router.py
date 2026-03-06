@@ -26,6 +26,11 @@ class IntentCategory(str, Enum):
     MARKETING_CAMPAIGN = "MARKETING_CAMPAIGN"
     RESEARCH = "RESEARCH"
     QUOTE_REQUEST = "QUOTE_REQUEST"
+    VENDOR_PROCUREMENT = "VENDOR_PROCUREMENT"
+    PROJECT_MANAGEMENT = "PROJECT_MANAGEMENT"
+    QUALITY_MANAGEMENT = "QUALITY_MANAGEMENT"
+    CASE_STUDY = "CASE_STUDY"
+    QUOTE_GENERATION = "QUOTE_GENERATION"
     GENERAL = "GENERAL"
 
 
@@ -83,6 +88,31 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
         required_agents=("prometheus", "plutus", "hephaestus"),
         optional_agents=("calliope",),
         required_tools=("pricing_engine", "crm", "retriever"),
+    ),
+    IntentCategory.VENDOR_PROCUREMENT: RoutingConfig(
+        required_agents=("hera",),
+        optional_agents=("clio", "plutus"),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.PROJECT_MANAGEMENT: RoutingConfig(
+        required_agents=("atlas",),
+        optional_agents=("clio", "hephaestus"),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.QUALITY_MANAGEMENT: RoutingConfig(
+        required_agents=("asclepius",),
+        optional_agents=("atlas", "hephaestus"),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.CASE_STUDY: RoutingConfig(
+        required_agents=("cadmus",),
+        optional_agents=("clio", "calliope"),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.QUOTE_GENERATION: RoutingConfig(
+        required_agents=("quotebuilder", "plutus", "hephaestus"),
+        optional_agents=("calliope",),
+        required_tools=("pricing_engine", "retriever"),
     ),
     IntentCategory.GENERAL: RoutingConfig(
         required_agents=("clio",),
@@ -181,6 +211,44 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bmarket\s+analysis\b", IntentCategory.RESEARCH, 2.0),
     (r"\bcompetitor", IntentCategory.RESEARCH, 1.5),
     (r"\bindustry\s+trend", IntentCategory.RESEARCH, 1.5),
+
+    # Vendor / procurement
+    (r"\bvendor\b", IntentCategory.VENDOR_PROCUREMENT, 2.0),
+    (r"\bsupplier\b", IntentCategory.VENDOR_PROCUREMENT, 2.0),
+    (r"\bprocurement\b", IntentCategory.VENDOR_PROCUREMENT, 2.5),
+    (r"\bcomponent\b", IntentCategory.VENDOR_PROCUREMENT, 1.5),
+    (r"\binventory\b", IntentCategory.VENDOR_PROCUREMENT, 1.5),
+    (r"\bstock\b", IntentCategory.VENDOR_PROCUREMENT, 1.0),
+    (r"\bpart\s+number\b", IntentCategory.VENDOR_PROCUREMENT, 2.0),
+
+    # Project management
+    (r"\bproject\b", IntentCategory.PROJECT_MANAGEMENT, 1.5),
+    (r"\blogbook\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
+    (r"\bmilestone\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
+    (r"\bdelivery\s+schedule\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
+    (r"\bpayment\s+alert\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
+
+    # Quality management
+    (r"\bpunch\s*list\b", IntentCategory.QUALITY_MANAGEMENT, 3.0),
+    (r"\bquality\b", IntentCategory.QUALITY_MANAGEMENT, 1.5),
+    (r"\bFAT\b", IntentCategory.QUALITY_MANAGEMENT, 2.5),
+    (r"\binstallation\b", IntentCategory.QUALITY_MANAGEMENT, 1.0),
+    (r"\bcommissioning\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
+    (r"\bdefect\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
+    (r"\bsnag\b", IntentCategory.QUALITY_MANAGEMENT, 2.0),
+
+    # Case study / content
+    (r"\bcase\s+stud", IntentCategory.CASE_STUDY, 3.0),
+    (r"\blinkedin\s+post\b", IntentCategory.CASE_STUDY, 3.0),
+    (r"\bsuccess\s+stor", IntentCategory.CASE_STUDY, 2.5),
+    (r"\bcontent\s+draft\b", IntentCategory.CASE_STUDY, 2.0),
+
+    # Quote generation (PDF/document, not pricing inquiry)
+    (r"\bgenerate\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
+    (r"\bbuild\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
+    (r"\bquote\s+PDF\b", IntentCategory.QUOTE_GENERATION, 3.0),
+    (r"\bformal\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
+    (r"\bquote\s+document\b", IntentCategory.QUOTE_GENERATION, 2.5),
 ])
 
 _CONFIDENCE_THRESHOLD = 3.0

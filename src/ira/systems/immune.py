@@ -59,6 +59,15 @@ class ImmuneSystem:
         self._neo4j_password = settings.neo4j.password.get_secret_value()
 
         self._error_tracker: dict[str, list[float]] = {}
+        self._error_monitor: Any = None
+        try:
+            from ira.brain.error_monitor import ErrorMonitor
+            self._error_monitor = ErrorMonitor(
+                telegram_token=self._telegram_token,
+                telegram_chat_id=self._telegram_chat_id,
+            )
+        except ImportError:
+            pass
 
     # ── STARTUP VALIDATION ────────────────────────────────────────────────
 
@@ -169,6 +178,10 @@ class ImmuneSystem:
             extra={"service": service, "context": context},
         )
 
+        if self._error_monitor is not None:
+            severity = "CRITICAL" if service in _CRITICAL_SERVICES else "MEDIUM"
+            self._error_monitor.record_error(error, context, severity=severity)
+
         now = time.monotonic()
         entries = self._error_tracker.setdefault(service, [])
         entries.append(now)
@@ -212,7 +225,7 @@ class ImmuneSystem:
     # ── KNOWLEDGE HEALTH ──────────────────────────────────────────────────
 
     async def check_knowledge_health(self) -> dict[str, Any]:
-        """Audit the knowledge base for size, staleness, and orphans."""
+        """Audit the knowledge base for size, staleness, orphans, and domain rules."""
         report: dict[str, Any] = {}
 
         try:
@@ -225,12 +238,6 @@ class ImmuneSystem:
             }
         except Exception as exc:
             report["qdrant"] = {"error": str(exc)}
-
-        try:
-            stale_categories: list[str] = []
-            report["stale_categories"] = stale_categories
-        except Exception as exc:
-            report["stale_categories_error"] = str(exc)
 
         try:
             node_rows = await self._graph.run_cypher(
@@ -251,6 +258,21 @@ class ImmuneSystem:
             }
         except Exception as exc:
             report["neo4j"] = {"error": str(exc)}
+
+        try:
+            from ira.brain.knowledge_health import KnowledgeHealthMonitor
+            monitor = KnowledgeHealthMonitor(qdrant_manager=self._qdrant, knowledge_graph=self._graph)
+            domain_report = await monitor.run_health_check()
+            report["domain_health"] = domain_report
+            chronic = monitor.get_chronic_issues()
+            if chronic:
+                report["chronic_issues"] = chronic
+                await self.send_alert(
+                    f"Knowledge health: {len(chronic)} chronic issue(s) detected",
+                    severity="warning",
+                )
+        except Exception:
+            logger.debug("KnowledgeHealthMonitor not available", exc_info=True)
 
         return report
 

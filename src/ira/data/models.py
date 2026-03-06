@@ -83,6 +83,19 @@ class WarmthLevel(str, Enum):
     TRUSTED = "TRUSTED"
 
 
+class ContactType(str, Enum):
+    """Classification of a contact's relationship to Machinecraft.
+
+    Only these four types belong in the CRM.  Vendors, partners,
+    own-company employees, and unclassifiable contacts are excluded.
+    """
+
+    LIVE_CUSTOMER = "LIVE_CUSTOMER"
+    PAST_CUSTOMER = "PAST_CUSTOMER"
+    LEAD_WITH_INTERACTIONS = "LEAD_WITH_INTERACTIONS"
+    LEAD_NO_INTERACTIONS = "LEAD_NO_INTERACTIONS"
+
+
 # ── Transfer Models ──────────────────────────────────────────────────────────
 
 

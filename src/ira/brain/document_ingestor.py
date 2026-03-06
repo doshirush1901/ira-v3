@@ -385,6 +385,10 @@ class DocumentIngestor:
 
     # ── ledger helpers ───────────────────────────────────────────────────
 
+    def _file_hash_for(self, file_info: dict[str, Any]) -> str:
+        """Return the SHA-256 hash for a discovered file."""
+        return _file_hash(Path(file_info["path"]))
+
     def _already_ingested(self, path: str, file_hash: str) -> bool:
         row = self._ledger.execute(
             "SELECT hash FROM ingested_files WHERE path = ?", (path,)

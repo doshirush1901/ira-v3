@@ -1,132 +1,91 @@
-"""Endocrine system — adaptive behavior through hormone-like state variables.
+"""Endocrine system — hormone-like state modulation.
 
-Manages four hormone levels (confidence, energy, growth_signal, stress) that
-influence how Ira's agents behave.  Other systems call ``boost()`` /
-``reduce()`` when events occur, and agents call ``get_behavioral_modifiers()``
-to get prompt-injection instructions before generating responses.
-
-All methods are synchronous — hormone adjustments are lightweight in-memory
-operations.  Thread-safe via ``threading.Lock``.
+Maintains floating-point "hormone" levels that influence Ira's behavioral
+modifiers: confidence, energy, growth_signal, stress, and caution.  These
+drift toward a baseline over time and are nudged by agent successes/failures,
+tool outcomes, and system events.  The :class:`VoiceSystem` reads the
+modifiers to shape tone, and the :class:`RequestPipeline` logs them for
+observability.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_HORMONE_NAMES = frozenset({"confidence", "energy", "growth_signal", "stress"})
+_BASELINE = 0.5
+_DECAY_RATE = 0.02
+_MIN = 0.0
+_MAX = 1.0
 
-_BASELINE: dict[str, float] = {
-    "confidence": 0.5,
-    "energy": 0.7,
-    "growth_signal": 0.3,
-    "stress": 0.2,
-}
+_HORMONES = ("confidence", "energy", "growth_signal", "stress", "caution")
 
-_HIGH_CONFIDENCE_THRESHOLD = 0.7
-_LOW_CONFIDENCE_THRESHOLD = 0.3
-_HIGH_STRESS_THRESHOLD = 0.7
-_LOW_STRESS_THRESHOLD = 0.3
-_HIGH_GROWTH_THRESHOLD = 0.6
-_LOW_ENERGY_THRESHOLD = 0.3
+
+def _clamp(value: float) -> float:
+    return max(_MIN, min(_MAX, value))
 
 
 class EndocrineSystem:
-    """Manages Ira's adaptive behavior through hormone levels."""
+    """Hormone-like state that modulates Ira's behavior across the pipeline."""
 
     def __init__(self) -> None:
-        self._levels: dict[str, float] = dict(_BASELINE)
-        self._lock = threading.Lock()
-        self._last_decay: float = time.monotonic()
+        self._levels: dict[str, float] = {h: _BASELINE for h in _HORMONES}
+        self._last_decay = time.monotonic()
 
-    # ── level adjustments ─────────────────────────────────────────────────
+    def boost(self, hormone: str, amount: float = 0.05) -> None:
+        if hormone in self._levels:
+            self._levels[hormone] = _clamp(self._levels[hormone] + amount)
 
-    def boost(self, hormone: str, amount: float) -> None:
-        """Increase a hormone level, capped at 1.0."""
-        if hormone not in _HORMONE_NAMES:
-            raise ValueError(f"Unknown hormone '{hormone}'. Valid: {sorted(_HORMONE_NAMES)}")
-        with self._lock:
-            old = self._levels[hormone]
-            self._levels[hormone] = min(1.0, old + abs(amount))
-            logger.debug("ENDOCRINE boost %s +%.2f -> %.2f", hormone, abs(amount), self._levels[hormone])
+    def dampen(self, hormone: str, amount: float = 0.05) -> None:
+        if hormone in self._levels:
+            self._levels[hormone] = _clamp(self._levels[hormone] - amount)
 
-    def reduce(self, hormone: str, amount: float) -> None:
-        """Decrease a hormone level, floored at 0.0."""
-        if hormone not in _HORMONE_NAMES:
-            raise ValueError(f"Unknown hormone '{hormone}'. Valid: {sorted(_HORMONE_NAMES)}")
-        with self._lock:
-            old = self._levels[hormone]
-            self._levels[hormone] = max(0.0, old - abs(amount))
-            logger.debug("ENDOCRINE reduce %s -%.2f -> %.2f", hormone, abs(amount), self._levels[hormone])
+    def signal_success(self, agent: str) -> None:
+        self.boost("confidence", 0.03)
+        self.boost("energy", 0.02)
+        self.dampen("stress", 0.02)
+        self.dampen("caution", 0.01)
 
-    def decay_all(self, factor: float = 0.95) -> None:
-        """Move all hormone levels toward their baselines by *factor*.
+    def signal_failure(self, agent: str) -> None:
+        self.dampen("confidence", 0.04)
+        self.boost("stress", 0.05)
+        self.boost("caution", 0.03)
+        self.dampen("energy", 0.02)
 
-        With ``factor=0.95``, each call moves levels 5 % closer to baseline.
-        """
-        with self._lock:
-            for name in _HORMONE_NAMES:
-                current = self._levels[name]
-                baseline = _BASELINE[name]
-                self._levels[name] = current + (baseline - current) * (1.0 - factor)
-            self._last_decay = time.monotonic()
+    def get_behavioral_modifiers(self) -> dict[str, Any]:
+        """Return modifiers consumed by VoiceSystem and the pipeline."""
+        self._apply_decay()
+        lvl = self._levels
 
-    # ── queries ───────────────────────────────────────────────────────────
-
-    def get_levels(self) -> dict[str, float]:
-        """Return a snapshot of current hormone levels."""
-        with self._lock:
-            return dict(self._levels)
-
-    def get_behavioral_modifiers(self) -> dict[str, str]:
-        """Translate hormone levels into behavioral instructions for agents."""
-        with self._lock:
-            levels = dict(self._levels)
-
-        confidence = levels["confidence"]
-        stress = levels["stress"]
-        growth = levels["growth_signal"]
-        energy = levels["energy"]
-
-        # Base response style
-        if confidence >= _HIGH_CONFIDENCE_THRESHOLD and stress <= _LOW_STRESS_THRESHOLD:
-            response_style = "assertive"
-            verbosity = "concise"
-            addendum = "Be direct and concise. State facts confidently."
-        elif confidence <= _LOW_CONFIDENCE_THRESHOLD or stress >= _HIGH_STRESS_THRESHOLD:
-            response_style = "cautious"
-            verbosity = "detailed"
-            addendum = (
-                "Express uncertainty where appropriate. "
-                "Suggest human review for critical decisions. Include caveats."
-            )
-        else:
-            response_style = "balanced"
-            verbosity = "normal"
-            addendum = "Provide clear, balanced responses."
-
-        # Growth signal overlay
-        if growth >= _HIGH_GROWTH_THRESHOLD:
-            follow_up = "high"
-            addendum += " Ask clarifying follow-up questions to deepen understanding."
-        else:
-            follow_up = "normal"
-
-        # Energy overlay
-        if energy <= _LOW_ENERGY_THRESHOLD:
-            complexity = "reduced"
-            verbosity = "concise"
-            addendum += " Keep responses brief. Defer complex analysis to a later time."
-        else:
-            complexity = "full" if energy > 0.6 else "normal"
+        assertiveness = "high" if lvl["confidence"] > 0.65 else "low" if lvl["confidence"] < 0.35 else "normal"
+        verbosity = "concise" if lvl["energy"] < 0.35 else "detailed" if lvl["energy"] > 0.65 else "normal"
+        hedging = "heavy" if lvl["caution"] > 0.65 else "light" if lvl["caution"] < 0.35 else "normal"
 
         return {
-            "response_style": response_style,
+            "assertiveness": assertiveness,
             "verbosity": verbosity,
-            "follow_up_tendency": follow_up,
-            "complexity_tolerance": complexity,
-            "prompt_addendum": addendum,
+            "hedging": hedging,
+            "confidence_level": round(lvl["confidence"], 3),
+            "energy_level": round(lvl["energy"], 3),
+            "stress_level": round(lvl["stress"], 3),
         }
+
+    def get_status(self) -> dict[str, float]:
+        self._apply_decay()
+        return {k: round(v, 3) for k, v in self._levels.items()}
+
+    def _apply_decay(self) -> None:
+        """Drift all hormones toward baseline proportionally to elapsed time."""
+        now = time.monotonic()
+        elapsed = now - self._last_decay
+        if elapsed < 5.0:
+            return
+        self._last_decay = now
+
+        factor = min(elapsed * _DECAY_RATE / 60, 0.1)
+        for h in _HORMONES:
+            diff = _BASELINE - self._levels[h]
+            self._levels[h] += diff * factor

@@ -1,8 +1,12 @@
-data/qdrant/
-data/neo4j/
-data/postgres/
 .env
+credentials.json
+credentials_rushabh.json
+token.json
 __pycache__/
 *.pyc
 .venv/
-.DS_Store
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/

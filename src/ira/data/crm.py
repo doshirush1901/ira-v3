@@ -42,7 +42,7 @@ from sqlalchemy.orm import (
 )
 
 from ira.config import get_settings
-from ira.data.models import Channel, DealStage, Direction, WarmthLevel
+from ira.data.models import Channel, ContactType, DealStage, Direction, WarmthLevel
 
 _str_uuid = lambda: str(uuid4())  # noqa: E731
 
@@ -112,6 +112,9 @@ class ContactModel(Base):
     role: Mapped[str | None] = mapped_column(String(255))
     source: Mapped[str | None] = mapped_column(String(100))
     lead_score: Mapped[float] = mapped_column(Float, default=0.0)
+    contact_type: Mapped[str | None] = mapped_column(
+        Enum(ContactType, native_enum=False, create_constraint=False),
+    )
     warmth_level: Mapped[str | None] = mapped_column(
         Enum(WarmthLevel, native_enum=False, create_constraint=False),
     )
@@ -134,6 +137,7 @@ class ContactModel(Base):
             "phone": self.phone,
             "role": self.role,
             "source": self.source,
+            "contact_type": self.contact_type.value if self.contact_type else None,
             "lead_score": self.lead_score,
             "warmth_level": self.warmth_level.value if self.warmth_level else None,
             "tags": self.tags,
@@ -400,6 +404,12 @@ class CRMDatabase:
                 stmt = stmt.join(CompanyModel, isouter=True).where(
                     CompanyModel.industry == filters["industry"]
                 )
+            if "contact_type" in filters:
+                ct = filters["contact_type"]
+                if isinstance(ct, list):
+                    stmt = stmt.where(ContactModel.contact_type.in_(ct))
+                else:
+                    stmt = stmt.where(ContactModel.contact_type == ct)
             if "warmth_level" in filters:
                 levels = filters["warmth_level"]
                 if isinstance(levels, list):

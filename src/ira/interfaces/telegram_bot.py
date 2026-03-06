@@ -45,6 +45,8 @@ _unified_context: Any = None
 
 # Temporary store for drafts pending approval, keyed by chat_id.
 _pending_drafts: dict[int, dict[str, str]] = {}
+_last_exchange: dict[str, dict[str, str]] = {}
+_feedback_handler: Any = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -362,13 +364,39 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Route any non-command text through the Pantheon."""
+    """Route any non-command text through the Pantheon.
+
+    Before processing, checks if the message is feedback on the previous
+    exchange (e.g. "wrong", "thanks", "no, the price is X").
+    """
     assert update.effective_message is not None
     text = update.effective_message.text or ""
     if not text.strip():
         return
 
     user_id = str(update.effective_message.chat_id)
+
+    if _feedback_handler is not None and user_id in _last_exchange:
+        try:
+            prev = _last_exchange[user_id]
+            fb = await _feedback_handler.detect_feedback(
+                text, prev.get("query", ""), prev.get("response", ""),
+            )
+            if fb.get("polarity") in ("positive", "negative"):
+                await _feedback_handler.process_feedback(
+                    text,
+                    prev.get("query", ""),
+                    prev.get("response", ""),
+                    prev.get("agents_used", []),
+                )
+                if fb["polarity"] == "negative" and fb.get("extracted_correction"):
+                    nemesis = _pantheon.get_agent("nemesis") if _pantheon else None
+                    if nemesis is not None and hasattr(nemesis, "ingest_telegram_feedback"):
+                        await nemesis.ingest_telegram_feedback(
+                            text, prev.get("query", ""), prev.get("response", ""),
+                        )
+        except Exception:
+            logger.debug("Feedback detection failed (non-critical)")
 
     try:
         if _pipeline is not None:
@@ -387,6 +415,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if _unified_context is not None:
                 _unified_context.record_turn(user_id, "telegram", text, response)
 
+        _last_exchange[user_id] = {"query": text, "response": response, "agents_used": []}
         await update.effective_message.reply_text(_truncate(response))
     except Exception:
         logger.exception("Pantheon message handling failed")
@@ -423,12 +452,19 @@ async def start_bot(
     pipeline:
         Optional :class:`~ira.pipeline.RequestPipeline` for full 11-step processing.
     """
-    global _pantheon, _pipeline, _board_meeting, _crm, _unified_context  # noqa: PLW0603
+    global _pantheon, _pipeline, _board_meeting, _crm, _unified_context, _feedback_handler  # noqa: PLW0603
     _pantheon = pantheon
     _pipeline = pipeline
     _board_meeting = board_meeting
     _crm = crm
     _unified_context = unified_context
+
+    try:
+        from ira.brain.feedback_handler import FeedbackHandler
+        _feedback_handler = FeedbackHandler()
+        logger.info("Feedback handler initialized for Telegram")
+    except Exception:
+        logger.debug("FeedbackHandler not available — feedback detection disabled")
 
     token = get_settings().telegram.bot_token.get_secret_value()
     if not token:

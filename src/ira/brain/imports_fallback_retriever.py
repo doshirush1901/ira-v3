@@ -1,0 +1,445 @@
+"""Hybrid search over the imports metadata index.
+
+Last-resort retrieval path: when Qdrant, Mem0, and Neo4j come up empty,
+Clio (or any agent) falls back here.  Uses keyword scoring from the
+metadata index plus Voyage semantic embeddings over file summaries,
+merged via reciprocal rank fusion (RRF).
+
+Files accessed via fallback are queued for proper deep ingestion during
+the next sleep cycle so the knowledge is available instantly next time.
+
+Design choices:
+  - No per-file LLM call on retrieval: Athena already has conversation
+    context, so raw extracted text is returned directly.
+  - Hybrid search: keyword overlap catches exact matches (model numbers,
+    company names); Voyage embeddings catch semantic matches.
+  - Atomic queue writes prevent corruption on crash.
+  - Summary embedding cache is rebuilt only when the metadata index changes.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from ira.brain.document_ingestor import (
+    read_csv,
+    read_docx,
+    read_pdf,
+    read_txt,
+    read_xlsx,
+)
+from ira.brain.imports_metadata_index import (
+    IMPORTS_DIR,
+    load_index,
+    search_index,
+)
+from ira.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFERRED_QUEUE_PATH = _PROJECT_ROOT / "data" / "brain" / "deferred_ingestion_queue.jsonl"
+EMBEDDING_CACHE_PATH = _PROJECT_ROOT / "data" / "brain" / "imports_summary_embeddings.json"
+
+_MAX_CANDIDATES = 3
+_MAX_EXTRACT_CHARS = 6000
+_MIN_SEMANTIC_SCORE = 0.35
+_RRF_K = 60
+
+_READERS = {
+    ".pdf": read_pdf,
+    ".xlsx": read_xlsx,
+    ".docx": read_docx,
+    ".txt": read_txt,
+    ".csv": read_csv,
+}
+
+_embedding_cache: dict[str, list[float]] | None = None
+_embedding_cache_version: str | None = None
+
+
+# ── Voyage embedding helpers ─────────────────────────────────────────────
+
+
+def _get_voyage_key() -> str:
+    return get_settings().embedding.api_key.get_secret_value()
+
+
+async def _embed_texts_voyage(
+    texts: list[str],
+    *,
+    input_type: str = "document",
+) -> list[list[float]]:
+    """Embed texts via the Voyage API (async, batched)."""
+    import httpx
+
+    api_key = _get_voyage_key()
+    if not api_key:
+        return []
+
+    model = get_settings().embedding.model
+    all_embeddings: list[list[float]] = []
+    batch_size = 64
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            resp = await client.post(
+                "https://api.voyageai.com/v1/embeddings",
+                json={"input": batch, "model": model, "input_type": input_type},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            all_embeddings.extend(item["embedding"] for item in data["data"])
+
+    return all_embeddings
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+# ── embedding cache ──────────────────────────────────────────────────────
+
+
+def _load_embedding_cache() -> dict[str, list[float]]:
+    global _embedding_cache, _embedding_cache_version
+
+    index = load_index()
+    index_version = index.get("built_at", "")
+
+    if _embedding_cache is not None and _embedding_cache_version == index_version:
+        return _embedding_cache
+
+    if EMBEDDING_CACHE_PATH.exists():
+        try:
+            cached = json.loads(EMBEDDING_CACHE_PATH.read_text())
+            if cached.get("version") == index_version:
+                _embedding_cache = cached.get("embeddings", {})
+                _embedding_cache_version = index_version
+                return _embedding_cache
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    _embedding_cache = {}
+    _embedding_cache_version = index_version
+    return _embedding_cache
+
+
+async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[float]]:
+    """Batch-embed all metadata summaries and persist to disk."""
+    files = index.get("files", {})
+    to_embed: dict[str, str] = {}
+    for rel_path, meta in files.items():
+        summary = meta.get("summary", "")
+        entities = ", ".join(meta.get("entities", []))
+        machines = ", ".join(meta.get("machines", []))
+        text = f"{meta.get('name', '')}. {summary}. {entities}. {machines}".strip()
+        if len(text) > 10:
+            to_embed[rel_path] = text
+
+    if not to_embed:
+        return {}
+
+    paths = list(to_embed.keys())
+    texts = [to_embed[p] for p in paths]
+
+    try:
+        vectors = await _embed_texts_voyage(texts, input_type="document")
+    except Exception as exc:
+        logger.warning("Failed to build summary embeddings: %s", exc)
+        return {}
+
+    embeddings = dict(zip(paths, vectors))
+
+    global _embedding_cache, _embedding_cache_version
+    _embedding_cache = embeddings
+    _embedding_cache_version = index.get("built_at", "")
+
+    try:
+        EMBEDDING_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        EMBEDDING_CACHE_PATH.write_text(json.dumps({
+            "version": _embedding_cache_version,
+            "count": len(embeddings),
+            "built_at": datetime.now().isoformat(),
+            "embeddings": embeddings,
+        }))
+        logger.info("Built and cached %d summary embeddings", len(embeddings))
+    except Exception as exc:
+        logger.warning("Failed to save embedding cache: %s", exc)
+
+    return embeddings
+
+
+# ── semantic search ──────────────────────────────────────────────────────
+
+
+async def _semantic_search(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Voyage embedding-based semantic search over metadata summaries."""
+    if not _get_voyage_key():
+        return []
+
+    index = load_index()
+    embeddings = _load_embedding_cache()
+
+    if not embeddings:
+        logger.info("Building summary embeddings for semantic fallback search...")
+        embeddings = await _build_summary_embeddings(index)
+        if not embeddings:
+            return []
+
+    query_vectors = await _embed_texts_voyage([query], input_type="query")
+    if not query_vectors:
+        return []
+    query_emb = query_vectors[0]
+
+    scored: list[dict[str, Any]] = []
+    files = index.get("files", {})
+    for rel_path, emb in embeddings.items():
+        sim = _cosine_similarity(query_emb, emb)
+        if sim >= _MIN_SEMANTIC_SCORE and rel_path in files:
+            meta = files[rel_path]
+            scored.append({
+                "path": meta.get("path", ""),
+                "name": meta.get("name", ""),
+                "score": round(sim, 4),
+                "summary": meta.get("summary", ""),
+                "doc_type": meta.get("doc_type", ""),
+                "machines": meta.get("machines", []),
+                "topics": meta.get("topics", []),
+                "search_type": "semantic",
+            })
+
+    scored.sort(key=lambda x: -x["score"])
+    return scored[:limit]
+
+
+# ── hybrid search (keyword + semantic, RRF merge) ───────────────────────
+
+
+async def hybrid_search(query: str, limit: int = _MAX_CANDIDATES) -> list[dict[str, Any]]:
+    """Merge keyword and semantic results via reciprocal rank fusion."""
+    kw_results = search_index(query, limit=limit * 2)
+    sem_results = await _semantic_search(query, limit=limit * 2)
+
+    rrf_scores: dict[str, float] = {}
+    result_map: dict[str, dict[str, Any]] = {}
+
+    for rank, r in enumerate(kw_results):
+        path = r["path"]
+        rrf_scores[path] = rrf_scores.get(path, 0) + 1.0 / (_RRF_K + rank + 1)
+        result_map.setdefault(path, r)
+
+    for rank, r in enumerate(sem_results):
+        path = r["path"]
+        rrf_scores[path] = rrf_scores.get(path, 0) + 1.0 / (_RRF_K + rank + 1)
+        result_map.setdefault(path, r)
+
+    ranked = sorted(rrf_scores.items(), key=lambda x: -x[1])
+
+    results: list[dict[str, Any]] = []
+    for path, rrf in ranked[:limit]:
+        entry = result_map[path].copy()
+        entry["rrf_score"] = round(rrf, 6)
+        results.append(entry)
+
+    if not results and kw_results:
+        results = kw_results[:limit]
+
+    return results
+
+
+# ── text extraction ──────────────────────────────────────────────────────
+
+
+def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_CHARS) -> str:
+    """Extract text from a supported file, truncated to *max_chars*."""
+    fp = Path(filepath)
+    reader = _READERS.get(fp.suffix.lower())
+    if reader is None:
+        if fp.suffix.lower() in (".txt", ".json", ".csv", ".md"):
+            try:
+                return fp.read_text(errors="ignore")[:max_chars]
+            except Exception:
+                return ""
+        return ""
+
+    try:
+        return reader(fp)[:max_chars]
+    except Exception as exc:
+        logger.warning("Text extraction failed for %s: %s", fp.name, exc)
+        return ""
+
+
+# ── deferred ingestion queue ─────────────────────────────────────────────
+
+
+def queue_for_deferred_ingestion(
+    filepath: str,
+    filename: str,
+    query: str,
+    doc_type: str,
+) -> None:
+    """Queue a file for proper ingestion during the next sleep cycle.
+
+    Uses atomic write (temp file + rename) to prevent corruption.
+    """
+    try:
+        DEFERRED_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        entry = json.dumps({
+            "filepath": filepath,
+            "filename": filename,
+            "query_that_triggered": query,
+            "doc_type": doc_type,
+            "queued_at": datetime.now().isoformat(),
+            "status": "pending",
+        })
+
+        existing = ""
+        if DEFERRED_QUEUE_PATH.exists():
+            existing = DEFERRED_QUEUE_PATH.read_text()
+
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                if existing:
+                    f.write(existing)
+                    if not existing.endswith("\n"):
+                        f.write("\n")
+                f.write(entry + "\n")
+            os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+
+        logger.info("Queued %s for deferred ingestion", filename)
+    except Exception as exc:
+        logger.warning("Failed to queue %s: %s", filename, exc)
+
+
+def load_deferred_queue() -> list[dict[str, Any]]:
+    """Load all pending entries from the deferred ingestion queue."""
+    if not DEFERRED_QUEUE_PATH.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in DEFERRED_QUEUE_PATH.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("status") == "pending":
+                entries.append(entry)
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def mark_deferred_ingested(filepath: str) -> None:
+    """Mark a deferred queue entry as ingested (atomic rewrite)."""
+    if not DEFERRED_QUEUE_PATH.exists():
+        return
+    lines = DEFERRED_QUEUE_PATH.read_text().splitlines()
+    updated: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("filepath") == filepath and entry.get("status") == "pending":
+                entry["status"] = "ingested"
+                entry["ingested_at"] = datetime.now().isoformat()
+            updated.append(json.dumps(entry))
+        except json.JSONDecodeError:
+            updated.append(line)
+
+    content = "\n".join(updated) + "\n"
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+# ── main entry point ─────────────────────────────────────────────────────
+
+
+async def fallback_retrieve(query: str) -> list[dict[str, Any]]:
+    """Last-resort retrieval: hybrid-search the metadata index, extract raw
+    text from the best matching files, and return it directly.
+
+    Returns a list of result dicts compatible with the retriever format.
+    Also queues accessed files for proper ingestion during the next sleep cycle.
+    """
+    start = time.time()
+    candidates = await hybrid_search(query)
+
+    if not candidates:
+        logger.debug("Imports fallback: no candidates for '%s'", query[:80])
+        return []
+
+    logger.info(
+        "Imports fallback: %d candidates for '%s' (top: %s, rrf=%.4f)",
+        len(candidates),
+        query[:60],
+        candidates[0]["name"],
+        candidates[0].get("rrf_score", 0),
+    )
+
+    results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        filepath = candidate.get("path", "")
+        filename = candidate.get("name", "")
+        if not filepath or not Path(filepath).exists():
+            continue
+
+        text = extract_file_text(filepath)
+        if not text or len(text.strip()) < 30:
+            continue
+
+        header = (
+            f"[Document: {filename} | Type: {candidate.get('doc_type', 'unknown')} | "
+            f"Summary: {candidate.get('summary', 'N/A')[:150]}]\n\n"
+        )
+
+        results.append({
+            "source": f"Raw Document ({filename})",
+            "type": "imports_fallback",
+            "content": header + text,
+            "relevance": min(0.65 + candidate.get("rrf_score", 0) * 15, 0.88),
+            "filename": filename,
+            "doc_type": candidate.get("doc_type", "other"),
+        })
+
+        queue_for_deferred_ingestion(
+            filepath, filename, query, candidate.get("doc_type", "other"),
+        )
+
+    elapsed = time.time() - start
+    logger.info("Imports fallback: returned %d results in %.1fs", len(results), elapsed)
+    return results

@@ -36,15 +36,22 @@ class BaseAgent(ABC):
         self,
         retriever: UnifiedRetriever,
         bus: MessageBus,
+        *,
+        services: dict[str, Any] | None = None,
     ) -> None:
         self._retriever = retriever
         self._bus = bus
+        self._services: dict[str, Any] = services or {}
 
         settings = get_settings()
         self._openai_key = settings.llm.openai_api_key.get_secret_value()
         self._openai_model = settings.llm.openai_model
         self._anthropic_key = settings.llm.anthropic_api_key.get_secret_value()
         self._anthropic_model = settings.llm.anthropic_model
+
+    def inject_services(self, services: dict[str, Any]) -> None:
+        """Late-bind shared services after construction."""
+        self._services.update(services)
 
     # ── abstract interface ───────────────────────────────────────────────
 

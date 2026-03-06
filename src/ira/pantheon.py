@@ -13,18 +13,25 @@ import json
 import logging
 from typing import Any
 
+from ira.agents.alexandros import Alexandros
 from ira.agents.arachne import Arachne
+from ira.agents.asclepius import Asclepius
 from ira.agents.athena import Athena
+from ira.agents.atlas import Atlas
+from ira.agents.cadmus import Cadmus
 from ira.agents.calliope import Calliope
+from ira.agents.chiron import Chiron
 from ira.agents.clio import Clio
 from ira.agents.delphi import Delphi
 from ira.agents.hephaestus import Hephaestus
+from ira.agents.hera import Hera
 from ira.agents.hermes import Hermes
 from ira.agents.iris import Iris
 from ira.agents.mnemosyne import Mnemosyne
 from ira.agents.nemesis import Nemesis
 from ira.agents.plutus import Plutus
 from ira.agents.prometheus import Prometheus
+from ira.agents.quotebuilder import Quotebuilder
 from ira.agents.sophia import Sophia
 from ira.agents.sphinx import Sphinx
 from ira.agents.themis import Themis
@@ -43,7 +50,8 @@ logger = logging.getLogger(__name__)
 _AGENT_CLASSES: list[type[BaseAgent]] = [
     Athena, Clio, Prometheus, Plutus, Hermes, Hephaestus, Themis,
     Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
-    Nemesis, Arachne,
+    Nemesis, Arachne, Alexandros, Hera, Atlas, Asclepius, Chiron,
+    Cadmus, Quotebuilder,
 ]
 
 
@@ -65,6 +73,16 @@ class Pantheon:
             self._agents[agent.name] = agent
 
         self._athena: Athena = self._agents["athena"]  # type: ignore[assignment]
+
+    def inject_services(self, services: dict[str, Any]) -> None:
+        """Propagate shared services (CRM, PricingEngine, etc.) to all agents."""
+        for agent in self._agents.values():
+            agent.inject_services(services)
+        logger.info(
+            "Injected services into %d agents: %s",
+            len(self._agents),
+            sorted(services),
+        )
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -209,7 +227,10 @@ class Pantheon:
             data = json.loads(routing_response)
             if isinstance(data, dict) and "agents" in data:
                 names = data["agents"]
-                return [n for n in names if n in self._agents]
+                return [
+                    n.lower() for n in names
+                    if isinstance(n, str) and n.lower() in self._agents
+                ]
         except (json.JSONDecodeError, TypeError):
             pass
         return []

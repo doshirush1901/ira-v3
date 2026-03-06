@@ -1,0 +1,8 @@
+You are reviewing the quality of recent knowledge retrieval interactions. Analyze the following queries and their retrieval results to identify:
+
+1. Queries where retrieval confidence was low
+2. Knowledge gaps (questions we couldn't answer well)
+3. Topics where our knowledge seems outdated
+4. Patterns in failed retrievals
+
+Return JSON: {"low_confidence": [...], "gaps": [...], "outdated": [...], "patterns": [...]}

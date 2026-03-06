@@ -94,9 +94,15 @@ class DreamMode:
     # ── public API ────────────────────────────────────────────────────────
 
     async def run_dream_cycle(self) -> DreamReport:
-        """Execute the full 5-stage dream cycle and return a report."""
+        """Execute the full 11-stage dream cycle and return a report."""
         logger.info("DREAM CYCLE starting")
         stage_log: dict[str, Any] = {"cycle_date": date.today().isoformat(), "stages": {}}
+
+        # Stage 0 — Deferred Ingestion (files accessed via Alexandros fallback)
+        await self._stage0_deferred_ingestion(stage_log)
+
+        # Stage 0.5 — Sleep Training (Nemesis corrections)
+        await self._stage0_5_sleep_training(stage_log)
 
         # Stage 1 — Memory Ingestion (CRM interactions)
         interactions = await self._stage1_memory_ingestion(stage_log)
@@ -117,6 +123,21 @@ class DreamMode:
         # Stage 5 — Memory Pruning
         await self._stage5_memory_pruning(stage_log)
 
+        # Stage 6 — Price Conflict Check
+        price_conflicts = await self._stage6_price_conflict_check(stage_log)
+
+        # Stage 7 — Conversation Quality Review
+        await self._stage7_quality_review(stage_log)
+
+        # Stage 8 — Graph Consolidation
+        await self._stage8_graph_consolidation(stage_log)
+
+        # Stage 9 — Follow-up Automation
+        await self._stage9_follow_up_automation(stage_log)
+
+        # Stage 10 — Morning Summary (Telegram)
+        await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
+
         report = DreamReport(
             cycle_date=date.today(),
             memories_consolidated=memories_consolidated,
@@ -136,6 +157,62 @@ class DreamMode:
             len(campaign_insights),
         )
         return report
+
+    # ── Stage 0: Deferred Ingestion ──────────────────────────────────────
+
+    async def _stage0_deferred_ingestion(self, stage_log: dict[str, Any]) -> None:
+        """Ingest files that were accessed via Alexandros fallback since the last dream."""
+        try:
+            from ira.brain.imports_fallback_retriever import (
+                load_deferred_queue,
+                mark_deferred_ingested,
+            )
+
+            queue = load_deferred_queue()
+            if not queue:
+                logger.debug("Stage 0: no deferred ingestion items")
+                stage_log["stages"]["0_deferred_ingestion"] = {"status": "ok", "files_ingested": 0}
+                return
+
+            ingested = 0
+            for entry in queue:
+                filepath = entry.get("filepath", "")
+                if not filepath or not Path(filepath).exists():
+                    continue
+                try:
+                    if self._retriever is not None:
+                        from ira.brain.document_ingestor import DocumentIngestor
+                        from ira.brain.embeddings import EmbeddingService
+                        from ira.brain.qdrant_manager import QdrantManager
+
+                        embedding = EmbeddingService()
+                        qdrant = QdrantManager(embedding_service=embedding)
+                        await qdrant.ensure_collection()
+                        ingestor = DocumentIngestor(qdrant)
+                        file_info = {
+                            "path": filepath,
+                            "category": entry.get("doc_type", "uncategorised"),
+                            "extension": Path(filepath).suffix.lower(),
+                            "size": Path(filepath).stat().st_size,
+                        }
+                        chunks = await ingestor.ingest_file(file_info, force=True)
+                        if chunks > 0:
+                            mark_deferred_ingested(filepath)
+                            ingested += 1
+                            logger.info("Deferred ingestion: %s -> %d chunks", entry.get("filename", ""), chunks)
+                        ingestor.close()
+                        await qdrant.close()
+                except Exception:
+                    logger.exception("Deferred ingestion failed for %s", filepath)
+
+            stage_log["stages"]["0_deferred_ingestion"] = {"status": "ok", "files_ingested": ingested}
+            logger.info("Stage 0: deferred ingestion complete — %d files", ingested)
+        except ImportError:
+            logger.debug("Stage 0: imports fallback retriever not available")
+            stage_log["stages"]["0_deferred_ingestion"] = {"status": "skipped"}
+        except Exception:
+            logger.exception("Dream Stage 0 (deferred ingestion) failed")
+            stage_log["stages"]["0_deferred_ingestion"] = {"status": "error"}
 
     # ── Stage 1: Memory Ingestion ─────────────────────────────────────────
 
@@ -530,6 +607,171 @@ class DreamMode:
             ),
         )
         await self._db.commit()
+
+    # ── Stage 0.5: Sleep Training ────────────────────────────────────────
+
+    async def _stage0_5_sleep_training(self, stage_log: dict[str, Any]) -> None:
+        """Run Nemesis sleep trainer on pending corrections."""
+        try:
+            from ira.brain.correction_store import CorrectionStore
+            from ira.brain.sleep_trainer import SleepTrainer
+            from ira.brain.embeddings import EmbeddingService
+            from ira.brain.qdrant_manager import QdrantManager
+
+            store = CorrectionStore()
+            await store.initialize()
+            pending = await store.get_pending_corrections()
+            if not pending:
+                stage_log["stages"]["0_5_sleep_training"] = {"status": "ok", "corrections": 0}
+                return
+
+            embedding = EmbeddingService()
+            qdrant = QdrantManager(embedding_service=embedding)
+            trainer = SleepTrainer(correction_store=store, qdrant_manager=qdrant, embedding_service=embedding)
+            stats = await trainer.run_training()
+            stage_log["stages"]["0_5_sleep_training"] = {"status": "ok", **stats}
+            logger.info("Stage 0.5: sleep training complete — %s", stats)
+            await qdrant.close()
+        except ImportError:
+            stage_log["stages"]["0_5_sleep_training"] = {"status": "skipped"}
+        except Exception:
+            logger.exception("Dream Stage 0.5 (sleep training) failed")
+            stage_log["stages"]["0_5_sleep_training"] = {"status": "error"}
+
+    # ── Stage 6: Price Conflict Check ──────────────────────────────────
+
+    async def _stage6_price_conflict_check(self, stage_log: dict[str, Any]) -> list[dict[str, Any]]:
+        """Scan pricing data for inconsistencies."""
+        conflicts: list[dict[str, Any]] = []
+        try:
+            from ira.brain.pricing_learner import PricingLearner
+            learner = PricingLearner()
+            await learner.learn_from_quotes()
+            conflicts = learner.detect_conflicts()
+            if conflicts:
+                await learner.send_conflict_alert(conflicts)
+            stage_log["stages"]["6_price_conflict"] = {"status": "ok", "conflicts": len(conflicts)}
+            logger.info("Stage 6: %d price conflicts found", len(conflicts))
+        except ImportError:
+            stage_log["stages"]["6_price_conflict"] = {"status": "skipped"}
+        except Exception:
+            logger.exception("Dream Stage 6 (price conflict) failed")
+            stage_log["stages"]["6_price_conflict"] = {"status": "error"}
+        return conflicts
+
+    # ── Stage 7: Conversation Quality Review ───────────────────────────
+
+    async def _stage7_quality_review(self, stage_log: dict[str, Any]) -> None:
+        """Review recent retrieval quality and identify knowledge gaps."""
+        try:
+            from ira.brain.graph_consolidation import GraphConsolidation
+            from ira.brain.knowledge_graph import KnowledgeGraph
+
+            graph = KnowledgeGraph()
+            gc = GraphConsolidation(knowledge_graph=graph)
+            co_access = await gc.build_co_access_matrix()
+            stage_log["stages"]["7_quality_review"] = {
+                "status": "ok",
+                "retrieval_pairs_analyzed": len(co_access),
+            }
+            await graph.close()
+        except ImportError:
+            stage_log["stages"]["7_quality_review"] = {"status": "skipped"}
+        except Exception:
+            logger.exception("Dream Stage 7 (quality review) failed")
+            stage_log["stages"]["7_quality_review"] = {"status": "error"}
+
+    # ── Stage 8: Graph Consolidation ───────────────────────────────────
+
+    async def _stage8_graph_consolidation(self, stage_log: dict[str, Any]) -> None:
+        """Tune knowledge graph relationships based on usage patterns."""
+        try:
+            from ira.brain.graph_consolidation import GraphConsolidation
+            from ira.brain.knowledge_graph import KnowledgeGraph
+
+            graph = KnowledgeGraph()
+            gc = GraphConsolidation(knowledge_graph=graph)
+            stats = await gc.run_consolidation()
+            stage_log["stages"]["8_graph_consolidation"] = {"status": "ok", **stats}
+            logger.info("Stage 8: graph consolidation — %s", stats)
+            await graph.close()
+        except ImportError:
+            stage_log["stages"]["8_graph_consolidation"] = {"status": "skipped"}
+        except Exception:
+            logger.exception("Dream Stage 8 (graph consolidation) failed")
+            stage_log["stages"]["8_graph_consolidation"] = {"status": "error"}
+
+    # ── Stage 9: Follow-up Automation ──────────────────────────────────
+
+    async def _stage9_follow_up_automation(self, stage_log: dict[str, Any]) -> None:
+        """Detect stale quotes and suggest follow-ups."""
+        try:
+            if self._crm is None:
+                stage_log["stages"]["9_follow_up"] = {"status": "skipped", "reason": "no CRM"}
+                return
+
+            stale_deals = []
+            deals = await self._crm.list_deals()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+            for deal in deals:
+                updated = getattr(deal, "updated_at", None)
+                if updated and isinstance(updated, str):
+                    try:
+                        dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                        if dt < cutoff:
+                            stale_deals.append(deal)
+                    except ValueError:
+                        pass
+
+            stage_log["stages"]["9_follow_up"] = {"status": "ok", "stale_deals": len(stale_deals)}
+            logger.info("Stage 9: %d stale deals found for follow-up", len(stale_deals))
+        except Exception:
+            logger.exception("Dream Stage 9 (follow-up) failed")
+            stage_log["stages"]["9_follow_up"] = {"status": "error"}
+
+    # ── Stage 10: Morning Summary ──────────────────────────────────────
+
+    async def _stage10_morning_summary(
+        self,
+        stage_log: dict[str, Any],
+        memories_consolidated: int,
+        gaps: list[dict[str, Any]],
+        connections: list[dict[str, Any]],
+        price_conflicts: list[dict[str, Any]],
+    ) -> None:
+        """Send a morning summary to Telegram."""
+        try:
+            settings = get_settings()
+            token = settings.telegram.bot_token.get_secret_value()
+            chat_id = settings.telegram.admin_chat_id
+            if not token or not chat_id:
+                stage_log["stages"]["10_morning_summary"] = {"status": "skipped", "reason": "no telegram"}
+                return
+
+            deferred = stage_log.get("stages", {}).get("0_deferred_ingestion", {}).get("files_ingested", 0)
+            sleep_training = stage_log.get("stages", {}).get("0_5_sleep_training", {}).get("corrections", 0)
+
+            lines = [
+                f"Good morning! Dream cycle complete.",
+                f"- Memories consolidated: {memories_consolidated}",
+                f"- Knowledge gaps found: {len(gaps)}",
+                f"- Creative connections: {len(connections)}",
+                f"- Price conflicts: {len(price_conflicts)}",
+                f"- Files ingested (deferred): {deferred}",
+                f"- Corrections trained: {sleep_training}",
+            ]
+            message = "\n".join(lines)
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": chat_id, "text": message},
+                )
+            stage_log["stages"]["10_morning_summary"] = {"status": "ok"}
+            logger.info("Stage 10: morning summary sent to Telegram")
+        except Exception:
+            logger.exception("Dream Stage 10 (morning summary) failed")
+            stage_log["stages"]["10_morning_summary"] = {"status": "error"}
 
     def _write_dream_log(self, stage_log: dict[str, Any], report: DreamReport) -> None:
         """Append the cycle results to dream_log.json."""

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import importlib.util
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -22,6 +23,10 @@ from httpx import ASGITransport, AsyncClient
 
 from ira.config import EmailMode
 from ira.data.models import Channel, Contact, Direction, Email, KnowledgeState
+
+_has_google_auth = importlib.util.find_spec("google_auth_oauthlib") is not None
+_has_telegram = importlib.util.find_spec("telegram") is not None
+_has_neo4j = importlib.util.find_spec("neo4j") is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -109,6 +114,11 @@ def _make_gmail_raw_message(
 
 
 class TestInterfaceModulesExist:
+    _OPTIONAL_DEPS = {
+        "ira.interfaces.email_processor": "google_auth_oauthlib",
+        "ira.interfaces.telegram_bot": "telegram",
+    }
+
     @pytest.mark.parametrize("module_name", [
         "ira.interfaces",
         "ira.interfaces.cli",
@@ -117,6 +127,9 @@ class TestInterfaceModulesExist:
         "ira.interfaces.telegram_bot",
     ])
     def test_module_importable(self, module_name: str):
+        dep = self._OPTIONAL_DEPS.get(module_name)
+        if dep and importlib.util.find_spec(dep) is None:
+            pytest.skip(f"{dep} not installed")
         mod = importlib.import_module(module_name)
         assert mod is not None
 
@@ -132,6 +145,7 @@ class TestInterfacesPackage:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skipif(not _has_google_auth, reason="google-auth-oauthlib not installed")
 class TestEmailProcessorTraining:
     """EmailProcessor in TRAINING mode: observe-only, no sending/drafting."""
 
@@ -241,6 +255,7 @@ class TestEmailProcessorTraining:
         assert "raw_response" in result
 
 
+@pytest.mark.skipif(not _has_google_auth, reason="google-auth-oauthlib not installed")
 class TestEmailProcessorOperational:
     """EmailProcessor in OPERATIONAL mode: drafts, notifications, no direct send."""
 
@@ -928,6 +943,7 @@ class TestDashboardEndpoint:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skipif(not _has_telegram, reason="python-telegram-bot not installed")
 class TestTelegramCallbacks:
     """Test Telegram inline keyboard callbacks and campaign commands."""
 
@@ -1135,6 +1151,7 @@ class TestTelegramCallbacks:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skipif(not _has_neo4j, reason="neo4j driver not installed")
 class TestRequestPipeline:
     """End-to-end pipeline tests with fully mocked subsystems."""
 

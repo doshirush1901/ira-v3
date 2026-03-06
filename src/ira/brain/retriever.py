@@ -58,6 +58,9 @@ class UnifiedRetriever:
 
         *sources* can restrict which backends are queried.  Valid values:
         ``"qdrant"``, ``"neo4j"``, ``"mem0"``.  ``None`` means all.
+
+        When the primary backends return no results, the imports fallback
+        retriever (Alexandros's metadata index) is consulted automatically.
         """
         use = set(sources) if sources else {"qdrant", "neo4j", "mem0"}
 
@@ -80,8 +83,24 @@ class UnifiedRetriever:
                 logger.exception("Retrieval from %s failed", source_type)
 
         if not merged:
-            return []
+            try:
+                from ira.brain.knowledge_discovery import KnowledgeDiscovery
+                discovery = KnowledgeDiscovery(
+                    retriever=self, qdrant_manager=self._qdrant,
+                    embedding_service=self._qdrant._embeddings,
+                )
+                discovered = await discovery.discover_and_store(query, [])
+                if discovered:
+                    for d in discovered:
+                        d["source_type"] = "discovery"
+                    merged.extend(discovered)
+            except Exception:
+                logger.debug("Knowledge discovery not available", exc_info=True)
 
+        if not merged:
+            return await self._imports_fallback(query, limit)
+
+        self._log_retrieval(query, merged)
         return self._rerank(query, merged, limit)
 
     # ── query decomposition ──────────────────────────────────────────────
@@ -228,6 +247,42 @@ class UnifiedRetriever:
             logger.exception("Mem0 search failed")
             return []
 
+    # ── retrieval logging (for graph consolidation) ────────────────────────
+
+    def _log_retrieval(self, query: str, results: list[dict[str, Any]]) -> None:
+        try:
+            from ira.brain.graph_consolidation import GraphConsolidation
+            gc = GraphConsolidation(knowledge_graph=self._graph)
+            chunks = [r.get("content", "")[:100] for r in results[:10]]
+            sources = [r.get("source_type", "") for r in results[:10]]
+            gc.log_retrieval(query, chunks, sources)
+        except Exception:
+            pass
+
+    # ── imports fallback ───────────────────────────────────────────────────
+
+    async def _imports_fallback(
+        self, query: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """Last-resort: search the raw imports archive via Alexandros's metadata index."""
+        try:
+            from ira.brain.imports_fallback_retriever import fallback_retrieve
+
+            results = await fallback_retrieve(query)
+            return [
+                {
+                    "content": r.get("content", ""),
+                    "score": r.get("relevance", 0.5),
+                    "source": r.get("source", ""),
+                    "source_type": "imports_fallback",
+                    "metadata": {"filename": r.get("filename", ""), "doc_type": r.get("doc_type", "")},
+                }
+                for r in results[:limit]
+            ]
+        except Exception:
+            logger.debug("Imports fallback not available", exc_info=True)
+            return []
+
     # ── reranking ────────────────────────────────────────────────────────
 
     def _rerank(
@@ -265,7 +320,30 @@ class UnifiedRetriever:
                     "metadata": meta.get("metadata", {}),
                 }
             )
-        return output
+
+        return self._apply_learned_corrections(output)
+
+    # ── learned corrections ────────────────────────────────────────────────
+
+    def _apply_learned_corrections(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Post-process results with learned entity corrections and competitor tags."""
+        try:
+            from ira.brain.correction_learner import CorrectionLearner
+            learner = CorrectionLearner()
+
+            for r in results:
+                content = r.get("content", "")
+                for entity in learner.get_all_learned().get("entity_corrections", {}):
+                    corrected = learner.get_entity_correction(entity)
+                    if corrected and entity.lower() in content.lower():
+                        r.setdefault("metadata", {})["entity_correction"] = f"{entity} -> {corrected}"
+
+                for entity in learner.get_all_learned().get("competitors", []):
+                    if entity.lower() in content.lower():
+                        r.setdefault("metadata", {})["competitor_mentioned"] = True
+        except Exception:
+            pass
+        return results
 
     # ── LLM query decomposition ──────────────────────────────────────────
 

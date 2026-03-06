@@ -436,13 +436,26 @@ class EmailProcessor:
             default=str,
         )
 
-        await self._crm.create_interaction(
-            contact_id=str(contact.id),
-            channel=Channel.EMAIL,
-            direction=direction,
-            subject=email.subject,
-            content=analysis_summary,
-        )
+        crm_contact = await self._crm.get_contact_by_email(contact.email)
+        if crm_contact is None:
+            try:
+                crm_contact = await self._crm.create_contact(
+                    name=contact.name,
+                    email=contact.email,
+                    company=contact.company,
+                    source="email_inbound",
+                )
+            except Exception:
+                logger.warning("Could not create CRM contact for %s", contact.email)
+
+        if crm_contact is not None:
+            await self._crm.create_interaction(
+                contact_id=str(crm_contact.id),
+                channel=Channel.EMAIL,
+                direction=direction,
+                subject=email.subject,
+                content=analysis_summary,
+            )
 
         if self._unified_ctx is not None:
             try:

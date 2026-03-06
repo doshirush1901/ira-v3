@@ -93,7 +93,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     embedding = EmbeddingService()
     qdrant = QdrantManager(embedding_service=embedding)
     graph = KnowledgeGraph()
-    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
+
+    mem0_client = None
+    mem0_key = settings.memory.api_key.get_secret_value()
+    if mem0_key:
+        try:
+            from mem0 import MemoryClient
+            mem0_client = MemoryClient(api_key=mem0_key)
+            logger.info("Mem0 client initialised")
+        except Exception:
+            logger.warning("Mem0 init failed — continuing without conversational memory")
+
+    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
     ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
 
     _services["embedding"] = embedding
@@ -113,12 +124,32 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["crm"] = crm
     _services["quotes"] = quotes
 
+    # ── Pricing engine ────────────────────────────────────────────────
+    from ira.brain.pricing_engine import PricingEngine
+
+    pricing_engine = PricingEngine(retriever=retriever, crm=crm)
+
+    _services["pricing_engine"] = pricing_engine
+
     # ── Pantheon ──────────────────────────────────────────────────────
     from ira.message_bus import MessageBus
     from ira.pantheon import Pantheon
 
     bus = MessageBus()
     pantheon = Pantheon(retriever=retriever, bus=bus)
+
+    shared_services = {
+        "crm": crm,
+        "quotes": quotes,
+        "pricing_engine": pricing_engine,
+        "retriever": retriever,
+    }
+
+    pantheon.inject_services(shared_services)
+
+    from ira.skills.handlers import bind_services as bind_skill_services
+    bind_skill_services(shared_services)
+
     await pantheon.start()
 
     _services["bus"] = bus
@@ -143,7 +174,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         embedding_service=embedding,
     )
     sensory = SensorySystem(knowledge_graph=graph)
-    await sensory.create_tables()
+    try:
+        await asyncio.wait_for(sensory.create_tables(), timeout=30)
+    except (asyncio.TimeoutError, Exception):
+        logger.warning("SensorySystem table creation slow/failed — continuing")
     voice = VoiceSystem()
     endocrine = EndocrineSystem()
 
@@ -160,13 +194,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.memory.long_term import LongTermMemory
     from ira.systems.musculoskeletal import MusculoskeletalSystem
 
+    _INIT_TIMEOUT = 30
+
+    async def _safe_init(name: str, coro: Any) -> None:
+        try:
+            await asyncio.wait_for(coro, timeout=_INIT_TIMEOUT)
+            logger.info("Initialised %s", name)
+        except asyncio.TimeoutError:
+            logger.warning("Timed out initialising %s after %ds — skipping", name, _INIT_TIMEOUT)
+        except Exception:
+            logger.warning("Failed to initialise %s — skipping", name, exc_info=True)
+
     long_term = LongTermMemory()
     episodic = EpisodicMemory(long_term=long_term)
-    await episodic.initialize()
+    await _safe_init("episodic", episodic.initialize())
     conversation = ConversationMemory()
-    await conversation.initialize()
+    await _safe_init("conversation", conversation.initialize())
     musculoskeletal = MusculoskeletalSystem()
-    await musculoskeletal.create_tables()
+    await _safe_init("musculoskeletal", musculoskeletal.create_tables())
 
     dream_mode = DreamMode(
         long_term=long_term,
@@ -174,7 +219,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         conversation=conversation,
         musculoskeletal=musculoskeletal,
         retriever=retriever,
+        crm=crm,
     )
+    await _safe_init("dream_mode", dream_mode.initialize())
 
     _services["long_term"] = long_term
     _services["episodic"] = episodic
@@ -187,7 +234,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.systems.learning_hub import LearningHub
 
     procedural_memory = ProceduralMemory()
+    await _safe_init("procedural_memory", procedural_memory.initialize())
     learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
+
+    dream_mode._procedural = procedural_memory
 
     _services["procedural_memory"] = procedural_memory
     _services["learning_hub"] = learning_hub
@@ -199,15 +249,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.memory.metacognition import Metacognition
     from ira.memory.relationship import RelationshipMemory
 
+    emotional_intelligence = EmotionalIntelligence()
+    await _safe_init("emotional_intelligence", emotional_intelligence.initialize())
     relationship_memory = RelationshipMemory()
-    await relationship_memory.initialize()
+    await _safe_init("relationship_memory", relationship_memory.initialize())
     goal_manager = GoalManager()
-    await goal_manager.initialize()
+    await _safe_init("goal_manager", goal_manager.initialize())
     metacognition = Metacognition()
-    await metacognition.initialize()
+    await _safe_init("metacognition", metacognition.initialize())
     inner_voice = InnerVoice()
-    await inner_voice.initialize()
+    await _safe_init("inner_voice", inner_voice.initialize())
 
+    # Wire memory systems into SensorySystem for full perception
+    sensory._emotional_intelligence = emotional_intelligence
+    sensory._conversation_memory = conversation
+    sensory._relationship_memory = relationship_memory
+
+    _services["emotional_intelligence"] = emotional_intelligence
     _services["relationship_memory"] = relationship_memory
     _services["goal_manager"] = goal_manager
     _services["metacognition"] = metacognition
@@ -336,6 +394,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await sensory.close()
     await musculoskeletal.close()
     await graph.close()
+
+    for svc_name in (
+        "conversation", "episodic", "dream_mode", "emotional_intelligence",
+        "relationship_memory", "goal_manager", "metacognition", "inner_voice",
+        "procedural_memory",
+    ):
+        svc = _services.get(svc_name)
+        if svc is not None and hasattr(svc, "close"):
+            try:
+                await svc.close()
+            except Exception:
+                logger.exception("Failed to close %s", svc_name)
 
     _services.clear()
     logger.info("All services shut down.")

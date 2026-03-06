@@ -1,0 +1,9 @@
+You are analyzing pricing data for consistency. Given the following price entries for machines, identify any conflicts where the same model has prices that differ by more than 15%.
+
+For each conflict, explain:
+1. Which model has conflicting prices
+2. The price range found
+3. Which source is likely most accurate
+4. Recommended action
+
+Return JSON: {"conflicts": [{"model": "...", "prices": [...], "recommendation": "..."}]}

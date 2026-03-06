@@ -1,0 +1,39 @@
+{
+  "hints": [
+    {
+      "patterns": ["\\bAM\\b.*\\bthickness\\b", "\\bthickness\\b.*\\bAM\\b"],
+      "keywords": ["AM", "thickness", "limit", "maximum"],
+      "answer": "The AM series machines are designed for materials up to 1.5mm thickness. For thicker materials, consider the PF1 series which handles heavy-gauge forming.",
+      "source": "manual",
+      "created_at": "2026-03-06T00:00:00"
+    },
+    {
+      "patterns": ["\\bPF1\\b.*\\blead\\s*time\\b", "\\blead\\s*time\\b.*\\bPF1\\b"],
+      "keywords": ["PF1", "lead time", "delivery", "weeks"],
+      "answer": "Standard lead time for PF1 series machines is 12-16 weeks from order confirmation. Expedited builds are available for an additional 15% surcharge, reducing lead time to 8-10 weeks.",
+      "source": "manual",
+      "created_at": "2026-03-06T00:00:00"
+    },
+    {
+      "patterns": ["\\bAM\\b.*\\bPF1\\b.*\\bdifferen", "\\bPF1\\b.*\\bAM\\b.*\\bdifferen", "\\bAM\\b.*\\bvs\\b.*\\bPF1\\b", "\\bPF1\\b.*\\bvs\\b.*\\bAM\\b"],
+      "keywords": ["AM", "PF1", "difference", "compare", "versus"],
+      "answer": "The AM series is optimised for high-speed, light-gauge panel forming (up to 1.5mm). The PF1 series is a heavy-duty press-forming platform for thicker materials and structural components. Choose AM for volume and speed; choose PF1 for strength and gauge range.",
+      "source": "manual",
+      "created_at": "2026-03-06T00:00:00"
+    },
+    {
+      "patterns": ["\\bwarranty\\b.*\\bmachine", "\\bmachine.*\\bwarranty\\b"],
+      "keywords": ["warranty", "guarantee", "coverage", "years"],
+      "answer": "All Machinecraft machines come with a standard 2-year warranty covering parts and labour. Extended warranty packages (3 or 5 years) are available at the time of purchase. Wear parts such as tooling and rollers are covered for the first 12 months.",
+      "source": "manual",
+      "created_at": "2026-03-06T00:00:00"
+    },
+    {
+      "patterns": ["\\bRF-100\\b.*\\bspeed\\b", "\\bspeed\\b.*\\bRF-100\\b", "\\bRF-100\\b.*\\bfast\\b"],
+      "keywords": ["RF-100", "speed", "meters", "per minute", "line speed"],
+      "answer": "The RF-100 roll former operates at a maximum line speed of 30 metres per minute, depending on material type and profile complexity. Typical production speed for standard profiles is 18-25 m/min.",
+      "source": "manual",
+      "created_at": "2026-03-06T00:00:00"
+    }
+  ]
+}

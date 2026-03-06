@@ -33,7 +33,8 @@ class QdrantManager:
         config: QdrantConfig | None = None,
     ) -> None:
         cfg = config or get_settings().qdrant
-        self._client = AsyncQdrantClient(url=cfg.url)
+        api_key = cfg.api_key.get_secret_value() or None
+        self._client = AsyncQdrantClient(url=cfg.url, api_key=api_key)
         self._embeddings = embedding_service
         self._default_collection = cfg.collection
 
@@ -138,12 +139,13 @@ class QdrantManager:
 
         try:
             query_vector = await self._embeddings.embed_query(query)
-            hits = await self._client.search(
+            result = await self._client.query_points(
                 collection_name=col,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit,
                 score_threshold=score_threshold,
             )
+            hits = result.points
         except Exception:
             logger.exception("Search failed in '%s'", col)
             raise
@@ -168,22 +170,27 @@ class QdrantManager:
 
         if keyword_filter is None and source_category is not None:
             keyword_filter = models.Filter(
-                must=[
+                should=[
                     models.FieldCondition(
                         key="source_category",
                         match=models.MatchValue(value=source_category),
-                    )
+                    ),
+                    models.FieldCondition(
+                        key="doc_type",
+                        match=models.MatchValue(value=source_category),
+                    ),
                 ]
             )
 
         try:
             query_vector = await self._embeddings.embed_query(query)
-            hits = await self._client.search(
+            result = await self._client.query_points(
                 collection_name=col,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=keyword_filter,
                 limit=limit,
             )
+            hits = result.points
         except Exception:
             logger.exception("Hybrid search failed in '%s'", col)
             raise
@@ -239,11 +246,32 @@ def _uuid_to_hex(uid: UUID) -> str:
 
 
 def _hit_to_dict(hit: models.ScoredPoint) -> dict[str, Any]:
+    """Normalise a Qdrant hit into ira-v3's canonical result schema.
+
+    Handles both the old ira payload layout (``text``, ``doc_type``,
+    ``filename``, ``machines``, ``prices``, …) and the new ira-v3 layout
+    (``content``, ``source_category``, ``metadata``).
+    """
     payload = hit.payload or {}
+
+    content = payload.get("content") or payload.get("text") or payload.get("raw_text", "")
+    source = payload.get("source") or payload.get("filename", "")
+    source_category = payload.get("source_category") or payload.get("doc_type", "")
+
+    metadata = payload.get("metadata", {})
+    if not metadata:
+        extra_keys = {
+            "machines", "prices", "customer", "chunk", "total_chunks",
+            "source_group", "doc_type", "filename", "ingested_at",
+            "subject", "from_email", "to_email", "direction",
+            "thread_key", "company_domain", "has_quote", "has_price",
+        }
+        metadata = {k: v for k, v in payload.items() if k in extra_keys and v}
+
     return {
-        "content": payload.get("content", ""),
+        "content": content,
         "score": hit.score,
-        "source": payload.get("source", ""),
-        "metadata": payload.get("metadata", {}),
-        "source_category": payload.get("source_category", ""),
+        "source": source,
+        "metadata": metadata,
+        "source_category": source_category,
     }

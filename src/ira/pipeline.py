@@ -21,6 +21,7 @@ Steps
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -89,7 +90,7 @@ class RequestPipeline:
         from ira.systems.sensory import PerceptionEvent
 
         event = PerceptionEvent(
-            channel=Channel(channel),
+            channel=Channel(channel.upper() if isinstance(channel, str) else channel),
             raw_input=raw_input,
             sender_id=sender_id,
             sender_name=meta.get("sender_name"),
@@ -155,6 +156,22 @@ class RequestPipeline:
             agent_names = routing["required_agents"]
             logger.info("ROUTE FAST | intent=%s -> %s", routing["intent"], agent_names)
 
+        # ── 3.5 TRUTH HINTS ──────────────────────────────────────────
+        truth_hint_response: str | None = None
+        if route_method is None:
+            try:
+                from ira.brain.truth_hints import TruthHintsEngine
+                engine = TruthHintsEngine()
+                if not engine.is_complex_query(resolved_input):
+                    hint = engine.match(resolved_input)
+                    if hint is not None:
+                        truth_hint_response = hint["answer"]
+                        route_method = "truth_hint"
+                        agent_names = []
+                        logger.info("TRUTH HINT | matched: %s", hint.get("patterns", ["?"])[0][:60])
+            except Exception:
+                logger.debug("Truth hints check failed (non-critical)")
+
         # ── 4. ROUTE (Procedure) ─────────────────────────────────────
         procedure = None
         if route_method is None and self._procedural is not None:
@@ -177,6 +194,61 @@ class RequestPipeline:
             route_method = "llm"
             logger.info("ROUTE LLM | delegating to Athena")
 
+        # ── 5.5 ENRICH CONTEXT ─────────────────────────────────────
+        enrichment_parts: list[str] = []
+
+        try:
+            from ira.brain.adaptive_style import AdaptiveStyleTracker
+            style_tracker = AdaptiveStyleTracker()
+            style_tracker.update_profile(contact_email, raw_input)
+            style_prompt = style_tracker.get_style_prompt(contact_email)
+            if style_prompt:
+                enrichment_parts.append(style_prompt)
+        except Exception:
+            logger.debug("AdaptiveStyle not available")
+
+        try:
+            from ira.brain.realtime_observer import RealTimeObserver
+            observer = RealTimeObserver()
+            learnings_prompt = observer.format_for_prompt(contact_email)
+            if learnings_prompt:
+                enrichment_parts.append(learnings_prompt)
+        except Exception:
+            logger.debug("RealTimeObserver not available")
+
+        if self._endocrine is not None:
+            try:
+                status = self._endocrine.get_status()
+                enrichment_parts.append(
+                    f"System state: confidence={status.get('confidence', 0.5):.2f} "
+                    f"energy={status.get('energy', 0.5):.2f}"
+                )
+            except Exception:
+                pass
+
+        try:
+            from ira.brain.power_levels import PowerLevelTracker
+            tracker = PowerLevelTracker()
+            top = tracker.get_leaderboard()[:3]
+            if top:
+                enrichment_parts.append(
+                    "Top agents: " + ", ".join(
+                        f"{a['agent']}({a['tier']})" for a in top
+                    )
+                )
+        except Exception:
+            pass
+
+        try:
+            from ira.agents.chiron import Chiron
+            chiron = self._pantheon.get_agent("chiron")
+            if chiron is not None and hasattr(chiron, "get_sales_guidance"):
+                guidance = await chiron.get_sales_guidance()
+                if guidance and len(guidance) > 20:
+                    enrichment_parts.append(f"Sales coaching:\n{guidance[:500]}")
+        except Exception:
+            pass
+
         # ── 6. EXECUTE ───────────────────────────────────────────────
         context: dict[str, Any] = {
             "perception": perception,
@@ -184,6 +256,8 @@ class RequestPipeline:
             "cross_channel_history": cross_channel_history[-5:],
             "channel": channel,
         }
+        if enrichment_parts:
+            context["enrichment"] = "\n\n".join(enrichment_parts)
         if active_goal is not None:
             context["active_goal"] = {
                 "type": active_goal.goal_type.value,
@@ -199,7 +273,10 @@ class RequestPipeline:
         raw_response: str
         agents_used: list[str]
 
-        if route_method in ("deterministic", "procedural"):
+        if truth_hint_response is not None:
+            raw_response = truth_hint_response
+            agents_used = ["truth_hints"]
+        elif route_method in ("deterministic", "procedural"):
             raw_response, agents_used = await self._execute_routed(
                 agent_names, resolved_input, context,
             )
@@ -440,6 +517,16 @@ class RequestPipeline:
                 )
             except Exception:
                 logger.debug("Sophia reflection failed (non-critical)")
+
+        # RealTimeObserver: extract learnings for next turn (fire-and-forget)
+        try:
+            from ira.brain.realtime_observer import RealTimeObserver
+            observer = RealTimeObserver()
+            asyncio.create_task(
+                observer.observe_turn(raw_input, raw_response, contact_email)
+            )
+        except Exception:
+            logger.debug("RealTimeObserver not available")
 
         # Endocrine feedback
         if self._endocrine is not None:

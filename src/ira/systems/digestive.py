@@ -131,6 +131,23 @@ class DigestiveSystem:
         if not items:
             return 0
 
+        try:
+            from ira.brain.quality_filter import QualityFilter
+            qf = QualityFilter(qdrant_manager=self._qdrant, embedding_service=self._embeddings)
+            filtered = []
+            for item in items:
+                result = qf.filter_chunk(item.content)
+                if result["pass"]:
+                    filtered.append(item)
+                else:
+                    logger.debug("Quality filter rejected chunk: %s", result["reason"])
+            items = filtered
+        except Exception:
+            logger.debug("Quality filter not available, skipping")
+
+        if not items:
+            return 0
+
         return await self._qdrant.upsert_items(items)
 
     # ── LIVER: entity extraction ──────────────────────────────────────────

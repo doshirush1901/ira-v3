@@ -22,6 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from ira.agents.base_agent import BaseAgent
+from ira.brain.correction_store import CorrectionCategory, CorrectionSeverity, CorrectionStore
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class Nemesis(BaseAgent):
         super().__init__(*args, **kwargs)
         self._learning_hub: Any | None = None
         self._peer_agents: dict[str, BaseAgent] = {}
+        self._correction_store: CorrectionStore | None = None
 
     def configure(
         self,
@@ -89,6 +91,195 @@ class Nemesis(BaseAgent):
         """
         self._learning_hub = learning_hub
         self._peer_agents = peer_agents
+
+    async def _ensure_correction_store(self) -> CorrectionStore:
+        if self._correction_store is None:
+            self._correction_store = CorrectionStore()
+            await self._correction_store.initialize()
+        return self._correction_store
+
+    # ── correction ingestion ──────────────────────────────────────────────
+
+    async def ingest_correction(self, user_message: str, context: dict[str, Any]) -> str:
+        """Extract a correction from natural language and persist it.
+
+        Uses the LLM to parse the user's message into structured correction
+        fields, stores it in the CorrectionStore, and immediately reinforces
+        it in Mem0 via long-term memory so subsequent queries benefit.
+        """
+        extraction_prompt = (
+            "You are a correction parser. Extract the correction from the user's message.\n"
+            "Return JSON with keys: entity, category (one of PRICING/SPECS/CUSTOMER/COMPETITOR/GENERAL), "
+            "severity (one of CRITICAL/HIGH/MEDIUM/LOW), old_value, new_value.\n"
+            "If a field is unknown, use an empty string for old_value and MEDIUM for severity."
+        )
+        context_str = json.dumps(context, default=str)[:4000] if context else ""
+        raw = await self.call_llm(
+            extraction_prompt,
+            f"User message: {user_message}\n\nContext: {context_str}",
+            temperature=0.0,
+        )
+        parsed = self._safe_parse(raw)
+        if not isinstance(parsed, dict) or "entity" not in parsed:
+            return "Could not extract a structured correction from that message."
+
+        store = await self._ensure_correction_store()
+
+        try:
+            category = CorrectionCategory(parsed.get("category", "GENERAL"))
+        except ValueError:
+            category = CorrectionCategory.GENERAL
+        try:
+            severity = CorrectionSeverity(parsed.get("severity", "MEDIUM"))
+        except ValueError:
+            severity = CorrectionSeverity.MEDIUM
+
+        correction_id = await store.add_correction(
+            entity=parsed["entity"],
+            new_value=parsed.get("new_value", ""),
+            category=category,
+            severity=severity,
+            old_value=parsed.get("old_value", ""),
+            source="user_correction",
+        )
+
+        long_term = self._services.get("long_term_memory")
+        if long_term is not None:
+            content = (
+                f"CORRECTION for {parsed['entity']}: "
+                f"The correct information is: {parsed.get('new_value', '')}"
+            )
+            if parsed.get("old_value"):
+                content += f" (previously stated as: {parsed['old_value']})"
+            await long_term.store(
+                content,
+                user_id="global",
+                metadata={
+                    "type": "correction",
+                    "entity": parsed["entity"],
+                    "category": category.value,
+                    "severity": severity.value,
+                    "correction_id": correction_id,
+                },
+            )
+
+        return (
+            f"Correction #{correction_id} recorded: {parsed['entity']} — "
+            f"{category.value}/{severity.value}. "
+            "It will be fully integrated during the next sleep-training cycle."
+        )
+
+    async def ingest_failure(self, query: str, bad_response: str, context: dict[str, Any]) -> str:
+        """Log a failed response so sleep training can learn from it."""
+        extraction_prompt = (
+            "Analyse this failed AI response. Identify what entity or topic was wrong, "
+            "what the bad answer stated, and what the correct answer likely is.\n"
+            "Return JSON: {\"entity\": \"...\", \"old_value\": \"...\", \"new_value\": \"...\", "
+            "\"category\": \"GENERAL\", \"severity\": \"HIGH\"}"
+        )
+        raw = await self.call_llm(
+            extraction_prompt,
+            f"Original query: {query}\n\nBad response: {bad_response[:4000]}",
+            temperature=0.0,
+        )
+        parsed = self._safe_parse(raw)
+        if not isinstance(parsed, dict) or "entity" not in parsed:
+            logger.warning("Could not extract failure details from bad response")
+            parsed = {
+                "entity": query[:200],
+                "old_value": bad_response[:500],
+                "new_value": "(needs manual correction)",
+                "category": "GENERAL",
+                "severity": "HIGH",
+            }
+
+        store = await self._ensure_correction_store()
+
+        try:
+            category = CorrectionCategory(parsed.get("category", "GENERAL"))
+        except ValueError:
+            category = CorrectionCategory.GENERAL
+        try:
+            severity = CorrectionSeverity(parsed.get("severity", "HIGH"))
+        except ValueError:
+            severity = CorrectionSeverity.HIGH
+
+        correction_id = await store.add_correction(
+            entity=parsed["entity"],
+            new_value=parsed.get("new_value", ""),
+            category=category,
+            severity=severity,
+            old_value=parsed.get("old_value", ""),
+            source="failure_report",
+        )
+        return f"Failure logged as correction #{correction_id}. Will be addressed in next training cycle."
+
+    async def ingest_telegram_feedback(
+        self,
+        feedback_text: str,
+        original_query: str,
+        original_response: str,
+    ) -> str:
+        """Process feedback received via Telegram into a correction."""
+        extraction_prompt = (
+            "A user sent feedback on a Telegram bot response. Extract the correction.\n"
+            "Return JSON: {\"entity\": \"...\", \"old_value\": \"...\", \"new_value\": \"...\", "
+            "\"category\": \"GENERAL\", \"severity\": \"MEDIUM\"}"
+        )
+        user_input = (
+            f"Feedback: {feedback_text}\n\n"
+            f"Original query: {original_query}\n\n"
+            f"Original response: {original_response[:3000]}"
+        )
+        raw = await self.call_llm(extraction_prompt, user_input, temperature=0.0)
+        parsed = self._safe_parse(raw)
+        if not isinstance(parsed, dict) or "entity" not in parsed:
+            parsed = {
+                "entity": original_query[:200],
+                "old_value": original_response[:500],
+                "new_value": feedback_text,
+                "category": "GENERAL",
+                "severity": "MEDIUM",
+            }
+
+        store = await self._ensure_correction_store()
+
+        try:
+            category = CorrectionCategory(parsed.get("category", "GENERAL"))
+        except ValueError:
+            category = CorrectionCategory.GENERAL
+        try:
+            severity = CorrectionSeverity(parsed.get("severity", "MEDIUM"))
+        except ValueError:
+            severity = CorrectionSeverity.MEDIUM
+
+        correction_id = await store.add_correction(
+            entity=parsed["entity"],
+            new_value=parsed.get("new_value", ""),
+            category=category,
+            severity=severity,
+            old_value=parsed.get("old_value", ""),
+            source="telegram_feedback",
+        )
+
+        long_term = self._services.get("long_term_memory")
+        if long_term is not None:
+            content = (
+                f"TELEGRAM CORRECTION for {parsed['entity']}: "
+                f"{parsed.get('new_value', feedback_text)}"
+            )
+            await long_term.store(
+                content,
+                user_id="global",
+                metadata={
+                    "type": "correction",
+                    "source": "telegram",
+                    "entity": parsed["entity"],
+                    "correction_id": correction_id,
+                },
+            )
+
+        return f"Telegram feedback recorded as correction #{correction_id}."
 
     # ── BaseAgent interface ──────────────────────────────────────────────
 
