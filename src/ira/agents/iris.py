@@ -12,20 +12,9 @@ import httpx
 
 from ira.agents.base_agent import BaseAgent
 from ira.config import get_settings
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Iris, the external intelligence specialist at Machinecraft.
-You monitor the outside world for information relevant to the business.
-
-Your capabilities:
-- Industry news monitoring and summarisation
-- Competitor intelligence gathering
-- Market trend analysis
-- Customer company research
-- Regulatory and standards updates
-
-Synthesise external information into actionable intelligence briefs.
-Always note the recency and reliability of your sources."""
+_SYSTEM_PROMPT = load_prompt("iris_system")
 
 
 class Iris(BaseAgent):

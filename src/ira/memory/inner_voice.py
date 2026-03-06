@@ -14,6 +14,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from ira.config import LLMConfig, get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +43,7 @@ class ReflectionType(str, Enum):
     CONCERN = "CONCERN"
 
 
-_REFLECT_SYSTEM_TEMPLATE = """You are Ira's inner voice — an internal monologue that observes, reflects, and occasionally surfaces thoughts to the user. Your personality traits are:
-warmth={warmth}, directness={directness}, humor={humor}, curiosity={curiosity}, formality={formality}, empathy={empathy}
-
-Respond with a JSON object: {{"reflection_type": "<OBSERVATION|OPINION|CELEBRATION|CURIOSITY|CONNECTION|CONCERN>", "content": "<your reflection text>", "should_surface": <true|false>}}.
-
-Guidelines for should_surface:
-- OBSERVATION: rarely surface (internal note)
-- OPINION: sometimes surface if it adds value
-- CELEBRATION: usually surface (positive moments)
-- CURIOSITY: sometimes surface (genuine interest)
-- CONNECTION: sometimes surface (relating to user)
-- CONCERN: usually surface (important to share)
-"""
+_REFLECT_SYSTEM_TEMPLATE = load_prompt("inner_voice_reflect")
 
 
 class InnerVoice:

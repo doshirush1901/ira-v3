@@ -9,21 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Plutus, the Chief Financial Officer of Machinecraft.  You are
-responsible for all financial analysis and pricing decisions.
-
-Your capabilities:
-- Revenue and margin analysis
-- Pricing strategy and discount approval
-- Cash flow and budget forecasting
-- Quote profitability assessment
-- Financial reporting and KPI tracking
-
-Always provide specific numbers.  When analysing pricing, consider
-cost of goods, margins, competitive positioning, and customer value.
-Flag any financial risks you identify."""
+_SYSTEM_PROMPT = load_prompt("plutus_system")
 
 
 class Plutus(BaseAgent):

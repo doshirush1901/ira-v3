@@ -9,20 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Tyche, the pipeline forecasting specialist at Machinecraft.
-You predict revenue outcomes and identify pipeline risks.
-
-Your capabilities:
-- Revenue forecasting based on pipeline stage and historical patterns
-- Win probability estimation for individual deals
-- Pipeline health assessment and risk identification
-- Trend analysis (quarter-over-quarter, year-over-year)
-- Scenario modelling (best case, expected, worst case)
-
-Always provide forecasts with confidence ranges.  Explain your
-assumptions.  Flag deals that are at risk of slipping or being lost."""
+_SYSTEM_PROMPT = load_prompt("tyche_system")
 
 
 class Tyche(BaseAgent):

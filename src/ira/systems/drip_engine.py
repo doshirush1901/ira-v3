@@ -26,6 +26,7 @@ from ira.data.crm import (
 )
 from ira.data.models import AgentMessage, Channel, Direction
 from ira.data.quotes import QuoteManager
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -47,25 +48,9 @@ class GmailSenderProtocol(Protocol):
 
 # ── LLM prompts ──────────────────────────────────────────────────────────────
 
-_EVALUATE_SYSTEM_PROMPT = """\
-You are a marketing analytics expert for Machinecraft, an industrial machinery
-manufacturer.  Given the campaign metrics and sample email content, provide
-actionable improvement suggestions.
+_EVALUATE_SYSTEM_PROMPT = load_prompt("drip_evaluate")
 
-Return ONLY valid JSON:
-{
-  "improvement_suggestions": ["suggestion 1", "suggestion 2"],
-  "best_subject_lines": ["subject 1"],
-  "recommended_changes": {"step_number": "change description"}
-}"""
-
-_ADJUST_SYSTEM_PROMPT = """\
-You are a sales copywriter for Machinecraft.  Rewrite the following
-underperforming drip email to be more engaging and action-oriented.
-Keep the same general theme but improve the hook and call-to-action.
-
-Return ONLY valid JSON:
-{"subject": "new subject line", "body": "new email body"}"""
+_ADJUST_SYSTEM_PROMPT = load_prompt("drip_adjust")
 
 
 # ── European campaign template ───────────────────────────────────────────────

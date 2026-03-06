@@ -37,37 +37,9 @@ class CRMRepository(Protocol):
 
 # ── LLM prompts ─────────────────────────────────────────────────────────────
 
-_ESTIMATE_SYSTEM_PROMPT = """\
-You are a pricing analyst for Machinecraft, an industrial machinery
-manufacturer.  Given SIMILAR HISTORICAL QUOTES and a requested machine
-configuration, produce a price estimate.
+_ESTIMATE_SYSTEM_PROMPT = load_prompt("estimate_price")
 
-Return ONLY valid JSON (no markdown fences):
-{
-  "estimated_price": {"low": 0, "mid": 0, "high": 0, "currency": "USD"},
-  "confidence": "high|medium|low",
-  "reasoning": "brief explanation of how you arrived at the range"
-}"""
-
-_QUOTE_CONTENT_SYSTEM_PROMPT = """\
-You are a professional technical-sales writer for Machinecraft.
-Draft formal quote content for the given machine and configuration.
-
-Return ONLY valid JSON:
-{
-  "reference_number": "QT-YYYYMMDD-XXX (placeholder)",
-  "greeting": "personalised opening paragraph",
-  "scope_of_supply": ["line item 1", "line item 2"],
-  "technical_summary": "paragraph summarising the configuration",
-  "commercial_terms": {
-    "price": "to be filled by sales",
-    "payment_terms": "standard suggestion",
-    "delivery": "estimated lead time",
-    "warranty": "standard terms",
-    "validity": "30 days"
-  },
-  "closing": "professional closing paragraph"
-}"""
+_QUOTE_CONTENT_SYSTEM_PROMPT = load_prompt("quote_content")
 
 
 class PricingEngine:

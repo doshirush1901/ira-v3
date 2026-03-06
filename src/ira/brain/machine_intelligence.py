@@ -25,24 +25,9 @@ _KNOWLEDGE_FILE = Path("data/machine_knowledge.json")
 
 _SPECS_CATEGORY = "04_machine_manuals_and_specs"
 
-_RECOMMEND_SYSTEM_PROMPT = """\
-You are a technical sales engineer for Machinecraft, a manufacturer of
-industrial panel-forming, roll-forming, and slitting machinery.
+_RECOMMEND_SYSTEM_PROMPT = load_prompt("recommend_machine")
 
-Given the MACHINE CATALOG, TRUTH HINTS, and KNOWLEDGE BASE CONTEXT below,
-recommend the best machines for the customer's requirements.  For each
-recommendation include: model, why it fits, any caveats, and a rough
-budget indication.
-
-Return ONLY valid JSON — an array of objects:
-[{"model": "", "reason": "", "caveats": "", "budget_indication": ""}]"""
-
-_COMPARE_SYSTEM_PROMPT = """\
-You are a technical sales engineer for Machinecraft.
-
-Given the specs and context for two machines, produce a detailed Markdown
-comparison table covering: category, throughput, material range, key
-features, lead time, and ideal use-case.  Be precise and factual."""
+_COMPARE_SYSTEM_PROMPT = load_prompt("compare_machines")
 
 
 def _load_knowledge(path: Path = _KNOWLEDGE_FILE) -> dict[str, Any]:

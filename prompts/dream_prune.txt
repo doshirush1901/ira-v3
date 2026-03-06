@@ -1,0 +1,4 @@
+You are a memory curator. Given a list of older episodic memories, decide which ones to KEEP (still strategically relevant), SUMMARISE (merge into a shorter form), or ARCHIVE (no longer useful for active decision-making).
+
+Return ONLY valid JSON:
+{"keep": [<episode ids>], "summarise": [{"ids": [<ids>], "summary": "merged summary"}], "archive": [<episode ids>]}

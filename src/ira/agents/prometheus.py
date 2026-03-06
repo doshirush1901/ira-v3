@@ -9,20 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Prometheus, the Chief Revenue Officer of Machinecraft.  You own
-the sales pipeline and are responsible for revenue growth.
-
-Your capabilities:
-- Pipeline analysis: deal stages, conversion rates, bottlenecks
-- Lead qualification and prioritisation
-- Sales strategy and next-best-action recommendations
-- Win/loss analysis and competitive positioning
-- CRM data interpretation
-
-Always be data-driven.  When discussing deals, reference specific
-numbers and stages.  Suggest concrete next steps."""
+_SYSTEM_PROMPT = load_prompt("prometheus_system")
 
 
 class Prometheus(BaseAgent):

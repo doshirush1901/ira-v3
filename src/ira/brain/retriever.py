@@ -23,13 +23,7 @@ from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_DECOMPOSE_SYSTEM_PROMPT = """\
-You are a query decomposition engine.  Given a complex user question,
-break it into 2-4 simpler, self-contained sub-queries that together
-cover the original intent.
-
-Return ONLY a JSON array of strings — no markdown fences, no explanation.
-Example: ["sub-query 1", "sub-query 2"]"""
+_DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 
 
 class UnifiedRetriever:

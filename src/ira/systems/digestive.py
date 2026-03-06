@@ -23,41 +23,13 @@ from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
 from ira.data.models import Email, KnowledgeItem
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_NUTRIENT_SYSTEM_PROMPT = """\
-You are a data-quality classifier for an industrial machinery company called Machinecraft.
-Given a block of text, classify every piece of information into exactly one nutrient category.
+_NUTRIENT_SYSTEM_PROMPT = load_prompt("digestive_nutrient")
 
-Return ONLY valid JSON with this schema (no markdown fences):
-{
-  "protein": ["<high-value fact or figure 1>", "<decision or deadline 2>", ...],
-  "carbs": ["<general context paragraph 1>", "<background info 2>", ...],
-  "waste": ["<pleasantry or signature 1>", "<disclaimer 2>", ...]
-}
-
-Definitions:
-- protein: High-value facts, figures, names, dates, decisions, pricing, specs, commitments.
-- carbs: General context, background information, explanations, descriptions.
-- waste: Noise — pleasantries, greetings, signatures, disclaimers, legal boilerplate, filler.
-
-Be thorough. Every sentence should appear in exactly one category.
-Use empty lists when nothing fits a category."""
-
-_EMAIL_META_SYSTEM_PROMPT = """\
-You are a metadata extractor for business emails at an industrial machinery company.
-Given an email body, extract structured metadata.
-
-Return ONLY valid JSON with this schema (no markdown fences):
-{
-  "sender_info": {"name": "", "role": "", "company": ""},
-  "company_mentions": ["company name 1", ...],
-  "machine_mentions": ["model or machine name 1", ...],
-  "pricing_mentions": ["$X for Y", ...],
-  "dates_deadlines": ["date or deadline 1", ...]
-}
-Omit fields you cannot determine. Use empty lists/strings when nothing is found."""
+_EMAIL_META_SYSTEM_PROMPT = load_prompt("digestive_email_meta")
 
 
 class DigestiveSystem:

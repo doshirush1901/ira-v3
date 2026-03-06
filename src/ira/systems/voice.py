@@ -17,6 +17,7 @@ import httpx
 
 from ira.config import get_settings
 from ira.data.models import Contact, WarmthLevel
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -86,20 +87,7 @@ _CHANNEL_INSTRUCTIONS: dict[str, str] = {
     "CLI": "Use code blocks for data. Use bullet points for lists. Be detailed and technical.",
 }
 
-_SHAPING_SYSTEM_PROMPT = """\
-You are a response formatter for an AI assistant named Ira at Machinecraft, \
-an industrial machinery company.
-
-Reshape the following response according to these rules:
-- Channel: {channel} ({format_style})
-- Tone: {tone}
-- Max length: {max_length} characters
-- Behavioral note: {behavioral_addendum}
-
-Rules:
-- Preserve all factual content. Do not add information.
-- {channel_specific_instructions}
-- Return ONLY the reshaped response, nothing else."""
+_SHAPING_SYSTEM_PROMPT = load_prompt("voice_shaping")
 
 _SHORT_RESPONSE_THRESHOLD = 200
 

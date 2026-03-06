@@ -13,26 +13,13 @@ import httpx
 
 from ira.config import LLMConfig, get_settings
 from ira.memory.long_term import LongTermMemory
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_CONSOLIDATE_SYSTEM_PROMPT = (
-    "You are an analyst. Analyze the following conversation transcript and return "
-    "ONLY valid JSON with no other text. Required keys: "
-    '"narrative" (2-3 sentence summary), '
-    '"key_topics" (list of strings), '
-    '"decisions_made" (list of strings), '
-    '"commitments" (list of strings), '
-    '"emotional_tone" (string), '
-    '"relationship_impact" (one of: strengthened, maintained, strained, new_contact).'
-)
+_CONSOLIDATE_SYSTEM_PROMPT = load_prompt("consolidate_episode")
 
-_WEAVE_SYSTEM_PROMPT = (
-    "You are a relationship historian. Given a series of episode summaries for "
-    "interactions with a customer, weave them into a single coherent narrative "
-    "that tells the story of this relationship. Focus on how the relationship "
-    "evolved, key turning points, and the current state."
-)
+_WEAVE_SYSTEM_PROMPT = load_prompt("weave_episodes")
 
 
 class EpisodicMemory:

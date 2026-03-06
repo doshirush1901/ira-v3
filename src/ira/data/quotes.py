@@ -33,6 +33,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ira.config import get_settings
 from ira.data.crm import Base
 from ira.data.models import Contact
+from ira.prompt_loader import load_prompt
 
 _str_uuid = lambda: str(uuid4())  # noqa: E731
 
@@ -106,15 +107,7 @@ class QuoteModel(Base):
 
 # ── LLM prompt for inquiry extraction ───────────────────────────────────────
 
-_EXTRACT_SYSTEM_PROMPT = """\
-You are a sales analyst for Machinecraft, an industrial machinery manufacturer.
-Extract the machine model and configuration from the customer inquiry.
-
-Return ONLY valid JSON (no markdown fences):
-{"machine_model": "model name", "configuration": {"key": "value"}}
-
-If you cannot determine the machine model, use "UNKNOWN".
-"""
+_EXTRACT_SYSTEM_PROMPT = load_prompt("extract_machine_info")
 
 
 # ── QuoteManager service ────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -42,89 +43,15 @@ _DOMAIN_AGENTS: dict[str, str] = {
 
 # ── LLM prompts ──────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
-You are Nemesis, the adversarial trainer of the Machinecraft AI Pantheon.
-Your job is to make the system stronger by finding its weaknesses.
+_SYSTEM_PROMPT = load_prompt("nemesis_system")
 
-Your capabilities:
-- Generate challenging test queries that expose knowledge gaps
-- Stress-test agent responses for accuracy and consistency
-- Identify edge cases and failure modes
-- Create adversarial prompts to test robustness
-- Evaluate response quality and suggest improvements
+_SCENARIO_GEN_PROMPT = load_prompt("nemesis_scenario_gen")
 
-Be rigorous but constructive.  Your goal is improvement, not destruction.
-For each weakness found, suggest how to fix it."""
+_SCENARIO_GEN_FALLBACK_PROMPT = load_prompt("nemesis_scenario_gen_fallback")
 
-_SCENARIO_GEN_PROMPT = """\
-You are a training-scenario generator for an AI assistant that serves
-Machinecraft, an industrial machinery company.
+_IDEAL_RESPONSE_PROMPT = load_prompt("nemesis_ideal_response")
 
-Given the WEAK AREA description below, create a single challenging but
-realistic test query that a customer or employee might ask.  The query
-should probe the exact weakness described.
-
-Also identify which domain this query falls into (one of: sales, pricing,
-finance, marketing, production, hr, research, writing, forecasting).
-
-Return ONLY valid JSON (no markdown fences):
-{
-  "test_query": "<the challenging query>",
-  "domain": "<domain name>",
-  "difficulty": "easy" | "medium" | "hard",
-  "rationale": "<why this query is a good test>"
-}"""
-
-_SCENARIO_GEN_FALLBACK_PROMPT = """\
-You are a training-scenario generator for an AI assistant that serves
-Machinecraft, an industrial machinery company.
-
-Generate 3 diverse, challenging test queries that would stress-test the
-system across different domains.  Cover a mix of sales, production,
-pricing, and general knowledge.
-
-Return ONLY valid JSON (no markdown fences):
-[
-  {
-    "test_query": "<query 1>",
-    "domain": "<domain>",
-    "difficulty": "medium" | "hard",
-    "rationale": "<why>"
-  },
-  ...
-]"""
-
-_IDEAL_RESPONSE_PROMPT = """\
-You are a senior expert at Machinecraft, an industrial machinery company.
-Given the following query, provide the ideal, comprehensive response that
-a perfect AI assistant should give.
-
-Be specific, accurate, and thorough.  Include concrete details where
-possible.  This response will be used as a reference to evaluate another
-AI's answer."""
-
-_SCORING_PROMPT = """\
-You are a strict but fair evaluator of AI assistant responses.
-
-Compare the AGENT RESPONSE to the IDEAL RESPONSE for the given query.
-Score the agent on these dimensions (each 1-10):
-
-1. accuracy: Are the facts correct?
-2. completeness: Does it cover all key points from the ideal?
-3. clarity: Is it well-structured and easy to understand?
-4. actionability: Does it provide concrete next steps?
-
-Return ONLY valid JSON (no markdown fences):
-{
-  "accuracy": <int>,
-  "completeness": <int>,
-  "clarity": <int>,
-  "actionability": <int>,
-  "overall": <int 1-10>,
-  "strengths": ["<strength 1>", ...],
-  "weaknesses": ["<weakness 1>", ...],
-  "improvement_suggestion": "<one concrete suggestion>"
-}"""
+_SCORING_PROMPT = load_prompt("nemesis_scoring")
 
 
 @dataclass

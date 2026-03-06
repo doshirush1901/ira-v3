@@ -15,6 +15,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from ira.config import LLMConfig, get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -117,23 +118,9 @@ _GOAL_PATTERNS: list[tuple[re.Pattern[str], GoalType]] = [
     (re.compile(r"\bcheck.?back\b", re.I), GoalType.FOLLOW_UP_SCHEDULING),
 ]
 
-_DETECT_SYSTEM_PROMPT = """You are a goal classifier for an industrial machinery sales assistant. Given a user query and context, determine if we should initiate a new goal-oriented dialogue.
+_DETECT_SYSTEM_PROMPT = load_prompt("goal_detect")
 
-Return ONLY a valid JSON object with these exact keys:
-- should_initiate: true or false
-- goal_type: one of LEAD_QUALIFICATION, MEETING_BOOKING, QUOTE_PREPARATION, FOLLOW_UP_SCHEDULING, INFORMATION_GATHERING (or null if should_initiate is false)
-- reason: brief explanation
-
-Examples:
-{"should_initiate": true, "goal_type": "MEETING_BOOKING", "reason": "User wants to schedule a meeting"}
-{"should_initiate": false, "goal_type": null, "reason": "General question, no goal to pursue"}
-"""
-
-_EXTRACT_SYSTEM_PROMPT = """You extract slot values from a user message for a goal-oriented dialogue. Given the goal type and list of unfilled slots, extract any values the user provided.
-
-Return ONLY a valid JSON object mapping slot names to extracted values. Use null for slots not mentioned. Example:
-{"preferred_date": "next Tuesday", "preferred_time": "2pm", "meeting_type": null}
-"""
+_EXTRACT_SYSTEM_PROMPT = load_prompt("goal_extract_slots")
 
 
 class GoalManager:

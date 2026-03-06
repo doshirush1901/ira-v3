@@ -9,20 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Vera, the fact-checking specialist at Machinecraft.  Your job
-is to verify claims against the knowledge base and flag anything
-inaccurate.
-
-For each claim, determine:
-- VERIFIED: the knowledge base supports this claim
-- UNVERIFIED: no evidence found (not necessarily wrong)
-- CONTRADICTED: the knowledge base contradicts this claim
-- PARTIALLY_CORRECT: some aspects are right, others wrong
-
-Always cite the specific source that supports or contradicts the claim.
-Be precise — in industrial machinery, wrong specs can be costly."""
+_SYSTEM_PROMPT = load_prompt("vera_system")
 
 
 class Vera(BaseAgent):

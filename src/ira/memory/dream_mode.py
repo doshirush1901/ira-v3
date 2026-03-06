@@ -26,66 +26,23 @@ from ira.data.models import DreamReport
 from ira.memory.conversation import ConversationMemory
 from ira.memory.episodic import EpisodicMemory
 from ira.memory.long_term import LongTermMemory
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
 _DREAM_LOG_PATH = Path("dream_log.json")
 
-_GAP_SYSTEM_PROMPT = (
-    "You are a knowledge gap analyst. Given these queries where knowledge was insufficient, "
-    "group them by topic and generate a prioritized list of knowledge gaps.\n\n"
-    'Return ONLY valid JSON:\n'
-    '{"gaps": [{"topic": "", "description": "", "priority": "HIGH|MEDIUM|LOW", "related_queries": []}]}'
-)
+_GAP_SYSTEM_PROMPT = load_prompt("dream_gap_analysis")
 
-_CREATIVE_SYSTEM_PROMPT = (
-    "You are Ira's creative subconscious. During this dream cycle, you are processing recent "
-    "memories and knowledge gaps. Find novel, non-obvious connections between these pieces of "
-    "information. Think like a strategist: what patterns emerge? What market trends might be "
-    "forming? What cross-customer insights can you surface?\n\n"
-    'Return ONLY valid JSON:\n'
-    '{"connections": [{"insight": "", "supporting_evidence": [], "confidence": "HIGH|MEDIUM|LOW"}]}'
-)
+_CREATIVE_SYSTEM_PROMPT = load_prompt("dream_creative")
 
-_CAMPAIGN_SYSTEM_PROMPT = (
-    "You are a campaign performance analyst. Given these action outcomes and learning signals "
-    "from the past 7 days, analyze patterns and generate improvement suggestions. Focus on: "
-    "email reply rates, quote conversion, lead qualification accuracy, and outreach effectiveness.\n\n"
-    'Return ONLY valid JSON:\n'
-    '{"insights": []}'
-)
+_CAMPAIGN_SYSTEM_PROMPT = load_prompt("dream_campaign")
 
-_INSIGHT_SYSTEM_PROMPT = (
-    "You are Ira's deep-analysis engine. You are given a set of recent episodic memories "
-    "(narrative summaries of interactions). Your job is to find:\n"
-    "1. Recurring patterns (e.g. the same objection keeps appearing).\n"
-    "2. Contradictions (e.g. one customer says X, another says the opposite).\n"
-    "3. Strategic insights (e.g. a new market trend, a competitor move).\n"
-    "4. Actionable recommendations.\n\n"
-    "Return ONLY valid JSON:\n"
-    '{"patterns": [{"description": "", "frequency": 0, "examples": []}], '
-    '"contradictions": [{"description": "", "sources": []}], '
-    '"insights": [{"insight": "", "confidence": "HIGH|MEDIUM|LOW", "evidence": []}], '
-    '"recommendations": [{"action": "", "priority": "HIGH|MEDIUM|LOW", "rationale": ""}]}'
-)
+_INSIGHT_SYSTEM_PROMPT = load_prompt("dream_insight")
 
-_PROCEDURAL_SYSTEM_PROMPT = (
-    "You are a process optimisation engine. Given a set of strategic insights and the "
-    "episodes they were derived from, identify any repeatable successful action patterns "
-    "that should be codified as standard procedures.\n\n"
-    "Return ONLY valid JSON:\n"
-    '{"procedures": [{"trigger": "when this situation occurs", '
-    '"steps": ["step 1", "step 2"], "expected_outcome": "", "confidence": "HIGH|MEDIUM|LOW"}]}'
-)
+_PROCEDURAL_SYSTEM_PROMPT = load_prompt("dream_procedural")
 
-_PRUNE_SYSTEM_PROMPT = (
-    "You are a memory curator. Given a list of older episodic memories, decide which ones "
-    "to KEEP (still strategically relevant), SUMMARISE (merge into a shorter form), or "
-    "ARCHIVE (no longer useful for active decision-making).\n\n"
-    "Return ONLY valid JSON:\n"
-    '{"keep": [<episode ids>], "summarise": [{"ids": [<ids>], "summary": "merged summary"}], '
-    '"archive": [<episode ids>]}'
-)
+_PRUNE_SYSTEM_PROMPT = load_prompt("dream_prune")
 
 
 class DreamMode:

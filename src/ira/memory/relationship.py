@@ -13,16 +13,13 @@ from pydantic import BaseModel, Field
 
 from ira.config import LLMConfig, get_settings
 from ira.data.models import Interaction, WarmthLevel
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
 _WARMTH_ORDER = list(WarmthLevel)
 
-_MOMENTS_SYSTEM_PROMPT = (
-    "You are analyzing a business interaction for memorable moments. "
-    "Extract any personal shares, celebrations, difficulties, milestones, or notable events mentioned. "
-    "Return ONLY a JSON array of short strings. Return an empty array [] if nothing notable."
-)
+_MOMENTS_SYSTEM_PROMPT = load_prompt("memorable_moments")
 
 _GREETINGS: dict[WarmthLevel, str] = {
     WarmthLevel.STRANGER: "Hello, thank you for reaching out to Machinecraft. How can I help you today?",

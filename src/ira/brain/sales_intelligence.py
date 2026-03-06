@@ -41,46 +41,11 @@ class SalesCRMRepository(Protocol):
 
 _QUALIFY_SYSTEM_PROMPT = load_prompt("qualify_lead")
 
-_HEALTH_SYSTEM_PROMPT = """\
-You are a customer-success analyst.  Given the ENGAGEMENT DATA for a
-contact, calculate a health score (0-100) and explain your reasoning.
+_HEALTH_SYSTEM_PROMPT = load_prompt("customer_health")
 
-Return ONLY valid JSON:
-{
-  "health_score": 0,
-  "trend": "improving|stable|declining",
-  "engagement_frequency": "high|medium|low",
-  "average_response_days": 0,
-  "sentiment": "positive|neutral|negative",
-  "reasoning": "brief explanation"
-}"""
+_REENGAGE_SYSTEM_PROMPT = load_prompt("reengage_lead")
 
-_REENGAGE_SYSTEM_PROMPT = """\
-You are a sales strategist.  For each stale lead, suggest a personalised
-re-engagement strategy.
-
-Return ONLY valid JSON — an array of objects:
-[{
-  "contact_name": "",
-  "days_since_contact": 0,
-  "strategy": "brief re-engagement plan",
-  "suggested_channel": "EMAIL|TELEGRAM|PHONE",
-  "message_hook": "opening line suggestion"
-}]"""
-
-_INTEL_SYSTEM_PROMPT = """\
-You are a competitive-intelligence analyst.  Summarise the following raw
-search results about a company into a structured intelligence brief.
-
-Return ONLY valid JSON:
-{
-  "company_summary": "",
-  "recent_news": ["headline 1", "headline 2"],
-  "industry_trends": ["trend 1"],
-  "key_personnel": [{"name": "", "role": ""}],
-  "opportunities": ["opportunity 1"],
-  "risks": ["risk 1"]
-}"""
+_INTEL_SYSTEM_PROMPT = load_prompt("lead_intelligence")
 
 
 class SalesIntelligence:

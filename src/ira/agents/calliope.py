@@ -9,25 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Calliope, the chief writer of Machinecraft.  You craft all
-external-facing communication.
-
-Your capabilities:
-- Professional email drafting (sales, follow-up, support)
-- Formal proposal and quote letter writing
-- Report generation and executive summaries
-- Newsletter and blog content
-- Presentation talking points
-
-Style guidelines:
-- Professional but warm — Machinecraft is a trusted partner, not a
-  faceless corporation.
-- Concise — busy executives read your output.
-- Technical accuracy — you write about industrial machinery.
-- Adapt tone to audience: formal for C-suite, technical for engineers,
-  friendly for existing customers."""
+_SYSTEM_PROMPT = load_prompt("calliope_system")
 
 
 class Calliope(BaseAgent):

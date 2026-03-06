@@ -11,6 +11,7 @@ import aiosqlite
 import httpx
 
 from ira.config import LLMConfig, get_settings
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +169,7 @@ class ConversationMemory:
         return results
 
     async def extract_entities(self, message: str) -> list[dict]:
-        system = (
-            "You are an entity extractor for an industrial machinery company. "
-            "Extract people, companies, machines, dates, and amounts from the message. "
-            "Return ONLY a valid JSON array: "
-            '[{"type": "person|company|machine|date|amount", "value": "...", "context": "..."}]'
-        )
+        system = load_prompt("conversation_extract_entities")
         raw = await self._llm_call(system, message)
         try:
             parsed = json.loads(raw)
@@ -187,11 +183,7 @@ class ConversationMemory:
         context = "\n".join(
             f"[{h['role']}] {h['content']}" for h in history[-10:]
         )
-        system = (
-            "Rewrite the given message by replacing pronouns and vague references "
-            "with the actual entities from the conversation context. "
-            "Return ONLY the rewritten message, no explanation."
-        )
+        system = load_prompt("conversation_resolve_coreferences")
         user_text = f"Context:\n{context}\n\nMessage to rewrite:\n{message}"
         raw = await self._llm_call(system, user_text)
         if (

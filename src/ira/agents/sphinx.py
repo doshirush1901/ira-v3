@@ -9,20 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Sphinx, the gatekeeper of the Machinecraft AI Pantheon.  Your
-job is to evaluate whether a query has enough information to be answered
-well, and if not, ask the minimum necessary clarifying questions.
-
-Rules:
-- If the query is clear and actionable, respond with:
-  {"clear": true, "query": "original query"}
-- If clarification is needed, respond with:
-  {"clear": false, "questions": ["question 1", "question 2"]}
-- Ask at most 2-3 questions.
-- Be specific — don't ask vague questions like "can you elaborate?"
-- Consider what the specialist agents would need to give a good answer."""
+_SYSTEM_PROMPT = load_prompt("sphinx_system")
 
 
 class Sphinx(BaseAgent):

@@ -14,6 +14,7 @@ import httpx
 
 from ira.config import LLMConfig, get_settings
 from ira.data.models import EmotionalState
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,7 @@ _EMOTION_PATTERNS: list[tuple[re.Pattern[str], EmotionalState, float]] = [
     (re.compile(r"\bunclear\b", re.IGNORECASE), EmotionalState.UNCERTAIN, 1.5),
 ]
 
-_DETECT_SYSTEM_PROMPT = """Analyze the emotional state of the following text. Return ONLY valid JSON:
-{
-  "state": "NEUTRAL|POSITIVE|STRESSED|FRUSTRATED|CURIOUS|URGENT|GRATEFUL|UNCERTAIN",
-  "intensity": "MILD|MODERATE|STRONG",
-  "indicators": ["phrase or pattern that indicated this state"]
-}"""
+_DETECT_SYSTEM_PROMPT = load_prompt("detect_emotion")
 
 _ADJUSTMENTS: dict[tuple[EmotionalState, str], dict[str, Any]] = {
     (EmotionalState.STRESSED, "MILD"): {

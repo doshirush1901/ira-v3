@@ -12,20 +12,11 @@ import httpx
 
 from ira.config import LLMConfig, get_settings
 from ira.data.models import KnowledgeState
+from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_ASSESS_SYSTEM_PROMPT = """You are a knowledge quality assessor for an industrial machinery company. Given a user query and a set of retrieved context chunks, analyze the quality of the available information.
-
-Return ONLY valid JSON:
-{
-  "state": "KNOW_VERIFIED|KNOW_UNVERIFIED|PARTIAL|UNCERTAIN|CONFLICTING|UNKNOWN",
-  "confidence": 0.0,
-  "conflicts": ["description of conflict 1"],
-  "gaps": ["what information is missing 1"]
-}
-
-Consider: Are the sources authoritative (machine manuals vs. casual notes)? Is the information recent? Do multiple sources agree or contradict? Does the context fully answer the query or only partially?"""
+_ASSESS_SYSTEM_PROMPT = load_prompt("assess_knowledge")
 
 
 class Metacognition:

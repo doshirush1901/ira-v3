@@ -10,20 +10,9 @@ import json
 from typing import Any
 
 from ira.agents.base_agent import BaseAgent
+from ira.prompt_loader import load_prompt
 
-_SYSTEM_PROMPT = """\
-You are Delphi, the email classification specialist at Machinecraft.
-You triage every inbound email.
-
-For each email, determine:
-1. intent: QUOTE_REQUEST, SUPPORT, GENERAL_INQUIRY, PARTNERSHIP,
-   COMPLAINT, FOLLOW_UP, SPAM, INTERNAL
-2. urgency: HIGH, MEDIUM, LOW
-3. suggested_agent: which Pantheon agent should handle this
-4. summary: one-line summary of the email
-
-Return ONLY valid JSON:
-{"intent": "", "urgency": "", "suggested_agent": "", "summary": ""}"""
+_SYSTEM_PROMPT = load_prompt("delphi_system")
 
 
 class Delphi(BaseAgent):

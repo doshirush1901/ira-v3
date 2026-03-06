@@ -20,20 +20,7 @@ from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
-_EXTRACTION_SYSTEM_PROMPT = """\
-You are an entity-extraction engine for an industrial machinery company.
-Given a block of text, extract structured entities and relationships.
-
-Return ONLY valid JSON with this schema (no markdown fences):
-{
-  "companies": [{"name": "", "region": "", "industry": "", "website": ""}],
-  "people": [{"name": "", "email": "", "company": "", "role": ""}],
-  "machines": [{"model": "", "category": "", "description": ""}],
-  "relationships": [
-    {"from_type": "Person", "from_key": "", "rel": "WORKS_AT", "to_type": "Company", "to_key": ""}
-  ]
-}
-Omit fields you cannot determine.  Use empty lists when nothing is found."""
+_EXTRACTION_SYSTEM_PROMPT = load_prompt("extract_entities")
 
 
 class KnowledgeGraph:
