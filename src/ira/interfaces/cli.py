@@ -1,8 +1,8 @@
 """Ira CLI — command-line interface for the Machinecraft AI Pantheon.
 
 Provides interactive chat, single-query mode, email drafting and learning,
-document ingestion, dream cycles, board meetings, pipeline views, health
-checks, and agent introspection.
+document ingestion, dream cycles, board meetings, training cycles, pipeline
+views, health checks, and agent introspection.
 
 Usage::
 
@@ -13,6 +13,7 @@ Usage::
     ira ingest data/imports/
     ira dream
     ira board "Q3 European expansion strategy"
+    ira train
     ira pipeline
     ira health
     ira agents
@@ -502,6 +503,66 @@ def board(
             console.print(action_table)
 
     _run(_board())
+
+
+# ── Training ──────────────────────────────────────────────────────────────
+
+
+@app.command()
+def train(
+    scenarios: int = typer.Option(3, "--scenarios", "-n", help="Number of training scenarios to run."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run a Nemesis training cycle to stress-test agents and log results."""
+    _configure_logging(verbose)
+
+    pantheon = _build_pantheon()
+
+    async def _train() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.memory.procedural import ProceduralMemory
+        from ira.systems.learning_hub import LearningHub
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        procedural = ProceduralMemory()
+        await procedural.initialize()
+
+        learning_hub = LearningHub(crm=crm, procedural_memory=procedural)
+
+        async with pantheon:
+            nemesis = pantheon.get_agent("nemesis")
+            if nemesis is None:
+                console.print("[red]Nemesis agent not found.[/red]")
+                raise typer.Exit(1)
+
+            nemesis.configure(
+                learning_hub=learning_hub,
+                peer_agents=pantheon.agents,
+            )
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold red]Nemesis is training the Pantheon..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("training", total=None)
+                report = await nemesis.handle(
+                    "Run training cycle",
+                    {"num_scenarios": scenarios},
+                )
+
+        console.print(Panel(
+            Markdown(report),
+            title="Nemesis Training Report",
+            border_style="red",
+        ))
+
+        await procedural.close()
+
+    _run(_train())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-from ira.data.models import Contact, Email
+from ira.data.models import Channel, Contact, Direction, Email
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -508,3 +508,399 @@ class TestVoiceSystem:
         result = voice_system.format_for_email("Hello content", "Alice", "Test Subject")
         assert result.startswith("Dear Alice,")
         assert "Machinecraft AI Assistant" in result
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 7. LearningHub
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestLearningHub:
+    """Tests for ira.systems.learning_hub.LearningHub."""
+
+    @pytest.fixture()
+    def mock_crm(self):
+        crm = AsyncMock()
+        interaction = MagicMock()
+        interaction.id = str(uuid4())
+        interaction.subject = "What is the PF1-C lead time?"
+        interaction.content = "The lead time is 6 weeks."
+        interaction.channel = Channel.CLI
+        interaction.direction = Direction.INBOUND
+        crm.get_interaction = AsyncMock(return_value=interaction)
+        crm.create_interaction = AsyncMock(return_value=interaction)
+        return crm
+
+    @pytest.fixture()
+    def mock_procedural(self):
+        proc = AsyncMock()
+        proc.record_failure = AsyncMock()
+        proc.learn_procedure = AsyncMock(return_value=MagicMock(
+            id=1,
+            trigger_pattern="lead time for {machine}",
+            steps=["Step 1: Look up machine", "Step 2: Check inventory"],
+            success_rate=1.0,
+            times_used=1,
+        ))
+        return proc
+
+    @pytest.fixture()
+    def learning_hub(self, mock_crm, mock_procedural):
+        with patch("ira.systems.learning_hub.get_settings") as mock_settings:
+            mock_settings.return_value = _make_settings_mock()
+            from ira.systems.learning_hub import LearningHub
+            return LearningHub(crm=mock_crm, procedural_memory=mock_procedural)
+
+    @pytest.mark.asyncio
+    async def test_process_feedback_good_score(self, learning_hub, mock_crm):
+        record = await learning_hub.process_feedback("int-1", feedback_score=8)
+        assert record.feedback_score == 8
+        assert record.gap_analysis == {}
+        assert record.interaction_id == "int-1"
+
+    @pytest.mark.asyncio
+    async def test_process_feedback_poor_score_triggers_gap_analysis(
+        self, learning_hub, mock_procedural,
+    ):
+        gap_json = json.dumps({
+            "gap_type": "KNOWLEDGE_GAP",
+            "description": "Missing lead-time data",
+            "suggested_skill_name": None,
+            "suggested_skill_description": None,
+            "suggested_knowledge_source": "production database",
+        })
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
+            record = await learning_hub.process_feedback("int-2", feedback_score=2)
+
+        assert record.gap_analysis.get("gap_type") == "KNOWLEDGE_GAP"
+        mock_procedural.record_failure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_process_feedback_with_correction(self, learning_hub, mock_crm):
+        correction_json = json.dumps({
+            "error_category": "FACTUAL",
+            "what_was_wrong": "Wrong lead time",
+            "correct_behaviour": "Should say 8 weeks not 6",
+        })
+        gap_json = json.dumps({
+            "gap_type": "QUALITY_ISSUE",
+            "description": "Incorrect fact",
+            "suggested_skill_name": None,
+            "suggested_skill_description": None,
+            "suggested_knowledge_source": None,
+        })
+
+        call_count = 0
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _mock_openai_response(correction_json)
+            return _mock_openai_response(gap_json)
+
+        with patch("httpx.AsyncClient.post", side_effect=mock_post):
+            record = await learning_hub.process_feedback(
+                "int-3", feedback_score=2, correction="The lead time is 8 weeks.",
+            )
+
+        assert record.correction == "The lead time is 8 weeks."
+        assert record.correction_analysis.get("error_category") == "FACTUAL"
+
+    @pytest.mark.asyncio
+    async def test_suggest_procedure_from_interaction(self, learning_hub, mock_procedural):
+        steps_json = json.dumps(["Step 1: Look up machine", "Step 2: Check inventory"])
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(steps_json)):
+            procedure = await learning_hub.suggest_procedure("int-1")
+
+        assert procedure is not None
+        assert procedure.trigger_pattern == "lead time for {machine}"
+        mock_procedural.learn_procedure.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_suggest_procedure_missing_interaction(self, learning_hub, mock_crm):
+        mock_crm.get_interaction.return_value = None
+        result = await learning_hub.suggest_procedure("missing-id")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_weak_areas_returns_poor_feedback(self, learning_hub):
+        gap_json = json.dumps({"gap_type": "MISSING_SKILL", "description": "test"})
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
+            await learning_hub.process_feedback("int-a", feedback_score=1)
+            await learning_hub.process_feedback("int-b", feedback_score=8)
+            await learning_hub.process_feedback("int-c", feedback_score=2)
+
+        weak = learning_hub.get_weak_areas(limit=5)
+        assert len(weak) == 2
+        assert weak[0]["score"] == 1
+        assert weak[1]["score"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_weak_areas_empty_when_no_poor_feedback(self, learning_hub):
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response("{}")):
+            await learning_hub.process_feedback("int-ok", feedback_score=9)
+
+        assert learning_hub.get_weak_areas() == []
+
+    @pytest.mark.asyncio
+    async def test_identify_skill_gap_existing_skill(self, learning_hub):
+        gap_json = json.dumps({
+            "gap_type": "MISSING_SKILL",
+            "description": "Cannot summarise docs",
+            "suggested_skill_name": "summarize_document",
+            "suggested_skill_description": "Summarise long docs",
+            "suggested_knowledge_source": None,
+        })
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
+            gap = await learning_hub.identify_skill_gap("int-1")
+
+        assert gap["skill_already_exists"] is True
+        assert "existing_description" in gap
+
+    @pytest.mark.asyncio
+    async def test_identify_skill_gap_missing_interaction(self, learning_hub, mock_crm):
+        mock_crm.get_interaction.return_value = None
+        result = await learning_hub.identify_skill_gap("missing")
+        assert "error" in result
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 8. Nemesis training cycle
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestNemesisTraining:
+    """Tests for the Nemesis agent's training cycle with mocked dependencies."""
+
+    @pytest.fixture()
+    def mock_settings_ctx(self):
+        with patch("ira.config.get_settings", return_value=_make_settings_mock()) as m:
+            yield m
+
+    @pytest.fixture()
+    def nemesis(self, mock_settings_ctx):
+        from ira.agents.nemesis import Nemesis
+        retriever = AsyncMock()
+        retriever.search = AsyncMock(return_value=[])
+        retriever.search_by_category = AsyncMock(return_value=[])
+        bus = MagicMock()
+        return Nemesis(retriever=retriever, bus=bus)
+
+    @pytest.fixture()
+    def mock_target_agent(self):
+        agent = AsyncMock()
+        agent.name = "prometheus"
+        agent.handle = AsyncMock(return_value="Pipeline has 5 deals worth $2M total.")
+        return agent
+
+    @pytest.fixture()
+    def mock_learning_hub(self):
+        hub = MagicMock()
+        hub.get_weak_areas = MagicMock(return_value=[])
+        hub._crm = AsyncMock()
+        interaction = MagicMock()
+        interaction.id = str(uuid4())
+        hub._crm.create_interaction = AsyncMock(return_value=interaction)
+        hub.process_feedback = AsyncMock()
+        return hub
+
+    @pytest.mark.asyncio
+    async def test_handle_unconfigured_falls_back_to_llm(self, nemesis):
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response("Training analysis...")):
+            result = await nemesis.handle("Run training")
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    @pytest.mark.asyncio
+    async def test_handle_configured_runs_training_cycle(
+        self, nemesis, mock_learning_hub, mock_target_agent,
+    ):
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={"prometheus": mock_target_agent},
+        )
+
+        scores_json = json.dumps({
+            "accuracy": 7, "completeness": 6, "clarity": 8, "actionability": 5,
+            "overall": 7,
+            "strengths": ["Good data"],
+            "weaknesses": ["Missing next steps"],
+            "improvement_suggestion": "Add action items",
+        })
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
+            result = await nemesis.handle("Run training", {"num_scenarios": 1})
+
+        assert "Training Cycle Report" in result
+        mock_target_agent.handle.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_training_scenario_scores_agent(
+        self, nemesis, mock_learning_hub, mock_target_agent,
+    ):
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={"prometheus": mock_target_agent},
+        )
+
+        scores_json = json.dumps({
+            "accuracy": 8, "completeness": 7, "clarity": 9, "actionability": 6,
+            "overall": 8,
+            "strengths": ["Accurate"], "weaknesses": ["Verbose"],
+            "improvement_suggestion": "Be concise",
+        })
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
+            result = await nemesis.create_training_scenario({
+                "test_query": "Show me the sales pipeline",
+                "domain": "sales",
+                "difficulty": "medium",
+            })
+
+        assert result.target_agent == "prometheus"
+        assert result.overall_score == 8
+        assert result.agent_response == "Pipeline has 5 deals worth $2M total."
+        assert len(result.ideal_response) > 0
+        mock_learning_hub._crm.create_interaction.assert_awaited_once()
+        mock_learning_hub.process_feedback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_training_scenario_logs_correction_for_low_score(
+        self, nemesis, mock_learning_hub, mock_target_agent,
+    ):
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={"prometheus": mock_target_agent},
+        )
+
+        scores_json = json.dumps({
+            "accuracy": 2, "completeness": 3, "clarity": 4, "actionability": 1,
+            "overall": 3,
+            "strengths": [], "weaknesses": ["Everything"],
+            "improvement_suggestion": "Start over",
+        })
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
+            result = await nemesis.create_training_scenario({
+                "test_query": "Complex pricing question",
+                "domain": "sales",
+            })
+
+        assert result.overall_score == 3
+        feedback_call = mock_learning_hub.process_feedback.call_args
+        assert feedback_call.kwargs["feedback_score"] == 3
+        assert feedback_call.kwargs["correction"] is not None
+
+    @pytest.mark.asyncio
+    async def test_create_training_scenario_no_correction_for_high_score(
+        self, nemesis, mock_learning_hub, mock_target_agent,
+    ):
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={"prometheus": mock_target_agent},
+        )
+
+        scores_json = json.dumps({
+            "accuracy": 9, "completeness": 8, "clarity": 9, "actionability": 8,
+            "overall": 9,
+            "strengths": ["Excellent"], "weaknesses": [],
+            "improvement_suggestion": "None needed",
+        })
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
+            await nemesis.create_training_scenario({
+                "test_query": "Simple question",
+                "domain": "sales",
+            })
+
+        feedback_call = mock_learning_hub.process_feedback.call_args
+        assert feedback_call.kwargs["correction"] is None
+
+    @pytest.mark.asyncio
+    async def test_scenario_with_missing_agent_returns_zero_score(
+        self, nemesis, mock_learning_hub,
+    ):
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={},
+        )
+
+        result = await nemesis.create_training_scenario({
+            "test_query": "Test",
+            "domain": "sales",
+        })
+
+        assert result.overall_score == 0
+        assert "not available" in result.agent_response
+
+    @pytest.mark.asyncio
+    async def test_generate_scenarios_uses_weak_areas(
+        self, nemesis, mock_learning_hub,
+    ):
+        mock_learning_hub.get_weak_areas.return_value = [
+            {
+                "interaction_id": "int-1",
+                "score": 2,
+                "gap_analysis": {"gap_type": "KNOWLEDGE_GAP", "description": "Missing specs"},
+                "correction_analysis": {},
+            },
+        ]
+
+        scenario_json = json.dumps({
+            "test_query": "What are the PF1-C specs?",
+            "domain": "production",
+            "difficulty": "hard",
+            "rationale": "Tests machine spec knowledge",
+        })
+
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={"hephaestus": AsyncMock()},
+        )
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scenario_json)):
+            scenarios = await nemesis._generate_scenarios(1)
+
+        assert len(scenarios) == 1
+        assert scenarios[0]["domain"] == "production"
+        mock_learning_hub.get_weak_areas.assert_called_once_with(limit=1)
+
+    @pytest.mark.asyncio
+    async def test_generate_scenarios_fallback_when_no_weak_areas(
+        self, nemesis, mock_learning_hub,
+    ):
+        mock_learning_hub.get_weak_areas.return_value = []
+        nemesis.configure(
+            learning_hub=mock_learning_hub,
+            peer_agents={},
+        )
+
+        fallback_json = json.dumps([
+            {"test_query": "Q1", "domain": "sales", "difficulty": "medium", "rationale": "r1"},
+            {"test_query": "Q2", "domain": "pricing", "difficulty": "hard", "rationale": "r2"},
+        ])
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(fallback_json)):
+            scenarios = await nemesis._generate_scenarios(2)
+
+        assert len(scenarios) == 2
+        assert scenarios[0]["test_query"] == "Q1"
+
+    def test_format_training_report_empty(self, nemesis, mock_settings_ctx):
+        assert nemesis._format_training_report([]) == "No training scenarios were executed."
+
+    def test_format_training_report_pass_warn_fail(self, nemesis, mock_settings_ctx):
+        from ira.agents.nemesis import TrainingResult
+
+        results = [
+            TrainingResult(domain="sales", target_agent="prometheus", test_query="Q1", overall_score=8, scores={"strengths": [], "weaknesses": []}),
+            TrainingResult(domain="pricing", target_agent="plutus", test_query="Q2", overall_score=5, scores={"strengths": [], "weaknesses": []}),
+            TrainingResult(domain="hr", target_agent="themis", test_query="Q3", overall_score=2, scores={"strengths": [], "weaknesses": []}),
+        ]
+        report = nemesis._format_training_report(results)
+        assert "[PASS]" in report
+        assert "[WARN]" in report
+        assert "[FAIL]" in report
+        assert "5.0/10" in report

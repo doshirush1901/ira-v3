@@ -1,0 +1,440 @@
+"""Master request-processing pipeline — 11 steps from raw input to shaped response.
+
+Every inbound message, regardless of channel, flows through
+:func:`RequestPipeline.process_request`.  The pipeline is intentionally
+linear so that each step can be individually logged, timed, and tested.
+
+Steps
+-----
+1. **PERCEIVE** — SensorySystem resolves identity, emotional state, history.
+2. **REMEMBER** — ConversationMemory, RelationshipMemory, GoalManager.
+3. **ROUTE (Fast)** — DeterministicRouter for keyword-matched intents.
+4. **ROUTE (Procedure)** — ProceduralMemory for learned response patterns.
+5. **ROUTE (LLM)** — Athena for open-ended LLM-based routing.
+6. **EXECUTE** — Routed agent(s) produce a raw response.
+7. **ASSESS** — Metacognition evaluates confidence and adds caveats.
+8. **REFLECT** — InnerVoice surfaces optional reflections.
+9. **SHAPE** — VoiceSystem formats for channel and recipient.
+10. **LEARN** — Record in ConversationMemory, CRM, MusculoskeletalSystem; trigger Sophia.
+11. **RETURN** — Final shaped response.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from typing import Any
+
+from ira.data.models import Channel, Contact, Direction
+
+logger = logging.getLogger(__name__)
+
+
+class RequestPipeline:
+    """Stateful pipeline that holds references to every subsystem.
+
+    Construct once at application startup (e.g. in the FastAPI lifespan)
+    and reuse for every request.
+    """
+
+    def __init__(
+        self,
+        *,
+        sensory: Any,
+        conversation_memory: Any,
+        relationship_memory: Any | None = None,
+        goal_manager: Any | None = None,
+        procedural_memory: Any | None = None,
+        metacognition: Any | None = None,
+        inner_voice: Any | None = None,
+        pantheon: Any,
+        voice: Any,
+        endocrine: Any | None = None,
+        crm: Any | None = None,
+        musculoskeletal: Any | None = None,
+    ) -> None:
+        self._sensory = sensory
+        self._conversation = conversation_memory
+        self._relationship = relationship_memory
+        self._goals = goal_manager
+        self._procedural = procedural_memory
+        self._metacognition = metacognition
+        self._inner_voice = inner_voice
+        self._pantheon = pantheon
+        self._voice = voice
+        self._endocrine = endocrine
+        self._crm = crm
+        self._musculoskeletal = musculoskeletal
+
+        self._router = pantheon._router
+
+    # ── Public entry point ────────────────────────────────────────────────
+
+    async def process_request(
+        self,
+        raw_input: str,
+        channel: str,
+        sender_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Run the full 11-step pipeline and return the shaped response."""
+        t0 = time.monotonic()
+        meta = metadata or {}
+        trace: dict[str, Any] = {"channel": channel, "sender_id": sender_id}
+
+        # ── 1. PERCEIVE ───────────────────────────────────────────────
+        from ira.systems.sensory import PerceptionEvent
+
+        event = PerceptionEvent(
+            channel=Channel(channel),
+            raw_input=raw_input,
+            sender_id=sender_id,
+            sender_name=meta.get("sender_name"),
+            metadata=meta,
+        )
+        perception = await self._sensory.perceive(event)
+        contact_info = perception["resolved_contact"]
+        contact_email = contact_info["email"]
+        trace["contact"] = contact_email
+        logger.info("PERCEIVE | %s | %s", channel, contact_email)
+
+        # ── 2. REMEMBER ──────────────────────────────────────────────
+        history = await self._conversation.get_history(
+            contact_email, channel, limit=20,
+        )
+
+        relationship = None
+        if self._relationship is not None:
+            try:
+                relationship = await self._relationship.get_relationship(contact_email)
+            except Exception:
+                logger.exception("RelationshipMemory lookup failed")
+
+        active_goal = None
+        if self._goals is not None:
+            try:
+                active_goal = await self._goals.get_active_goal(contact_email)
+            except Exception:
+                logger.exception("GoalManager lookup failed")
+
+        resolved_input = raw_input
+        if history:
+            try:
+                resolved_input = await self._conversation.resolve_coreferences(
+                    raw_input, history,
+                )
+            except Exception:
+                logger.exception("Coreference resolution failed")
+
+        logger.info(
+            "REMEMBER | history=%d msgs | goal=%s",
+            len(history),
+            active_goal.goal_type.value if active_goal else "none",
+        )
+
+        # ── 3. ROUTE (Fast) ──────────────────────────────────────────
+        routing = self._router.route(resolved_input)
+        route_method: str | None = None
+        agent_names: list[str] = []
+
+        if routing is not None:
+            route_method = "deterministic"
+            agent_names = routing["required_agents"]
+            logger.info("ROUTE FAST | intent=%s -> %s", routing["intent"], agent_names)
+
+        # ── 4. ROUTE (Procedure) ─────────────────────────────────────
+        procedure = None
+        if route_method is None and self._procedural is not None:
+            try:
+                procedure = await self._procedural.find_procedure(resolved_input)
+            except Exception:
+                logger.exception("ProceduralMemory lookup failed")
+
+            if procedure is not None:
+                route_method = "procedural"
+                agent_names = procedure.steps
+                logger.info(
+                    "ROUTE PROCEDURE | pattern=%s (used %dx)",
+                    procedure.trigger_pattern,
+                    procedure.times_used,
+                )
+
+        # ── 5. ROUTE (LLM) ──────────────────────────────────────────
+        if route_method is None:
+            route_method = "llm"
+            logger.info("ROUTE LLM | delegating to Athena")
+
+        # ── 6. EXECUTE ───────────────────────────────────────────────
+        context: dict[str, Any] = {
+            "perception": perception,
+            "history": history[-5:],
+            "channel": channel,
+        }
+        if active_goal is not None:
+            context["active_goal"] = {
+                "type": active_goal.goal_type.value,
+                "progress": active_goal.progress,
+                "slots": active_goal.required_slots,
+            }
+        if relationship is not None:
+            context["relationship"] = {
+                "warmth": relationship.warmth_level.value,
+                "interaction_count": relationship.interaction_count,
+            }
+
+        raw_response: str
+        agents_used: list[str]
+
+        if route_method in ("deterministic", "procedural"):
+            raw_response, agents_used = await self._execute_routed(
+                agent_names, resolved_input, context,
+            )
+        else:
+            raw_response = await self._pantheon.process(resolved_input, context)
+            agents_used = ["athena"]
+
+        trace["route"] = route_method
+        trace["agents"] = agents_used
+        logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
+
+        # ── 7. ASSESS ────────────────────────────────────────────────
+        confidence_prefix = ""
+        if self._metacognition is not None:
+            try:
+                retriever = self._pantheon._retriever
+                kb_results = await retriever.search(resolved_input, limit=5)
+                assessment = await self._metacognition.assess_knowledge(
+                    resolved_input, kb_results,
+                )
+                confidence_prefix = self._metacognition.generate_confidence_prefix(
+                    assessment["state"], assessment["confidence"],
+                )
+                trace["confidence"] = assessment["confidence"]
+
+                if assessment.get("gaps"):
+                    await self._metacognition.log_knowledge_gap(
+                        resolved_input,
+                        assessment["state"],
+                        assessment["gaps"],
+                    )
+            except Exception:
+                logger.exception("Metacognition assessment failed")
+
+        # ── 8. REFLECT ───────────────────────────────────────────────
+        reflection_text = ""
+        if self._inner_voice is not None:
+            try:
+                reflection = await self._inner_voice.reflect(
+                    context=f"User ({contact_email}) on {channel}: {raw_input}",
+                    trigger=raw_response[:500],
+                )
+                if reflection.get("should_surface") and reflection.get("content"):
+                    reflection_text = f"\n\n_{reflection['content']}_"
+            except Exception:
+                logger.exception("InnerVoice reflection failed")
+
+        # ── 9. SHAPE ─────────────────────────────────────────────────
+        full_response = confidence_prefix + raw_response + reflection_text
+
+        recipient = Contact(
+            name=contact_info.get("name", ""),
+            email=contact_email,
+            company=contact_info.get("company"),
+            region=contact_info.get("region"),
+            source="pipeline",
+        )
+
+        modifiers = {}
+        if self._endocrine is not None:
+            try:
+                modifiers = self._endocrine.get_behavioral_modifiers()
+            except Exception:
+                logger.exception("Endocrine modifiers failed")
+
+        shaped = await self._voice.shape_response(
+            full_response,
+            channel,
+            recipient=recipient,
+            behavioral_modifiers=modifiers,
+        )
+
+        logger.info("SHAPE | channel=%s len=%d", channel, len(shaped))
+
+        # ── 10. LEARN ────────────────────────────────────────────────
+        await self._learn(
+            contact_email=contact_email,
+            channel=channel,
+            raw_input=raw_input,
+            raw_response=raw_response,
+            route_method=route_method,
+            agents_used=agents_used,
+            active_goal=active_goal,
+            resolved_input=resolved_input,
+        )
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "RETURN | %s | %.0fms | route=%s agents=%s",
+            contact_email,
+            elapsed_ms,
+            route_method,
+            agents_used,
+        )
+
+        # ── 11. RETURN ───────────────────────────────────────────────
+        return shaped
+
+    # ── Execution helpers ─────────────────────────────────────────────────
+
+    async def _execute_routed(
+        self,
+        agent_names: list[str],
+        query: str,
+        context: dict[str, Any],
+    ) -> tuple[str, list[str]]:
+        """Execute one or more agents by name, returning (response, names_used)."""
+        used: list[str] = []
+        responses: dict[str, str] = {}
+
+        for name in agent_names:
+            agent = self._pantheon.get_agent(name)
+            if agent is None:
+                logger.warning("Agent '%s' not found — skipping", name)
+                continue
+            try:
+                resp = await agent.handle(query, context)
+                responses[name] = resp
+                used.append(name)
+            except Exception:
+                logger.exception("Agent '%s' failed during execution", name)
+                responses[name] = f"(Agent '{name}' encountered an error)"
+                used.append(name)
+
+        if not responses:
+            return await self._pantheon.process(query, context), ["athena"]
+
+        if len(responses) == 1:
+            return next(iter(responses.values())), used
+
+        athena = self._pantheon.get_agent("athena")
+        if athena is not None:
+            synthesised = await athena.handle(
+                query, {"agent_responses": responses},
+            )
+            return synthesised, used + ["athena"]
+
+        return "\n\n".join(responses.values()), used
+
+    # ── Learning step ─────────────────────────────────────────────────────
+
+    async def _learn(
+        self,
+        *,
+        contact_email: str,
+        channel: str,
+        raw_input: str,
+        raw_response: str,
+        route_method: str,
+        agents_used: list[str],
+        active_goal: Any | None,
+        resolved_input: str,
+    ) -> None:
+        """Step 10: record the interaction across all memory and tracking systems."""
+
+        # Conversation memory
+        try:
+            await self._conversation.add_message(contact_email, channel, "user", raw_input)
+            await self._conversation.add_message(contact_email, channel, "assistant", raw_response)
+        except Exception:
+            logger.exception("ConversationMemory recording failed")
+
+        # CRM interaction log
+        if self._crm is not None:
+            try:
+                contact_record = await self._crm.get_contact_by_email(contact_email)
+                if contact_record is not None:
+                    await self._crm.create_interaction(
+                        contact_id=str(contact_record.id),
+                        channel=Channel(channel),
+                        direction=Direction.INBOUND,
+                        subject=raw_input[:200],
+                        content=json.dumps({
+                            "query": raw_input,
+                            "response_preview": raw_response[:500],
+                            "route": route_method,
+                            "agents": agents_used,
+                        }, default=str),
+                    )
+            except Exception:
+                logger.exception("CRM interaction logging failed")
+
+        # Musculoskeletal action tracking
+        if self._musculoskeletal is not None:
+            try:
+                from ira.systems.musculoskeletal import ActionRecord, ActionType
+
+                await self._musculoskeletal.record_action(
+                    ActionRecord(
+                        action_type=ActionType.RESEARCH_COMPLETED,
+                        target=contact_email,
+                        details={
+                            "channel": channel,
+                            "route": route_method,
+                            "agents": agents_used,
+                            "query_preview": raw_input[:200],
+                        },
+                    )
+                )
+            except Exception:
+                logger.exception("MusculoskeletalSystem recording failed")
+
+        # Goal slot extraction
+        if active_goal is not None and self._goals is not None:
+            try:
+                extracted = await self._goals.extract_slots(active_goal, raw_input)
+                if extracted:
+                    await self._goals.update_goal(active_goal.id, extracted)
+            except Exception:
+                logger.exception("GoalManager slot update failed")
+
+        # Goal detection for new goals
+        if active_goal is None and self._goals is not None:
+            try:
+                await self._goals.detect_goal(
+                    resolved_input,
+                    {"contact_id": contact_email, "channel": channel},
+                )
+            except Exception:
+                logger.exception("GoalManager detection failed")
+
+        # Procedural learning
+        if self._procedural is not None and route_method in ("deterministic", "llm"):
+            try:
+                await self._procedural.learn_procedure(
+                    resolved_input, agents_used,
+                )
+            except Exception:
+                logger.exception("ProceduralMemory learning failed")
+
+        # Trigger Sophia for background reflection (fire-and-forget)
+        sophia = self._pantheon.get_agent("sophia")
+        if sophia is not None:
+            try:
+                await sophia.handle(
+                    f"Reflect on this interaction: {raw_input[:300]}",
+                    {"response": raw_response[:300], "route": route_method},
+                )
+            except Exception:
+                logger.debug("Sophia reflection failed (non-critical)")
+
+        # Endocrine feedback
+        if self._endocrine is not None:
+            try:
+                self._endocrine.boost("growth_signal", 0.02)
+                if route_method == "deterministic":
+                    self._endocrine.boost("confidence", 0.01)
+            except Exception:
+                logger.debug("Endocrine update failed (non-critical)")
+
+        logger.info("LEARN | recorded for %s", contact_email)
