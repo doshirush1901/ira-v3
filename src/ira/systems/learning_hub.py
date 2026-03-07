@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -26,6 +28,9 @@ from ira.prompt_loader import load_prompt
 from ira.skills import SKILL_MATRIX
 
 logger = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_FEEDBACK_DB_PATH = _PROJECT_ROOT / "data" / "brain" / "feedback.db"
 
 _FEEDBACK_THRESHOLD_POOR = 3
 _FEEDBACK_THRESHOLD_GOOD = 7
@@ -64,6 +69,8 @@ class LearningHub:
         self._openai_model = llm.openai_model
 
         self._recent_feedback: list[FeedbackRecord] = []
+        self._init_db()
+        self._load_feedback()
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -118,6 +125,7 @@ class LearningHub:
             )
 
         self._recent_feedback.append(record)
+        self._save_feedback(record)
         logger.info(
             "Feedback recorded: interaction=%s score=%d has_correction=%s",
             interaction_id,
@@ -222,6 +230,69 @@ class LearningHub:
             return None
         total = sum(r.feedback_score for r in self._recent_feedback)
         return total / len(self._recent_feedback)
+
+    # ── persistence ────────────────────────────────────────────────────────
+
+    def _init_db(self) -> None:
+        _FEEDBACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                interaction_id TEXT NOT NULL,
+                feedback_score INTEGER NOT NULL,
+                correction TEXT,
+                correction_analysis TEXT DEFAULT '{}',
+                gap_analysis TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def _load_feedback(self) -> None:
+        try:
+            conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+            rows = conn.execute(
+                "SELECT interaction_id, feedback_score, correction, "
+                "correction_analysis, gap_analysis, created_at "
+                "FROM feedback ORDER BY id"
+            ).fetchall()
+            conn.close()
+            for row in rows:
+                self._recent_feedback.append(FeedbackRecord(
+                    interaction_id=row[0],
+                    feedback_score=row[1],
+                    correction=row[2],
+                    correction_analysis=json.loads(row[3]) if row[3] else {},
+                    gap_analysis=json.loads(row[4]) if row[4] else {},
+                    created_at=datetime.fromisoformat(row[5]),
+                ))
+            if self._recent_feedback:
+                logger.info("Loaded %d feedback records from disk", len(self._recent_feedback))
+        except Exception:
+            logger.warning("Failed to load feedback from disk", exc_info=True)
+
+    def _save_feedback(self, record: FeedbackRecord) -> None:
+        try:
+            conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+            conn.execute(
+                "INSERT INTO feedback "
+                "(interaction_id, feedback_score, correction, correction_analysis, gap_analysis, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    record.interaction_id,
+                    record.feedback_score,
+                    record.correction,
+                    json.dumps(record.correction_analysis),
+                    json.dumps(record.gap_analysis),
+                    record.created_at.isoformat(),
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            logger.warning("Failed to persist feedback record", exc_info=True)
 
     # ── internal helpers ──────────────────────────────────────────────────
 

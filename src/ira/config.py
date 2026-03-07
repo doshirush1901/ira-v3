@@ -74,7 +74,9 @@ class GoogleConfig(BaseSettings):
 
     credentials_path: Path = Path("credentials.json")
     token_path: Path = Path("token.json")
-    ira_email: str = "ira@machinecraft.org"
+    oauth_client_id: str = ""
+    oauth_client_secret: SecretStr = SecretStr("")
+    ira_email: str = "rushabh@machinecraft.org"
     training_email: str = ""
     email_mode: EmailMode = Field(
         default=EmailMode.TRAINING,
@@ -86,6 +88,14 @@ class ExternalAPIsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NEWSDATA_", **_COMMON)
 
     api_key: SecretStr = SecretStr("")
+
+
+class SearchConfig(BaseSettings):
+    model_config = SettingsConfigDict(**_COMMON)
+
+    tavily_api_key: SecretStr = SecretStr("")
+    searchapi_api_key: SecretStr = SecretStr("")
+    serper_api_key: SecretStr = SecretStr("")
 
 
 class AppConfig(BaseSettings):
@@ -111,6 +121,7 @@ class Settings(BaseSettings):
     telegram: TelegramConfig = TelegramConfig()
     google: GoogleConfig = GoogleConfig()
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
+    search: SearchConfig = SearchConfig()
     app: AppConfig = AppConfig()
 
 

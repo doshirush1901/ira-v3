@@ -475,6 +475,7 @@ class CRMDatabase:
                 deal.updated_at = datetime.now(timezone.utc)
             await session.commit()
             await session.refresh(deal)
+        await self._emit("deal_updated", "deal", str(deal.id), deal.to_dict())
         return deal
 
     async def list_deals(
@@ -504,6 +505,7 @@ class CRMDatabase:
             session.add(interaction)
             await session.commit()
             await session.refresh(interaction)
+        await self._emit("interaction_logged", "interaction", str(interaction.id), interaction.to_dict())
         return interaction
 
     async def get_interaction(
@@ -667,7 +669,7 @@ class CRMDatabase:
         }
 
     async def get_stale_leads(self, days: int = 14) -> list[dict[str, Any]]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff = datetime.utcnow() - timedelta(days=days)
 
         latest_interaction = (
             select(

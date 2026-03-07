@@ -4,16 +4,21 @@ Produces structured quote documents in markdown format with all
 standard sections (header, customer info, machine specs, pricing,
 payment terms, delivery, warranty).  Supports single-machine and
 multi-machine quotes.
+
+Equipped with ReAct tools for machine spec lookup, pricing calculation,
+quote document generation, past quote search, and cross-agent delegation
+to Plutus.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -44,6 +49,98 @@ class Quotebuilder(BaseAgent):
     name = "quotebuilder"
     role = "Quote Builder"
     description = "Structured quote generation for single and multi-machine orders"
+
+    # ── tool registration ────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="lookup_machine_specs",
+            description="Look up machine specifications for a given model.",
+            parameters={"model": "Machine model identifier (e.g. PF1500, AM-200)"},
+            handler=self._tool_lookup_machine_specs,
+        ))
+        self.register_tool(AgentTool(
+            name="calculate_pricing",
+            description="Calculate pricing for a machine model with optional features and quantity.",
+            parameters={
+                "model": "Machine model identifier",
+                "features": "Comma-separated features or configuration (default '')",
+                "quantity": "Number of units (default '1')",
+            },
+            handler=self._tool_calculate_pricing,
+        ))
+        self.register_tool(AgentTool(
+            name="generate_quote_document",
+            description="Generate a full structured quote document for a client.",
+            parameters={
+                "client": "Client/customer name",
+                "machine_model": "Machine model identifier",
+                "features": "Special features or requirements (default '')",
+                "terms": "Payment terms (default '')",
+            },
+            handler=self._tool_generate_quote_document,
+        ))
+        self.register_tool(AgentTool(
+            name="search_past_quotes",
+            description="Search past quotes and proposals in the knowledge base.",
+            parameters={"query": "Search query for past quotes"},
+            handler=self._tool_search_past_quotes,
+        ))
+        self.register_tool(AgentTool(
+            name="ask_plutus",
+            description="Delegate a financial or pricing question to Plutus, the CFO agent.",
+            parameters={"query": "Question for Plutus"},
+            handler=self._tool_ask_plutus,
+        ))
+
+    # ── tool handlers ────────────────────────────────────────────────────
+
+    async def _tool_lookup_machine_specs(self, model: str) -> str:
+        return await self.use_skill("lookup_machine_spec", machine_model=model)
+
+    async def _tool_calculate_pricing(
+        self, model: str, features: str = "", quantity: str = "1",
+    ) -> str:
+        return await self.use_skill(
+            "calculate_quote",
+            machine_model=model,
+            configuration={"features": features, "quantity": quantity},
+        )
+
+    async def _tool_generate_quote_document(
+        self, client: str, machine_model: str, features: str = "", terms: str = "",
+    ) -> str:
+        ctx: dict[str, Any] = {}
+        if features:
+            ctx["special_requirements"] = features
+        if terms:
+            ctx["payment_terms"] = terms
+        return await self.build_quote(client, machine_model, ctx)
+
+    async def _tool_search_past_quotes(self, query: str) -> str:
+        results = await self.search_knowledge(query, limit=8)
+        if not results:
+            return "No past quotes found."
+        return "\n".join(
+            f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
+            for r in results
+        )
+
+    async def _tool_ask_plutus(self, query: str) -> str:
+        pantheon = self._services.get("pantheon")
+        if not pantheon:
+            return "Pantheon service unavailable."
+        agent = pantheon.get_agent("plutus")
+        if agent is None:
+            return "Plutus agent not found."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Plutus error: {exc}"
+
+    # ── existing methods ─────────────────────────────────────────────────
 
     async def build_quote(
         self,
@@ -196,10 +293,4 @@ class Quotebuilder(BaseAgent):
                 context=query,
             )
 
-        kb_results = await self.search_knowledge(query, limit=8)
-        kb_context = self._format_context(kb_results)
-
-        return await self.call_llm(
-            _SYSTEM_PROMPT,
-            f"Query: {query}\n\nKnowledge Base:\n{kb_context}",
-        )
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)

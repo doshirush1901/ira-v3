@@ -31,12 +31,17 @@ class QdrantManager:
         self,
         embedding_service: EmbeddingService,
         config: QdrantConfig | None = None,
+        event_bus: Any | None = None,
     ) -> None:
         cfg = config or get_settings().qdrant
         api_key = cfg.api_key.get_secret_value() or None
         self._client = AsyncQdrantClient(url=cfg.url, api_key=api_key)
         self._embeddings = embedding_service
         self._default_collection = cfg.collection
+        self._event_bus = event_bus
+
+    def set_event_bus(self, event_bus: Any) -> None:
+        self._event_bus = event_bus
 
     # ── collection lifecycle ─────────────────────────────────────────────
 
@@ -123,6 +128,24 @@ class QdrantManager:
                 raise
 
         logger.info("Upserted %d items into '%s'", upserted, col)
+
+        if self._event_bus is not None and upserted > 0:
+            from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
+            try:
+                await self._event_bus.emit(DataEvent(
+                    event_type=EventType.CHUNK_UPSERTED,
+                    entity_type="knowledge_chunk",
+                    entity_id=col,
+                    payload={
+                        "collection": col,
+                        "count": upserted,
+                        "sources": list({it.source for it in items[:10]}),
+                    },
+                    source_store=SourceStore.QDRANT,
+                ))
+            except Exception:
+                logger.debug("Qdrant event emission failed", exc_info=True)
+
         return upserted
 
     # ── search ───────────────────────────────────────────────────────────

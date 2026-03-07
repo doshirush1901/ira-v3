@@ -115,12 +115,46 @@ def read_csv(path: Path) -> str:
     return buf.getvalue()
 
 
+def read_pptx(path: Path) -> str:
+    from pptx import Presentation
+
+    prs = Presentation(str(path))
+    parts: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        texts: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        texts.append(text)
+        if texts:
+            parts.append(f"[Slide {i}]")
+            parts.extend(texts)
+    return "\n".join(parts)
+
+
+def read_xls(path: Path) -> str:
+    import xlrd
+
+    wb = xlrd.open_workbook(str(path))
+    parts: list[str] = []
+    for sheet in wb.sheets():
+        parts.append(f"[Sheet: {sheet.name}]")
+        for row_idx in range(sheet.nrows):
+            cells = [str(sheet.cell_value(row_idx, col)) for col in range(sheet.ncols)]
+            parts.append("\t".join(cells))
+    return "\n".join(parts)
+
+
 _READERS = {
     ".pdf": read_pdf,
     ".xlsx": read_xlsx,
+    ".xls": read_xls,
     ".docx": read_docx,
     ".txt": read_txt,
     ".csv": read_csv,
+    ".pptx": read_pptx,
 }
 
 
@@ -375,12 +409,30 @@ class DocumentIngestor:
             except Exception:
                 logger.warning("Failed to add machine from %s: %s", source, machine)
 
+        rel_count = 0
+        for rel in entities.get("relationships", []):
+            try:
+                ok = await self._graph.add_relationship(
+                    from_type=rel.get("from_type", ""),
+                    from_key=rel.get("from_key", ""),
+                    rel_type=rel.get("rel", ""),
+                    to_type=rel.get("to_type", ""),
+                    to_key=rel.get("to_key", ""),
+                    properties={k: v for k, v in rel.items()
+                                if k not in ("from_type", "from_key", "rel", "to_type", "to_key")},
+                )
+                if ok:
+                    rel_count += 1
+            except Exception:
+                logger.warning("Failed to add relationship from %s: %s", source, rel)
+
         logger.info(
-            "Extracted entities from %s: %d companies, %d people, %d machines",
+            "Extracted entities from %s: %d companies, %d people, %d machines, %d relationships",
             source,
             len(entities.get("companies", [])),
             len(entities.get("people", [])),
             len(entities.get("machines", [])),
+            rel_count,
         )
 
     # ── ledger helpers ───────────────────────────────────────────────────

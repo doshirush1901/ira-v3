@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,13 @@ class Plutus(BaseAgent):
     name = "plutus"
     role = "Chief Financial Officer"
     description = "Financial analysis, pricing, quote generation, and budget oversight"
+    knowledge_categories = [
+        "quotes_and_proposals",
+        "tally_exports",
+        "machinecraft finance",
+        "contracts_and_legal",
+        "business plans",
+    ]
 
     @property
     def _pricing_engine(self) -> Any | None:
@@ -38,30 +45,114 @@ class Plutus(BaseAgent):
     def _quotes(self) -> Any | None:
         return self._services.get("quotes")
 
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        if self._pricing_engine:
+            self.register_tool(AgentTool(
+                name="estimate_price",
+                description="Estimate the price for a machine model with optional features.",
+                parameters={
+                    "machine_model": "Machine model identifier (e.g. PF1-500)",
+                    "features": "Comma-separated optional features (default empty)",
+                },
+                handler=self._tool_estimate_price,
+            ))
+
+        if self._quotes:
+            self.register_tool(AgentTool(
+                name="get_quote",
+                description="Retrieve a specific quote by its ID.",
+                parameters={"quote_id": "The quote identifier"},
+                handler=self._tool_get_quote,
+            ))
+
+        self.register_tool(AgentTool(
+            name="search_financial_docs",
+            description="Search the financial knowledge base for documents, contracts, and reports.",
+            parameters={"query": "Search query"},
+            handler=self._tool_search_financial_docs,
+        ))
+
+        if self._crm:
+            self.register_tool(AgentTool(
+                name="get_deal_financials",
+                description="Get financial details for a specific deal by ID.",
+                parameters={"deal_id": "The deal identifier"},
+                handler=self._tool_get_deal_financials,
+            ))
+
+        self.register_tool(AgentTool(
+            name="generate_invoice",
+            description="Generate an invoice for a customer, optionally from a quote.",
+            parameters={
+                "customer": "Customer name or identifier",
+                "quote_id": "Optional quote ID to base the invoice on",
+                "items": "Optional comma-separated line items",
+            },
+            handler=self._tool_generate_invoice,
+        ))
+
+        if self._services.get("pantheon"):
+            self.register_tool(AgentTool(
+                name="ask_prometheus",
+                description="Delegate a sales/CRM question to the Prometheus (CRO) agent.",
+                parameters={"query": "The sales or CRM question"},
+                handler=self._tool_ask_prometheus,
+            ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_estimate_price(self, machine_model: str, features: str = "") -> str:
+        config = {"features": features} if features else {}
+        estimate = await self._pricing_engine.estimate_price(machine_model, config)
+        return json.dumps(estimate, default=str)
+
+    async def _tool_get_quote(self, quote_id: str) -> str:
+        quote = await self._quotes.get_quote(quote_id)
+        return json.dumps(quote, default=str) if quote else f"Quote '{quote_id}' not found."
+
+    async def _tool_search_financial_docs(self, query: str) -> str:
+        results = await self.search_domain_knowledge(query)
+        return self._format_context(results)
+
+    async def _tool_get_deal_financials(self, deal_id: str) -> str:
+        deal = await self._crm.get_deal(deal_id)
+        return json.dumps(deal, default=str) if deal else f"Deal '{deal_id}' not found."
+
+    async def _tool_generate_invoice(self, customer: str, quote_id: str = "", items: str = "") -> str:
+        return await self.use_skill(
+            "generate_invoice", customer=customer, quote_id=quote_id,
+        )
+
+    async def _tool_ask_prometheus(self, query: str) -> str:
+        pantheon = self._services["pantheon"]
+        agent = pantheon.get_agent("prometheus")
+        if agent is None:
+            return "Prometheus agent not available."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Prometheus error: {exc}"
+
+    # ── main handler ──────────────────────────────────────────────────────
+
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = context or {}
+        task = ctx.get("task", "")
 
-        pricing_context = ""
-        if self._pricing_engine and self._should_estimate_price(query, ctx):
-            pricing_context = await self._get_pricing_context(query, ctx)
+        if task == "generate_invoice":
+            return await self.use_skill(
+                "generate_invoice",
+                quote_id=ctx.get("quote_id", ""),
+                order_id=ctx.get("order_id", ""),
+            )
 
-        crm_context = ""
-        if self._crm and self._should_pull_crm(query, ctx):
-            crm_context = await self._get_crm_context(query, ctx)
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
-        kb_results = await self.search_category(
-            query, category="quotes_and_proposals", limit=8,
-        )
-        kb_context = self._format_context(kb_results)
-
-        sections = [f"Query: {query}"]
-        if pricing_context:
-            sections.append(f"Pricing Intelligence:\n{pricing_context}")
-        if crm_context:
-            sections.append(f"CRM Deal Data:\n{crm_context}")
-        sections.append(f"Historical Quotes (Knowledge Base):\n{kb_context}")
-
-        return await self.call_llm(_SYSTEM_PROMPT, "\n\n".join(sections))
+    # ── private helpers (kept for backward compat) ────────────────────────
 
     def _should_estimate_price(self, query: str, ctx: dict[str, Any]) -> bool:
         price_keywords = {"quote", "price", "cost", "estimate", "pricing", "budget", "value"}

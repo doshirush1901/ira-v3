@@ -26,7 +26,9 @@ from ira.brain.document_ingestor import (
     read_csv,
     read_docx,
     read_pdf,
+    read_pptx,
     read_txt,
+    read_xls,
     read_xlsx,
 )
 from ira.config import get_settings
@@ -45,9 +47,11 @@ _LLM_MODEL = "gpt-4.1-mini"
 _READERS: dict[str, Callable[[Path], str]] = {
     ".pdf": read_pdf,
     ".xlsx": read_xlsx,
+    ".xls": read_xls,
     ".docx": read_docx,
     ".txt": read_txt,
     ".csv": read_csv,
+    ".pptx": read_pptx,
 }
 
 
@@ -291,18 +295,60 @@ async def build_index(
 # ── keyword search ───────────────────────────────────────────────────────
 
 
-def search_index(query: str, limit: int = 10) -> list[dict[str, Any]]:
+_STEM_MAP: dict[str, str] = {
+    "quotes": "quote", "quotations": "quote", "quotation": "quote",
+    "machines": "machine", "specifications": "spec", "specs": "spec",
+    "proposals": "proposal", "orders": "order", "invoices": "invoice",
+    "contracts": "contract", "presentations": "presentation",
+    "customers": "customer", "companies": "company",
+    "documents": "document", "files": "file",
+    "brochures": "brochure", "catalogues": "catalogue", "catalogs": "catalogue",
+    "manuals": "manual", "reports": "report", "emails": "email",
+}
+
+_TOPIC_TRIGGERS: dict[str, set[str]] = {
+    "pricing": {"price", "cost", "quote", "lakh", "usd", "inr", "euro", "budget"},
+    "specs": {"spec", "specification", "technical", "heater", "vacuum", "forming", "dimension"},
+    "customer": {"customer", "order", "client", "company", "buyer"},
+    "application": {"application", "automotive", "bathtub", "packaging", "food", "medical"},
+    "lead": {"lead", "prospect", "inquiry", "visitor", "contact"},
+    "marketing": {"marketing", "campaign", "drip", "newsletter", "linkedin"},
+    "shipping": {"shipping", "freight", "logistics", "delivery", "transport"},
+    "installation": {"installation", "commissioning", "setup", "assembly"},
+    "competitor": {"competitor", "competition", "illig", "kiefel", "brown", "maac"},
+}
+
+
+def _stem_words(words: set[str]) -> set[str]:
+    """Expand a word set with basic stem normalisations."""
+    expanded = set(words)
+    for w in words:
+        if w in _STEM_MAP:
+            expanded.add(_STEM_MAP[w])
+        for full, stem in _STEM_MAP.items():
+            if stem == w:
+                expanded.add(full)
+    return expanded
+
+
+def search_index(
+    query: str,
+    limit: int = 10,
+    doc_type_filter: str = "",
+) -> list[dict[str, Any]]:
     """Score files against a query using metadata fields.
 
     Weights: machine match (5), entity match (3), topic match (2),
     keyword overlap (1), summary hit (0.5), filename hit (0.3).
+
+    *doc_type_filter*: if set, only return files of this doc_type.
     """
     index = load_index()
     if not index.get("files"):
         return []
 
     query_lower = query.lower()
-    query_words = set(re.findall(r"\b\w{3,}\b", query_lower))
+    query_words = _stem_words(set(re.findall(r"\b\w{3,}\b", query_lower)))
 
     query_machines = {
         m.upper().replace(" ", "-")
@@ -313,15 +359,11 @@ def search_index(query: str, limit: int = 10) -> list[dict[str, Any]]:
         )
     }
 
-    _topic_triggers: dict[str, set[str]] = {
-        "pricing": {"price", "cost", "quote", "lakh", "usd", "inr"},
-        "specs": {"spec", "specification", "technical", "heater", "vacuum", "forming"},
-        "customer": {"customer", "order", "client", "company"},
-        "application": {"application", "automotive", "bathtub", "packaging"},
-    }
-
     results: list[dict[str, Any]] = []
     for rel_path, meta in index["files"].items():
+        if doc_type_filter and meta.get("doc_type", "") != doc_type_filter:
+            continue
+
         score = 0.0
 
         file_machines = {m.upper() for m in meta.get("machines", [])}
@@ -331,7 +373,7 @@ def search_index(query: str, limit: int = 10) -> list[dict[str, Any]]:
         score += len(query_words & file_keywords) * 1.0
 
         file_topics = {t.lower() for t in meta.get("topics", [])}
-        for topic, triggers in _topic_triggers.items():
+        for topic, triggers in _TOPIC_TRIGGERS.items():
             if triggers & query_words and topic in file_topics:
                 score += 2.0
 

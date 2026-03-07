@@ -124,6 +124,28 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["crm"] = crm
     _services["quotes"] = quotes
 
+    # ── Circulatory system (data sync) ────────────────────────────────
+    from ira.systems.circulatory import CirculatorySystem
+    from ira.systems.data_event_bus import DataEventBus
+
+    data_event_bus = DataEventBus()
+    await data_event_bus.start()
+
+    crm.set_event_bus(data_event_bus)
+    graph.set_event_bus(data_event_bus)
+    qdrant.set_event_bus(data_event_bus)
+
+    circulatory = CirculatorySystem(
+        data_event_bus,
+        crm=crm,
+        graph=graph,
+        qdrant=qdrant,
+        embedding=embedding,
+    )
+
+    _services["data_event_bus"] = data_event_bus
+    _services["circulatory"] = circulatory
+
     # ── Pricing engine ────────────────────────────────────────────────
     from ira.brain.pricing_engine import PricingEngine
 
@@ -242,6 +264,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["procedural_memory"] = procedural_memory
     _services["learning_hub"] = learning_hub
 
+    nemesis = pantheon.get_agent("nemesis")
+    if nemesis is not None:
+        nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
+
     # ── Additional memory systems ─────────────────────────────────────
     from ira.memory.emotional_intelligence import EmotionalIntelligence
     from ira.memory.goal_manager import GoalManager
@@ -270,6 +296,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["goal_manager"] = goal_manager
     _services["metacognition"] = metacognition
     _services["inner_voice"] = inner_voice
+
+    # ── Inject ALL memory services into Pantheon agents ───────────────
+    pantheon.inject_services({
+        "long_term_memory": long_term,
+        "episodic_memory": episodic,
+        "conversation_memory": conversation,
+        "relationship_memory": relationship_memory,
+        "goal_manager": goal_manager,
+        "emotional_intelligence": emotional_intelligence,
+        "procedural_memory": procedural_memory,
+        "learning_hub": learning_hub,
+        "data_event_bus": data_event_bus,
+        "pantheon": pantheon,
+    })
 
     # ── Unified context ───────────────────────────────────────────────
     from ira.context import UnifiedContextManager
@@ -340,8 +380,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.systems.respiratory import RespiratorySystem
 
     respiratory = RespiratorySystem(
-        digestive=digestive,
-        ingestor=ingestor,
         dream_mode=dream_mode,
         drip_engine=drip_engine,
         immune_system=immune,
@@ -390,6 +428,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             pass
 
     await respiratory.stop()
+    await data_event_bus.stop()
     await pantheon.stop()
     await sensory.close()
     await musculoskeletal.close()

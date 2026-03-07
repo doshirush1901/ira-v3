@@ -14,7 +14,7 @@ from typing import Any
 
 import aiosqlite
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,84 @@ class Atlas(BaseAgent):
     name = "atlas"
     role = "Project Manager"
     description = "Project tracking, event logging, production scheduling, and payment milestone alerts"
+    knowledge_categories = [
+        "orders_and_pos",
+        "production",
+        "current machine orders",
+        "project_case_studies",
+        "company_internal",
+        "contracts_and_legal",
+        "business plans",
+    ]
 
     _db_initialised: bool = False
+
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="get_project_status",
+            description="Get a full project summary including logbook events and KB data.",
+            parameters={"project_id": "Project name or identifier"},
+            handler=self._tool_get_project_status,
+        ))
+        self.register_tool(AgentTool(
+            name="log_project_event",
+            description="Log an event to a project's logbook (creates the project if new).",
+            parameters={
+                "project_id": "Project name or identifier",
+                "event": "Description of the event to log",
+            },
+            handler=self._tool_log_project_event,
+        ))
+        self.register_tool(AgentTool(
+            name="get_overdue_milestones",
+            description="Check for overdue payment milestones and pending invoices across projects.",
+            parameters={},
+            handler=self._tool_get_overdue_milestones,
+        ))
+        self.register_tool(AgentTool(
+            name="get_production_schedule",
+            description="Get the current production schedule with active project timelines.",
+            parameters={"project_id": "Optional project name to filter (empty for all)"},
+            handler=self._tool_get_production_schedule,
+        ))
+
+        if self._services.get("pantheon"):
+            self.register_tool(AgentTool(
+                name="ask_hephaestus",
+                description="Delegate a production/machine specs question to the Hephaestus agent.",
+                parameters={"query": "The production or machine question"},
+                handler=self._tool_ask_hephaestus,
+            ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_get_project_status(self, project_id: str) -> str:
+        return await self.project_summary(project_id)
+
+    async def _tool_log_project_event(self, project_id: str, event: str) -> str:
+        return await self.log_event(project_id, "note", event)
+
+    async def _tool_get_overdue_milestones(self) -> str:
+        return await self.payment_alerts()
+
+    async def _tool_get_production_schedule(self, project_id: str = "") -> str:
+        return await self.production_schedule()
+
+    async def _tool_ask_hephaestus(self, query: str) -> str:
+        pantheon = self._services["pantheon"]
+        agent = pantheon.get_agent("hephaestus")
+        if agent is None:
+            return "Hephaestus agent not available."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Hephaestus error: {exc}"
+
+    # ── DB setup ──────────────────────────────────────────────────────────
 
     async def _ensure_db(self) -> None:
         if self._db_initialised:
@@ -56,6 +132,8 @@ class Atlas(BaseAgent):
             await db.executescript(_INIT_SQL)
             await db.commit()
         self._db_initialised = True
+
+    # ── main handler ──────────────────────────────────────────────────────
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         await self._ensure_db()
@@ -85,17 +163,13 @@ class Atlas(BaseAgent):
                 attendees=ctx.get("attendees", []),
             )
 
-        kb_results = await self.search_knowledge(query, limit=8)
-        kb_context = self._format_context(kb_results)
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
-        return await self.call_llm(
-            _SYSTEM_PROMPT,
-            f"Query: {query}\n\nProject Context:\n{kb_context}",
-        )
+    # ── existing methods ──────────────────────────────────────────────────
 
     async def project_summary(self, project_name: str) -> str:
         """Combine KB data with logbook entries for a project summary."""
-        kb_results = await self.search_knowledge(
+        kb_results = await self.search_domain_knowledge(
             f"project {project_name} status timeline", limit=8,
         )
         kb_context = self._format_context(kb_results)
@@ -176,7 +250,7 @@ class Atlas(BaseAgent):
 
     async def production_schedule(self) -> str:
         """Search KB for current production schedule data."""
-        results = await self.search_knowledge(
+        results = await self.search_domain_knowledge(
             "production schedule timeline delivery dates manufacturing", limit=10,
         )
         kb_context = self._format_context(results)
@@ -206,7 +280,7 @@ class Atlas(BaseAgent):
 
     async def payment_alerts(self) -> str:
         """Check for overdue payment milestones across projects."""
-        results = await self.search_knowledge(
+        results = await self.search_domain_knowledge(
             "payment milestone overdue invoice pending receivable", limit=10,
         )
         kb_context = self._format_context(results)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from datetime import datetime
@@ -32,7 +33,9 @@ from ira.brain.document_ingestor import (
     read_csv,
     read_docx,
     read_pdf,
+    read_pptx,
     read_txt,
+    read_xls,
     read_xlsx,
 )
 from ira.brain.imports_metadata_index import (
@@ -56,9 +59,11 @@ _RRF_K = 60
 _READERS = {
     ".pdf": read_pdf,
     ".xlsx": read_xlsx,
+    ".xls": read_xls,
     ".docx": read_docx,
     ".txt": read_txt,
     ".csv": read_csv,
+    ".pptx": read_pptx,
 }
 
 _embedding_cache: dict[str, list[float]] | None = None
@@ -150,7 +155,12 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
         summary = meta.get("summary", "")
         entities = ", ".join(meta.get("entities", []))
         machines = ", ".join(meta.get("machines", []))
-        text = f"{meta.get('name', '')}. {summary}. {entities}. {machines}".strip()
+        topics = ", ".join(meta.get("topics", []))
+        keywords = ", ".join(meta.get("keywords", []))
+        text = (
+            f"{meta.get('name', '')}. {summary}. "
+            f"{entities}. {machines}. {topics}. {keywords}"
+        ).strip()
         if len(text) > 10:
             to_embed[rel_path] = text
 
@@ -233,22 +243,44 @@ async def _semantic_search(query: str, limit: int = 10) -> list[dict[str, Any]]:
 # ── hybrid search (keyword + semantic, RRF merge) ───────────────────────
 
 
-async def hybrid_search(query: str, limit: int = _MAX_CANDIDATES) -> list[dict[str, Any]]:
-    """Merge keyword and semantic results via reciprocal rank fusion."""
-    kw_results = search_index(query, limit=limit * 2)
+_MODEL_NUMBER_RE = re.compile(
+    r"PF1[-\s]?[A-Z]?[-\s]?\d|AM[-\s]?\w+\d|IMG[-\s]?\d|FCS[-\s]?\w|UNO[-\s]?\w|DUO[-\s]?\w",
+    re.IGNORECASE,
+)
+
+
+async def hybrid_search(
+    query: str,
+    limit: int = _MAX_CANDIDATES,
+    doc_type_filter: str = "",
+) -> list[dict[str, Any]]:
+    """Merge keyword and semantic results via weighted reciprocal rank fusion.
+
+    When the query contains a machine model number, keyword results get
+    1.5x weight (exact model matching matters more).  Otherwise semantic
+    results get 1.5x weight (meaning-based matching is more useful).
+    """
+    kw_results = search_index(query, limit=limit * 2, doc_type_filter=doc_type_filter)
     sem_results = await _semantic_search(query, limit=limit * 2)
+
+    if doc_type_filter and sem_results:
+        sem_results = [r for r in sem_results if r.get("doc_type") == doc_type_filter]
+
+    has_model = bool(_MODEL_NUMBER_RE.search(query))
+    kw_weight = 1.5 if has_model else 1.0
+    sem_weight = 1.0 if has_model else 1.5
 
     rrf_scores: dict[str, float] = {}
     result_map: dict[str, dict[str, Any]] = {}
 
     for rank, r in enumerate(kw_results):
         path = r["path"]
-        rrf_scores[path] = rrf_scores.get(path, 0) + 1.0 / (_RRF_K + rank + 1)
+        rrf_scores[path] = rrf_scores.get(path, 0) + kw_weight / (_RRF_K + rank + 1)
         result_map.setdefault(path, r)
 
     for rank, r in enumerate(sem_results):
         path = r["path"]
-        rrf_scores[path] = rrf_scores.get(path, 0) + 1.0 / (_RRF_K + rank + 1)
+        rrf_scores[path] = rrf_scores.get(path, 0) + sem_weight / (_RRF_K + rank + 1)
         result_map.setdefault(path, r)
 
     ranked = sorted(rrf_scores.items(), key=lambda x: -x[1])

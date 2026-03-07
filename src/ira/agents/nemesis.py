@@ -11,6 +11,9 @@ The primary tool is :meth:`create_training_scenario`, which:
 3. Routes the query to the appropriate specialist agent.
 4. Generates an ideal reference answer via a high-quality LLM call.
 5. Scores the agent's response against the ideal and logs the result.
+
+Equipped with ReAct tools for correction ingestion, training cycle
+execution, adversarial scenario creation, and training stats retrieval.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.brain.correction_store import CorrectionCategory, CorrectionSeverity, CorrectionStore
 from ira.prompt_loader import load_prompt
 
@@ -97,6 +100,154 @@ class Nemesis(BaseAgent):
             self._correction_store = CorrectionStore()
             await self._correction_store.initialize()
         return self._correction_store
+
+    # ── tool registration ────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="ingest_correction",
+            description="Ingest a correction for an agent — records what was wrong and what the correct answer is.",
+            parameters={
+                "agent_name": "Name of the agent that made the error",
+                "original": "The original (incorrect) response or value",
+                "corrected": "The correct response or value",
+                "reason": "Why this is a correction / what was wrong",
+            },
+            handler=self._tool_ingest_correction,
+        ))
+        self.register_tool(AgentTool(
+            name="run_training",
+            description="Run a training cycle: generate adversarial scenarios, test agents, and score responses.",
+            parameters={
+                "agent_name": "Target agent name (empty string for all agents)",
+                "num_scenarios": "Number of scenarios to generate (default '3')",
+            },
+            handler=self._tool_run_training,
+        ))
+        self.register_tool(AgentTool(
+            name="create_adversarial_scenario",
+            description="Create a single adversarial training scenario for a specific agent.",
+            parameters={
+                "agent_name": "Target agent name",
+                "difficulty": "Difficulty level: 'easy', 'medium', or 'hard' (default 'medium')",
+            },
+            handler=self._tool_create_adversarial_scenario,
+        ))
+        self.register_tool(AgentTool(
+            name="get_training_stats",
+            description="Get training statistics: correction counts, recent corrections, and store health.",
+            parameters={},
+            handler=self._tool_get_training_stats,
+        ))
+
+    # ── tool handlers ────────────────────────────────────────────────────
+
+    async def _tool_ingest_correction(
+        self, agent_name: str, original: str, corrected: str, reason: str,
+    ) -> str:
+        context = {
+            "agent_name": agent_name,
+            "original_response": original,
+            "reason": reason,
+        }
+        user_message = (
+            f"Correction for agent '{agent_name}': "
+            f"The original answer was: {original}. "
+            f"The correct answer is: {corrected}. "
+            f"Reason: {reason}"
+        )
+        return await self.ingest_correction(user_message, context)
+
+    async def _tool_run_training(
+        self, agent_name: str = "", num_scenarios: str = "3",
+    ) -> str:
+        count = int(num_scenarios) if num_scenarios.isdigit() else 3
+
+        if self._learning_hub is None or not self._peer_agents:
+            return "Training infrastructure not configured (no LearningHub or peer agents)."
+
+        results = await self.run_training_cycle(num_scenarios=count)
+        return self._format_training_report(results)
+
+    async def _tool_create_adversarial_scenario(
+        self, agent_name: str, difficulty: str = "medium",
+    ) -> str:
+        if not self._peer_agents:
+            return "No peer agents configured for training."
+
+        target_agent = agent_name.lower() if agent_name else "clio"
+        domain = "research"
+        for d, a in _DOMAIN_AGENTS.items():
+            if a == target_agent:
+                domain = d
+                break
+
+        scenario = {
+            "test_query": (
+                f"Generate a {difficulty}-difficulty test for the {target_agent} agent "
+                f"in the {domain} domain."
+            ),
+            "domain": domain,
+            "difficulty": difficulty,
+        }
+
+        raw = await self.call_llm(
+            _SCENARIO_GEN_FALLBACK_PROMPT,
+            f"Generate 1 {difficulty}-difficulty training scenario for the "
+            f"{domain} domain targeting the {target_agent} agent.",
+            temperature=0.7,
+        )
+        parsed = self._safe_parse(raw)
+        if isinstance(parsed, list) and parsed:
+            scenario = parsed[0] if isinstance(parsed[0], dict) else scenario
+        elif isinstance(parsed, dict) and "test_query" in parsed:
+            scenario = parsed
+
+        scenario["domain"] = domain
+
+        result = await self.create_training_scenario(scenario)
+        return (
+            f"**Scenario:** {result.test_query}\n"
+            f"**Agent:** {result.target_agent}\n"
+            f"**Score:** {result.overall_score}/10\n"
+            f"**Response preview:** {result.agent_response[:500]}"
+        )
+
+    async def _tool_get_training_stats(self) -> str:
+        store = await self._ensure_correction_store()
+        try:
+            all_corrections = await store.get_corrections()
+            total = len(all_corrections)
+
+            by_category: dict[str, int] = {}
+            by_severity: dict[str, int] = {}
+            recent = all_corrections[:5] if all_corrections else []
+
+            for c in all_corrections:
+                cat = c.get("category", "GENERAL")
+                sev = c.get("severity", "MEDIUM")
+                by_category[cat] = by_category.get(cat, 0) + 1
+                by_severity[sev] = by_severity.get(sev, 0) + 1
+
+            stats = {
+                "total_corrections": total,
+                "by_category": by_category,
+                "by_severity": by_severity,
+                "recent_corrections": [
+                    {
+                        "id": c.get("id", "?"),
+                        "entity": c.get("entity", "?"),
+                        "category": c.get("category", "?"),
+                        "source": c.get("source", "?"),
+                    }
+                    for c in recent
+                ],
+            }
+            return json.dumps(stats, default=str)
+        except Exception as exc:
+            return f"Could not retrieve training stats: {exc}"
 
     # ── correction ingestion ──────────────────────────────────────────────
 
@@ -288,12 +439,7 @@ class Nemesis(BaseAgent):
         num_scenarios = ctx.get("num_scenarios", 3)
 
         if self._learning_hub is None or not self._peer_agents:
-            kb_results = await self.search_knowledge(query, limit=5)
-            kb_context = self._format_context(kb_results)
-            return await self.call_llm(
-                _SYSTEM_PROMPT,
-                f"Training request: {query}\n\nSystem Knowledge Sample:\n{kb_context}",
-            )
+            return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
         results = await self.run_training_cycle(num_scenarios=num_scenarios)
         return self._format_training_report(results)

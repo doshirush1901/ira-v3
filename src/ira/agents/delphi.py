@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,106 @@ class Delphi(BaseAgent):
         "closing_technique",
     ]
 
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="classify_email",
+            description="Classify an email's intent, urgency, suggested agent, and summary.",
+            parameters={"email_content": "The raw email text to classify"},
+            handler=self._tool_classify_email,
+        ))
+        self.register_tool(AgentTool(
+            name="classify_contact",
+            description="Classify a contact for CRM eligibility (customer, lead, etc.).",
+            parameters={
+                "email": "Contact email address",
+                "context": "Optional additional context about the contact",
+            },
+            handler=self._tool_classify_contact,
+        ))
+        self.register_tool(AgentTool(
+            name="run_shadow_sim",
+            description="Score Ira's response against Rushabh's style on 8 dimensions.",
+            parameters={
+                "query": "The original query",
+                "ira_response": "Ira's generated response",
+                "contact_context": "Optional JSON context about the contact",
+            },
+            handler=self._tool_run_shadow_sim,
+        ))
+        self.register_tool(AgentTool(
+            name="build_interaction_map",
+            description="Build a communication pattern map for a contact from KB history.",
+            parameters={"contact_email": "The contact's email address"},
+            handler=self._tool_build_interaction_map,
+        ))
+        self.register_tool(AgentTool(
+            name="clone_voice",
+            description="Generate a response in Rushabh's communication style.",
+            parameters={
+                "query": "The query to respond to as Rushabh",
+                "context": "Optional JSON context (contact_email, etc.)",
+            },
+            handler=self._tool_clone_voice,
+        ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_classify_email(self, email_content: str) -> str:
+        raw = await self.call_llm(
+            _EMAIL_SYSTEM_PROMPT,
+            f"Email content:\n{email_content}",
+        )
+        try:
+            parsed = self._parse_json_response(raw)
+            if isinstance(parsed, dict):
+                return json.dumps(parsed, default=str)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return json.dumps({
+            "intent": "unknown",
+            "urgency": "medium",
+            "suggested_agent": "athena",
+            "summary": raw[:500],
+        })
+
+    async def _tool_classify_contact(self, email: str, context: str = "") -> str:
+        ctx: dict[str, Any] = {"contact_data": {"email": email}}
+        if context:
+            try:
+                ctx.update(json.loads(context))
+            except (json.JSONDecodeError, ValueError):
+                ctx["extra_context"] = context
+        return await self._classify_contact(email, ctx)
+
+    async def _tool_run_shadow_sim(self, query: str, ira_response: str, contact_context: str = "") -> str:
+        ctx: dict[str, Any] = {}
+        if contact_context:
+            try:
+                ctx = json.loads(contact_context)
+            except (json.JSONDecodeError, ValueError):
+                ctx = {"raw_context": contact_context}
+        result = await self.run_shadow_simulation(query, ira_response, ctx)
+        return json.dumps(result, default=str)
+
+    async def _tool_build_interaction_map(self, contact_email: str) -> str:
+        result = await self.build_interaction_map(contact_email)
+        return json.dumps(result, default=str)
+
+    async def _tool_clone_voice(self, query: str, context: str = "") -> str:
+        ctx: dict[str, Any] = {}
+        if context:
+            try:
+                ctx = json.loads(context)
+            except (json.JSONDecodeError, ValueError):
+                ctx = {"raw_context": context}
+        return await self.rushabh_voice(query, ctx)
+
+    # ── main handler ──────────────────────────────────────────────────────
+
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = context or {}
         action = ctx.get("action", "")
@@ -63,14 +163,9 @@ class Delphi(BaseAgent):
         if action == "rushabh_voice":
             return await self.rushabh_voice(query, ctx)
 
-        raw = await self.call_llm(_EMAIL_SYSTEM_PROMPT, f"Email content:\n{query}")
+        return await self.run(query, context, system_prompt=_EMAIL_SYSTEM_PROMPT)
 
-        try:
-            self._parse_json_response(raw)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        return raw
+    # ── existing methods ──────────────────────────────────────────────────
 
     async def build_interaction_map(self, contact_email: str) -> dict[str, Any]:
         """Search KB for all interactions with a contact and build a communication pattern map."""
@@ -176,11 +271,7 @@ class Delphi(BaseAgent):
         )
 
     async def _classify_contact(self, query: str, ctx: dict[str, Any]) -> str:
-        """Classify a contact for CRM inclusion.
-
-        Gathers all available signals — KB matches, email history from
-        context, order data — and asks the LLM to classify.
-        """
+        """Classify a contact for CRM inclusion."""
         contact_data = ctx.get("contact_data", {})
         email = contact_data.get("email", "")
         name = contact_data.get("name", "")

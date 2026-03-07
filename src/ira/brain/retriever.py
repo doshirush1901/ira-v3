@@ -157,17 +157,35 @@ class UnifiedRetriever:
         return await self._qdrant.hybrid_search(query, limit=limit)
 
     async def _search_graph(self, query: str) -> list[dict[str, Any]]:
-        """Extract entities from the query via LLM, then look each up in Neo4j."""
+        """Extract entities from the query via LLM, then look each up in Neo4j.
+
+        Scores are assigned based on match quality:
+        - Direct name match on the queried entity: 0.85
+        - 1-hop related nodes: 0.65
+        - 2+-hop related nodes: 0.45
+        """
         entity_names = await self._extract_entity_names(query)
         if not entity_names:
             entity_names = [query]
 
+        query_lower = query.lower()
         all_results: list[dict[str, Any]] = []
         seen: set[str] = set()
 
         for name in entity_names:
-            subgraph = await self._graph.find_related_entities(name, max_hops=1)
+            subgraph = await self._graph.find_related_entities(name, max_hops=2)
             nodes = subgraph.get("nodes", [])
+            relationships = subgraph.get("relationships", [])
+            name_lower = name.lower()
+
+            rel_strings: list[str] = []
+            for rel in relationships:
+                if isinstance(rel, dict):
+                    rel_type = rel.get("type", "RELATED_TO")
+                    from_name = rel.get("from", "?")
+                    to_name = rel.get("to", "?")
+                    rel_strings.append(f"{from_name} -[{rel_type}]-> {to_name}")
+
             for node in nodes:
                 props = dict(node) if hasattr(node, "__iter__") else {"value": str(node)}
                 content_parts = [f"{k}: {v}" for k, v in props.items() if v]
@@ -175,14 +193,37 @@ class UnifiedRetriever:
                 if content in seen:
                     continue
                 seen.add(content)
+
+                node_name = str(props.get("name", "")).lower()
+                if node_name == name_lower or node_name in query_lower:
+                    score = 0.85
+                elif any(name_lower in str(v).lower() for v in props.values() if v):
+                    score = 0.65
+                else:
+                    score = 0.45
+
                 all_results.append(
                     {
                         "content": content,
-                        "score": 0.5,
+                        "score": score,
                         "source": "neo4j",
                         "metadata": props,
                     }
                 )
+
+            if rel_strings:
+                rel_content = "Graph relationships: " + "; ".join(rel_strings)
+                if rel_content not in seen:
+                    seen.add(rel_content)
+                    all_results.append(
+                        {
+                            "content": rel_content,
+                            "score": 0.75,
+                            "source": "neo4j",
+                            "metadata": {"type": "relationships", "entity": name},
+                        }
+                    )
+
         return all_results
 
     async def _extract_entity_names(self, query: str) -> list[str]:
@@ -233,7 +274,12 @@ class UnifiedRetriever:
         if self._mem0 is None:
             return []
         try:
-            memories = self._mem0.search(query, limit=limit)
+            raw = self._mem0.search(
+                query,
+                filters={"user_id": "global"},
+                top_k=limit,
+            )
+            memories = raw.get("results", raw) if isinstance(raw, dict) else raw
             return [
                 {
                     "content": m.get("memory", m.get("text", "")),

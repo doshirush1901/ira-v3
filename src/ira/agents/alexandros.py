@@ -1,38 +1,69 @@
-"""Alexandros — The Librarian.
+"""Alexandros — The Librarian and Ingestion Gatekeeper.
 
 Gatekeeper of ``data/imports/``.  Every file in the archive has been
 catalogued with an LLM-generated summary, entities, machines, topics,
 and keywords.  Alexandros holds this catalogue in memory and serves
 three functions:
 
-1. **ask** — hybrid search (keyword NN + Voyage semantic) over the
-   catalogue, extract text from the best matching files, return raw content.
+1. **ask** — hybrid search (keyword + Voyage semantic) over the
+   catalogue, extract text from the best matching files, and synthesise
+   a focused answer via LLM.
 2. **browse** — list files in a folder with summaries.
 3. **read_file** — read a specific file by name.
 
-After every retrieval, the accessed file is queued for proper Qdrant
-ingestion during the next sleep cycle.
+As Ingestion Gatekeeper, Alexandros also owns the ingestion log and
+decides which files need to be ingested (or re-ingested) into Qdrant
+through the DigestiveSystem pipeline.  The respiratory system's inhale
+cycle delegates to ``run_ingestion_cycle()`` rather than calling the
+raw ingestor directly.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.brain.imports_fallback_retriever import (
     extract_file_text,
     hybrid_search,
     queue_for_deferred_ingestion,
 )
-from ira.brain.imports_metadata_index import load_index
+from ira.brain.imports_metadata_index import IMPORTS_DIR, load_index
+from ira.brain.ingestion_gatekeeper import (
+    run_ingestion_cycle,
+    scan_for_undigested,
+)
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = load_prompt("alexandros_system")
+
+_DOC_TYPE_HINTS: dict[str, str] = {
+    "quote": {"price", "cost", "quote", "quotation", "offer", "pricing", "lakh", "inr", "usd", "euro"},
+    "technical_spec": {"spec", "specification", "technical", "dimension", "capacity", "heater"},
+    "order": {"order", "purchase", "po"},
+    "contract": {"contract", "agreement", "nda", "terms"},
+    "lead_list": {"lead", "prospect", "contact", "visitor"},
+    "presentation": {"presentation", "ppt", "slide", "deck"},
+    "manual": {"manual", "instruction", "operating", "guide"},
+    "catalogue": {"catalogue", "catalog", "brochure"},
+}
+
+
+def _infer_doc_type(query: str) -> str:
+    """Infer a doc_type filter from query keywords, or return empty."""
+    words = set(re.findall(r"\b\w{3,}\b", query.lower()))
+    best, best_overlap = "", 0
+    for dtype, triggers in _DOC_TYPE_HINTS.items():
+        overlap = len(words & triggers)
+        if overlap > best_overlap:
+            best, best_overlap = dtype, overlap
+    return best if best_overlap >= 2 else ""
 
 
 class Alexandros(BaseAgent):
@@ -43,11 +74,84 @@ class Alexandros(BaseAgent):
         "and reads files from data/imports/ using LLM-generated metadata."
     )
 
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="search_archive",
+            description="Hybrid search the document archive by query. Optionally filter by folder.",
+            parameters={
+                "query": "Search query",
+                "folder": "Optional folder name to restrict search to",
+            },
+            handler=self._tool_search_archive,
+        ))
+        self.register_tool(AgentTool(
+            name="browse_folder",
+            description="List files in an archive folder with summaries and metadata.",
+            parameters={"path": "Folder name or search term (empty for root listing)"},
+            handler=self._tool_browse_folder,
+        ))
+        self.register_tool(AgentTool(
+            name="read_file",
+            description="Read the full text of a specific file from the archive.",
+            parameters={"file_path": "Filename or relative path in the archive"},
+            handler=self._tool_read_file,
+        ))
+        self.register_tool(AgentTool(
+            name="get_archive_stats",
+            description="Get statistics about the archive (file counts, types, folders).",
+            parameters={},
+            handler=self._tool_get_archive_stats,
+        ))
+        self.register_tool(AgentTool(
+            name="scan_undigested",
+            description="Scan for files not yet ingested into the vector store.",
+            parameters={},
+            handler=self._tool_scan_undigested,
+        ))
+        self.register_tool(AgentTool(
+            name="queue_for_ingestion",
+            description="Queue a file for ingestion into the vector store.",
+            parameters={"file_path": "Path of the file to ingest"},
+            handler=self._tool_queue_for_ingestion,
+        ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_search_archive(self, query: str, folder: str = "") -> str:
+        ctx: dict[str, Any] = {}
+        if folder:
+            ctx["doc_type"] = ""
+        result = await self.ask(query, ctx)
+        return result
+
+    async def _tool_browse_folder(self, path: str = "") -> str:
+        return await self.browse(path or "")
+
+    async def _tool_read_file(self, file_path: str) -> str:
+        return await self.read_file(file_path)
+
+    async def _tool_get_archive_stats(self) -> str:
+        return self.stats()
+
+    async def _tool_scan_undigested(self) -> str:
+        results = self.scan_for_undigested_files()
+        if not results:
+            return "All files are up to date — nothing to ingest."
+        return json.dumps(results[:20], default=str)
+
+    async def _tool_queue_for_ingestion(self, file_path: str) -> str:
+        result = await self.run_ingestion(batch_size=1)
+        return json.dumps(result, default=str)
+
     # ── main handler (orchestrator entry point) ──────────────────────────
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         context = context or {}
-        action = context.get("action", "ask")
+        action = context.get("action", "")
 
         if action == "browse":
             return await self.browse(
@@ -59,16 +163,27 @@ class Alexandros(BaseAgent):
         if action == "stats":
             return self.stats()
 
-        return await self.ask(query, context)
+        if action == "ask":
+            return await self.ask(query, context)
+
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
     # ── Tool 1: ask — the main search interface ─────────────────────────
 
     async def ask(self, query: str, context: dict[str, Any] | None = None) -> str:
-        """Hybrid search the catalogue, extract text, return raw content."""
+        """Hybrid search the catalogue, extract text, optionally synthesise."""
         context = context or {}
 
+        doc_type_filter = context.get("doc_type", "") or _infer_doc_type(query)
+        synthesize = context.get("synthesize", True)
         limit = 5 if context.get("full_text_in_body") else 3
-        candidates = await hybrid_search(query, limit=limit)
+
+        candidates = await hybrid_search(
+            query, limit=limit, doc_type_filter=doc_type_filter,
+        )
+
+        if not candidates and doc_type_filter:
+            candidates = await hybrid_search(query, limit=limit, doc_type_filter="")
 
         if context.get("full_text_in_body") and candidates:
             query_terms = set(re.findall(r"\w+", query.lower())) - {
@@ -99,7 +214,8 @@ class Alexandros(BaseAgent):
                 f"a customer name, machine model, or project number."
             )
 
-        results: list[str] = []
+        doc_texts: list[str] = []
+        citations: list[str] = []
         for candidate in candidates:
             filepath = candidate.get("path", "")
             filename = candidate.get("name", "")
@@ -115,21 +231,71 @@ class Alexandros(BaseAgent):
                 f"Type: {candidate.get('doc_type', 'unknown')} | "
                 f"Summary: {candidate.get('summary', 'N/A')[:200]}\n"
             )
-            results.append(header + text)
+            doc_texts.append(header + text)
+            citations.append(
+                f"- **{filename}** ({candidate.get('doc_type', 'unknown')}): "
+                f"{candidate.get('summary', 'N/A')[:150]}"
+            )
 
             queue_for_deferred_ingestion(
                 filepath, filename, query,
                 candidate.get("doc_type", "other"),
             )
 
-        if not results:
+        if not doc_texts:
             return "Alexandros: Found candidates but couldn't extract text. Files may be images or corrupted."
 
-        preamble = (
-            f"**Alexandros retrieved {len(results)} document(s) from the archive "
-            f'for: "{query}"**\n\n'
+        if not synthesize:
+            preamble = (
+                f"**Alexandros retrieved {len(doc_texts)} document(s) from the archive "
+                f'for: "{query}"**\n\n'
+            )
+            return preamble + "\n\n".join(doc_texts)
+
+        return await self._synthesize(query, doc_texts, citations)
+
+    async def _synthesize(
+        self,
+        query: str,
+        doc_texts: list[str],
+        citations: list[str],
+    ) -> str:
+        """Use LLM to produce a focused answer from retrieved documents."""
+        combined = "\n\n---\n\n".join(doc_texts)
+        if len(combined) > 12000:
+            combined = combined[:12000] + "\n\n[... truncated ...]"
+
+        system = (
+            "You are Alexandros, the Librarian of the Machinecraft AI Pantheon. "
+            "You have retrieved documents from the archive. Synthesise a clear, "
+            "focused answer to the user's question using ONLY the document content below. "
+            "Always cite the specific filename when referencing information. "
+            "If the documents don't contain the answer, say so honestly."
         )
-        return preamble + "\n\n".join(results)
+        user_msg = (
+            f"QUESTION: {query}\n\n"
+            f"RETRIEVED DOCUMENTS:\n\n{combined}"
+        )
+
+        try:
+            answer = await self.call_llm(
+                system_prompt=system,
+                user_message=user_msg,
+                temperature=0.2,
+            )
+        except Exception:
+            logger.warning("LLM synthesis failed, returning raw documents")
+            preamble = (
+                f"**Alexandros retrieved {len(doc_texts)} document(s) from the archive "
+                f'for: "{query}"**\n\n'
+            )
+            return preamble + "\n\n".join(doc_texts)
+
+        citation_block = "\n".join(citations)
+        return (
+            f"{answer}\n\n"
+            f"---\n**Sources ({len(citations)} documents):**\n{citation_block}"
+        )
 
     # ── Tool 2: browse — list files in a folder ─────────────────────────
 
@@ -283,6 +449,18 @@ class Alexandros(BaseAgent):
             lines.append(f"  {dt}: {by_type[dt]}")
 
         return "\n".join(lines)
+
+    # ── Ingestion Gatekeeper (delegates to ingestion_gatekeeper module) ──
+
+    def scan_for_undigested_files(self, *, force: bool = False) -> list[dict[str, Any]]:
+        """Compare the metadata index against the ingestion log."""
+        return scan_for_undigested(force=force)
+
+    async def run_ingestion(
+        self, *, force: bool = False, batch_size: int = 50,
+    ) -> dict[str, Any]:
+        """Run a gated ingestion cycle through the DigestiveSystem."""
+        return await run_ingestion_cycle(force=force, batch_size=batch_size)
 
     # ── helpers ──────────────────────────────────────────────────────────
 

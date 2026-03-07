@@ -19,9 +19,7 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from ira.brain.document_ingestor import DocumentIngestor
 from ira.config import get_settings
-from ira.systems.digestive import DigestiveSystem
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +32,6 @@ class RespiratorySystem:
 
     def __init__(
         self,
-        digestive: DigestiveSystem,
-        ingestor: DocumentIngestor,
         *,
         dream_mode: Any | None = None,
         drip_engine: Any | None = None,
@@ -49,8 +45,6 @@ class RespiratorySystem:
         dream_minute: int = 0,
         heartbeat_interval_seconds: int = 300,
     ) -> None:
-        self._digestive = digestive
-        self._ingestor = ingestor
         self._dream_mode = dream_mode
         self._drip_engine = drip_engine
         self._immune_system = immune_system
@@ -114,11 +108,13 @@ class RespiratorySystem:
 
     async def _inhale(self) -> None:
         logger.info("INHALE cycle starting")
+
         try:
-            ingest_result = await self._ingestor.ingest_all()
-            logger.info("INHALE documents: %s", ingest_result)
+            from ira.brain.ingestion_gatekeeper import run_ingestion_cycle
+            result = await run_ingestion_cycle()
+            logger.info("INHALE Alexandros ingestion: %s", result)
         except Exception:
-            logger.exception("INHALE document ingestion failed")
+            logger.exception("INHALE Alexandros ingestion failed")
 
         if self._email_processor is not None:
             try:

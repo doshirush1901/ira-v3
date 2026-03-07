@@ -27,6 +27,7 @@ class EventType(str, Enum):
     DEAL_UPDATED = "deal_updated"
     INTERACTION_LOGGED = "interaction_logged"
     ENTITY_ADDED = "entity_added"
+    RELATIONSHIP_DISCOVERED = "relationship_discovered"
     CHUNK_UPSERTED = "chunk_upserted"
 
 

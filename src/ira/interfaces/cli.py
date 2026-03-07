@@ -124,6 +124,18 @@ def _build_pantheon() -> Any:
     quotes = QuoteManager(session_factory=crm.session_factory)
     pricing_engine = PricingEngine(retriever=retriever, crm=crm)
 
+    from ira.systems.data_event_bus import DataEventBus
+    data_event_bus = DataEventBus()
+    crm.set_event_bus(data_event_bus)
+    graph.set_event_bus(data_event_bus)
+    qdrant.set_event_bus(data_event_bus)
+
+    from ira.systems.circulatory import CirculatorySystem
+    CirculatorySystem(
+        data_event_bus,
+        crm=crm, graph=graph, qdrant=qdrant, embedding=embedding,
+    )
+
     pantheon = Pantheon(retriever=retriever, bus=bus)
 
     shared_services = {
@@ -174,6 +186,16 @@ async def _build_pipeline(pantheon: Any) -> Any:
     crm = CRMDatabase()
     await crm.create_tables()
     unified_context = UnifiedContextManager()
+
+    # Inject memory services into Pantheon agents so they can access
+    # memory, goals, relationships, etc. via self._services.
+    pantheon.inject_services({
+        "conversation_memory": conversation,
+        "relationship_memory": relationship_memory,
+        "goal_manager": goal_manager,
+        "procedural_memory": procedural_memory,
+        "pantheon": pantheon,
+    })
 
     return RequestPipeline(
         sensory=sensory,
@@ -538,63 +560,62 @@ def index_imports(
 
 @app.command()
 def ingest(
-    path: Optional[str] = typer.Argument(None, help="Path to ingest. Defaults to data/imports/."),
-    force: bool = typer.Option(False, "--force", "-f", help="Re-ingest documents already in the vector store."),
-    raw: bool = typer.Option(False, "--raw", help="Skip nutrient extraction; ingest all text as-is."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-ingest all files regardless of log state."),
+    batch_size: int = typer.Option(712, "--batch", "-n", help="Max files to process (default: all)."),
+    concurrency: int = typer.Option(3, "--workers", "-w", help="Parallel workers (default: 3)."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Run intelligent document ingestion on a file or directory.
+    """Run Alexandros-gated intelligent document ingestion.
 
-    Each file is read, then passed through the DigestiveSystem:
-      STOMACH  — LLM classifies text as protein / carbs / waste
-      INTESTINE — only protein + carbs are chunked, embedded, and stored
-      LIVER    — entities (companies, people, machines) extracted into Neo4j
+    Alexandros scans the metadata index against the ingestion log to find
+    files that are new, changed, or were ingested by an older pipeline.
+    Files are processed in parallel through the DigestiveSystem:
 
-    Use ``--raw`` to bypass nutrient extraction and ingest everything.
+      STOMACH   — LLM classifies text as protein / carbs / waste
+      DUODENUM  — LLM summarises protein into searchable statements
+      INTESTINE — chunk, embed (Voyage-3), upsert to Qdrant Cloud
+      LIVER     — entities (companies, people, machines) to Neo4j
+
+    Use ``--force`` to re-ingest everything.
+    Use ``--workers N`` to control parallelism (default: 3).
     """
     _configure_logging(verbose)
 
-    target = path or "data/imports"
-    target_path = Path(target)
+    from ira.brain.ingestion_gatekeeper import scan_for_undigested, run_ingestion_cycle
 
-    if not target_path.exists():
-        console.print(f"[red]Path not found:[/red] {target_path}")
-        raise typer.Exit(1)
+    queue = scan_for_undigested(force=force)
 
-    digestive, ingestor, _qdrant = _build_digestive()
-
-    files = ingestor.discover_files(str(target_path))
-    if not files:
-        console.print(f"[yellow]No supported files found under {target_path}.[/yellow]")
+    if not queue:
+        console.print("[green]All files are up-to-date. Nothing to ingest.[/green]")
         raise typer.Exit(0)
 
-    categories = {f["category"] for f in files}
-    total_size_mb = sum(f["size"] for f in files) / (1024 * 1024)
-    mode_label = "[yellow]raw (no nutrient extraction)[/yellow]" if raw else "[green]intelligent (protein + carbs only)[/green]"
+    by_reason: dict[str, int] = {}
+    for f in queue:
+        by_reason[f["reason"]] = by_reason.get(f["reason"], 0) + 1
+
+    reason_lines = ", ".join(f"{r}: {c}" for r, c in sorted(by_reason.items()))
+    batch = queue[:batch_size]
+
+    # Estimate: 45s per file sequential, divide by concurrency
+    est_per_file_s = 45
+    est_total_s = (len(batch) * est_per_file_s) / max(concurrency, 1)
+    est_min = est_total_s / 60
+    est_label = f"~{est_min:.0f} min" if est_min < 60 else f"~{est_min/60:.1f} hr"
+
     console.print(
         Panel(
-            f"[bold]Path:[/bold]        {target_path}\n"
-            f"[bold]Files:[/bold]       {len(files)}\n"
-            f"[bold]Directories:[/bold] {len(categories)}\n"
-            f"[bold]Total size:[/bold]  {total_size_mb:.1f} MB\n"
-            f"[bold]Mode:[/bold]        {mode_label}\n"
-            f"[bold]Force:[/bold]       {'yes' if force else 'no'}",
-            title="Ingestion Plan",
+            f"[bold]Total needing ingestion:[/bold] {len(queue)}\n"
+            f"[bold]This batch:[/bold]             {len(batch)}\n"
+            f"[bold]Parallel workers:[/bold]        {concurrency}\n"
+            f"[bold]Reasons:[/bold]                {reason_lines}\n"
+            f"[bold]Est. time:[/bold]              {est_label}\n"
+            f"[bold]Force:[/bold]                  {'yes' if force else 'no'}",
+            title="Alexandros Ingestion Scan",
             border_style="blue",
         )
     )
 
-    succeeded: list[dict[str, Any]] = []
-    skipped: list[str] = []
-    failed: list[dict[str, str]] = []
-    total_protein = 0
-    total_carbs = 0
-    total_waste = 0
-
-    async def _ingest() -> None:
-        nonlocal total_protein, total_carbs, total_waste
-        from ira.brain.document_ingestor import _READERS
-
+    async def _ingest() -> dict[str, Any]:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -603,119 +624,59 @@ def ingest(
             TimeRemainingColumn(),
             console=err_console,
         ) as progress:
-            task = progress.add_task("Ingesting files", total=len(files))
-            for file_info in files:
-                file_path = file_info["path"]
-                short_name = Path(file_path).name
-                progress.update(task, description=f"[bold green]{short_name}")
-                try:
-                    if raw:
-                        n = await ingestor.ingest_file(file_info, force=force)
-                        if n > 0:
-                            succeeded.append({"path": file_path, "chunks": n, "category": file_info["category"]})
-                        else:
-                            skipped.append(file_path)
-                    else:
-                        if not force and ingestor.is_already_ingested(file_info):
-                            skipped.append(file_path)
-                            progress.advance(task)
-                            continue
+            task = progress.add_task("Ingesting", total=len(batch))
 
-                        reader = _READERS.get(file_info["extension"])
-                        if reader is None:
-                            skipped.append(file_path)
-                            progress.advance(task)
-                            continue
+            def on_progress(done: int, total: int, filename: str, result: Any) -> None:
+                chunks = result.get("chunks_created", 0) if isinstance(result, dict) else 0
+                label = f"[bold green]{filename}" + (f" [dim]({chunks} chunks)[/dim]" if chunks else "")
+                progress.update(task, completed=done, description=label)
 
-                        text = reader(Path(file_path))
-                        if not text.strip():
-                            skipped.append(file_path)
-                            progress.advance(task)
-                            continue
+            return await run_ingestion_cycle(
+                force=force,
+                batch_size=batch_size,
+                concurrency=concurrency,
+                progress_callback=on_progress,
+            )
 
-                        result = await digestive.ingest(
-                            raw_data=text,
-                            source=file_path,
-                            source_category=file_info["category"],
-                        )
-                        chunks = result["chunks_created"]
-                        nutrients = result["nutrients_extracted"]
-                        total_protein += nutrients.get("protein", 0)
-                        total_carbs += nutrients.get("carbs", 0)
-                        total_waste += nutrients.get("waste", 0)
+    result = _run(_ingest())
 
-                        if chunks > 0:
-                            ingestor._record_ingestion(
-                                file_path,
-                                ingestor._file_hash_for(file_info),
-                                chunks,
-                            )
-                            succeeded.append({
-                                "path": file_path,
-                                "chunks": chunks,
-                                "category": file_info["category"],
-                                "entities": result.get("entities_found", {}),
-                            })
-                        else:
-                            skipped.append(file_path)
-                except Exception as exc:
-                    logger.exception("Failed to ingest %s", file_path)
-                    failed.append({"path": file_path, "error": str(exc)})
-                progress.advance(task)
-
-    _run(_ingest())
-
-    summary_table = Table(title="Ingestion Report")
+    summary_table = Table(title="Alexandros Ingestion Report")
     summary_table.add_column("Metric", style="cyan")
     summary_table.add_column("Value", style="green", justify="right")
 
-    total_chunks = sum(s["chunks"] for s in succeeded)
-    summary_table.add_row("Files processed", str(len(succeeded)))
-    summary_table.add_row("Files skipped", str(len(skipped)))
-    summary_table.add_row("Files failed", str(len(failed)))
-    summary_table.add_row("Chunks created", str(total_chunks))
-
-    if not raw:
-        summary_table.add_row("Protein items", f"[green]{total_protein}[/green]")
-        summary_table.add_row("Carbs items", f"[yellow]{total_carbs}[/yellow]")
-        summary_table.add_row("Waste discarded", f"[red]{total_waste}[/red]")
+    summary_table.add_row("Files processed", str(result.get("files_processed", 0)))
+    summary_table.add_row("Files skipped", str(result.get("files_skipped", 0)))
+    summary_table.add_row("Files failed", str(result.get("files_failed", 0)))
+    summary_table.add_row("Files remaining", str(result.get("files_remaining", 0)))
+    summary_table.add_row("Chunks created", str(result.get("total_chunks", 0)))
+    summary_table.add_row("Pipeline", result.get("pipeline", "?"))
 
     console.print(summary_table)
 
-    if succeeded:
-        cat_counts: dict[str, int] = {}
-        for s in succeeded:
-            cat_counts[s["category"]] = cat_counts.get(s["category"], 0) + s["chunks"]
-        cat_table = Table(title="Chunks by Category")
-        cat_table.add_column("Category", style="cyan")
-        cat_table.add_column("Chunks", style="green", justify="right")
-        for cat, count in sorted(cat_counts.items()):
-            cat_table.add_row(cat, str(count))
-        console.print(cat_table)
+    entities = result.get("total_entities", {})
+    if any(entities.values()):
+        ent_table = Table(title="Entities Extracted (Neo4j)")
+        ent_table.add_column("Type", style="cyan")
+        ent_table.add_column("Count", style="green", justify="right")
+        for etype, count in sorted(entities.items()):
+            ent_table.add_row(etype, str(count))
+        console.print(ent_table)
 
-    if not raw and succeeded:
-        entity_totals: dict[str, int] = {}
-        for s in succeeded:
-            for k, v in s.get("entities", {}).items():
-                entity_totals[k] = entity_totals.get(k, 0) + v
-        if entity_totals:
-            ent_table = Table(title="Entities Extracted (Neo4j)")
-            ent_table.add_column("Type", style="cyan")
-            ent_table.add_column("Count", style="green", justify="right")
-            for etype, count in sorted(entity_totals.items()):
-                ent_table.add_row(etype, str(count))
-            console.print(ent_table)
-
-    if failed:
+    errors = result.get("errors", [])
+    if errors:
         err_table = Table(title="Failed Files")
         err_table.add_column("#", style="dim", width=3)
-        err_table.add_column("File", style="red")
-        err_table.add_column("Error")
-        for i, f in enumerate(failed, 1):
-            err_table.add_row(str(i), f["path"], f["error"])
+        err_table.add_column("Error", style="red")
+        for i, e in enumerate(errors, 1):
+            err_table.add_row(str(i), e)
         console.print(err_table)
 
-    ingestor.close()
+    remaining = result.get("files_remaining", 0)
+    if remaining > 0:
+        console.print(
+            f"\n[yellow]{remaining} files still pending. "
+            f"Run [bold]ira ingest[/bold] again or wait for the next sleep cycle.[/yellow]"
+        )
 
 
 # ── Dream ─────────────────────────────────────────────────────────────────
@@ -740,7 +701,8 @@ def dream(
 
         embedding = EmbeddingService()
         qdrant = QdrantManager(embedding_service=embedding)
-        retriever = UnifiedRetriever(qdrant=qdrant, embedding_service=embedding)
+        graph = KnowledgeGraph()
+        retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
         long_term = LongTermMemory()
         episodic = EpisodicMemory()
         conversation = ConversationMemory()
@@ -1106,45 +1068,49 @@ def populate_crm(
     _run(_populate())
 
 
-@app.command("crm-review")
-def crm_review(
-    contact_type: str = typer.Option("", "--type", "-t", help="Filter by contact type (e.g. LIVE_CUSTOMER)."),
-    override_email: str = typer.Option("", "--override", help="Email address to reclassify."),
-    new_type: str = typer.Option("", "--new-type", help="New contact type for --override."),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+crm_app = typer.Typer(help="CRM viewer — list, search, inspect, and manage contacts.")
+app.add_typer(crm_app, name="crm")
+
+
+async def _resolve_company(crm: Any, company_id: str | None) -> str:
+    """Resolve a company_id to a name, with caching across a single command."""
+    if not company_id:
+        return ""
+    if not hasattr(_resolve_company, "_cache"):
+        _resolve_company._cache = {}
+    if company_id in _resolve_company._cache:
+        return _resolve_company._cache[company_id]
+    comp = await crm.get_company(company_id)
+    name = comp.name if comp else ""
+    _resolve_company._cache[company_id] = name
+    return name
+
+
+def _type_style(ct: str) -> str:
+    if ct in ("LIVE_CUSTOMER",):
+        return "green bold"
+    if ct in ("PAST_CUSTOMER",):
+        return "yellow"
+    if "LEAD" in ct:
+        return "cyan"
+    return "dim"
+
+
+@crm_app.command("list")
+def crm_list(
+    contact_type: str = typer.Option("", "--type", "-t", help="Filter: LIVE_CUSTOMER, PAST_CUSTOMER, LEAD_WITH_INTERACTIONS, LEAD_NO_INTERACTIONS"),
+    company: str = typer.Option("", "--company", "-c", help="Filter by company name (partial match)."),
+    source: str = typer.Option("", "--source", help="Filter by source (e.g. gmail, kb:)."),
+    sort: str = typer.Option("type", "--sort", "-s", help="Sort by: name, email, type, score, company."),
 ) -> None:
-    """Review CRM contacts and optionally reclassify them.
+    """List all CRM contacts with filters and sorting."""
 
-    Without flags, lists all contacts grouped by type.
-    With --override and --new-type, reclassifies a specific contact.
-    """
-    _configure_logging(verbose)
-
-    async def _review() -> None:
+    async def _list() -> None:
         from ira.data.crm import CRMDatabase
-        from ira.data.models import ContactType
 
         crm = CRMDatabase()
         await crm.create_tables()
-
-        if override_email and new_type:
-            try:
-                ct = ContactType(new_type)
-            except ValueError:
-                console.print(f"[red]Invalid contact type: {new_type}[/red]")
-                console.print(f"Valid types: {', '.join(t.value for t in ContactType)}")
-                raise typer.Exit(1)
-
-            contact = await crm.get_contact_by_email(override_email)
-            if not contact:
-                console.print(f"[red]Contact not found: {override_email}[/red]")
-                raise typer.Exit(1)
-
-            await crm.update_contact(str(contact.id), contact_type=ct)
-            console.print(
-                f"[green]Updated {override_email} → {new_type}[/green]"
-            )
-            return
+        _resolve_company._cache = {}
 
         filters = {}
         if contact_type:
@@ -1153,44 +1119,490 @@ def crm_review(
         contacts = await crm.list_contacts(filters or None)
 
         if not contacts:
-            console.print("[yellow]No contacts in CRM.[/yellow]")
+            console.print("[yellow]No contacts found.[/yellow]")
             return
 
-        by_type: dict[str, list] = {}
+        rows = []
         for c in contacts:
-            ct_val = c.contact_type.value if c.contact_type else "UNCLASSIFIED"
-            by_type.setdefault(ct_val, []).append(c)
+            comp_name = await _resolve_company(crm, str(c.company_id) if c.company_id else None)
+            ct = c.contact_type.value if c.contact_type else "UNCLASSIFIED"
 
-        for ct_name, group in sorted(by_type.items()):
-            style = "green" if ct_name in ("LIVE_CUSTOMER", "PAST_CUSTOMER") else "cyan" if "LEAD" in ct_name else "yellow"
-            console.print(f"\n[{style} bold]{ct_name}[/{style} bold] ({len(group)})")
+            if company and company.lower() not in comp_name.lower():
+                continue
+            if source and source.lower() not in (c.source or "").lower():
+                continue
+
+            rows.append({
+                "name": c.name or "",
+                "email": c.email or "",
+                "company": comp_name,
+                "type": ct,
+                "score": c.lead_score or 0,
+                "source": c.source or "",
+            })
+
+        sort_key = sort.lower()
+        if sort_key in ("name", "email", "company", "type", "source"):
+            rows.sort(key=lambda r: r[sort_key].lower())
+        elif sort_key == "score":
+            rows.sort(key=lambda r: r["score"], reverse=True)
+
+        by_type: dict[str, list] = {}
+        for r in rows:
+            by_type.setdefault(r["type"], []).append(r)
+
+        type_order = ["LIVE_CUSTOMER", "PAST_CUSTOMER", "LEAD_WITH_INTERACTIONS", "LEAD_NO_INTERACTIONS", "UNCLASSIFIED"]
+        for ct_name in type_order:
+            group = by_type.get(ct_name, [])
+            if not group:
+                continue
+
+            style = _type_style(ct_name)
+            console.print(f"\n[{style}]{ct_name}[/{style}] ({len(group)})")
 
             table = Table(show_header=True, padding=(0, 1))
             table.add_column("#", style="dim", width=3)
-            table.add_column("Name", width=20)
-            table.add_column("Email", style="cyan", width=30)
-            table.add_column("Source", width=15)
-            table.add_column("Score", justify="right", width=6)
+            table.add_column("Name", width=22)
+            table.add_column("Email", style="cyan", width=32)
+            table.add_column("Company", width=22)
+            table.add_column("Score", justify="right", width=5)
+            table.add_column("Source", style="dim", width=14)
 
-            for i, c in enumerate(group, 1):
+            for i, r in enumerate(group, 1):
                 table.add_row(
                     str(i),
-                    (c.name or "")[:20],
-                    (c.email or "")[:30],
-                    (c.source or "")[:15],
-                    f"{c.lead_score:.0f}",
+                    r["name"][:22],
+                    r["email"][:32],
+                    r["company"][:22],
+                    f"{r['score']:.0f}",
+                    r["source"][:14],
                 )
 
             console.print(table)
 
-        total = len(contacts)
-        console.print(f"\n[bold]Total contacts in CRM: {total}[/bold]")
-        console.print(
-            "[dim]To reclassify: ira crm-review --override email@example.com "
-            "--new-type PAST_CUSTOMER[/dim]"
-        )
+        console.print(f"\n[bold]Showing {len(rows)} contacts[/bold]")
 
-    _run(_review())
+    _run(_list())
+
+
+@crm_app.command("search")
+def crm_search(
+    query: str = typer.Argument(..., help="Search by name, email, or company."),
+) -> None:
+    """Search contacts by name, email, or company name."""
+
+    async def _search() -> None:
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        _resolve_company._cache = {}
+
+        results = await crm.search_contacts(query)
+
+        if not results:
+            console.print(f"[yellow]No contacts matching '{query}'.[/yellow]")
+            return
+
+        table = Table(title=f"Search: '{query}' ({len(results)} results)", show_header=True)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Name", width=24)
+        table.add_column("Email", style="cyan", width=34)
+        table.add_column("Type", width=22)
+        table.add_column("Score", justify="right", width=5)
+
+        for i, r in enumerate(results, 1):
+            ct = r.get("contact_type", "?")
+            style = _type_style(ct)
+            table.add_row(
+                str(i),
+                (r.get("name") or "")[:24],
+                (r.get("email") or "")[:34],
+                f"[{style}]{ct}[/{style}]",
+                f"{r.get('lead_score', 0):.0f}",
+            )
+
+        console.print(table)
+
+    _run(_search())
+
+
+@crm_app.command("show")
+def crm_show(
+    email: str = typer.Argument(..., help="Email address of the contact to inspect."),
+) -> None:
+    """Show full detail for a single contact: info, company, deals, interactions."""
+
+    async def _show() -> None:
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        contact = await crm.get_contact_by_email(email)
+        if not contact:
+            console.print(f"[red]Contact not found: {email}[/red]")
+            raise typer.Exit(1)
+
+        ct = contact.contact_type.value if contact.contact_type else "UNCLASSIFIED"
+        style = _type_style(ct)
+
+        console.print(Panel(
+            f"[bold]{contact.name}[/bold]\n"
+            f"Email: [cyan]{contact.email}[/cyan]\n"
+            f"Type: [{style}]{ct}[/{style}]\n"
+            f"Score: {contact.lead_score:.0f}\n"
+            f"Role: {contact.role or '—'}\n"
+            f"Source: {contact.source or '—'}\n"
+            f"Created: {contact.created_at.strftime('%Y-%m-%d') if contact.created_at else '—'}",
+            title="Contact",
+            border_style="cyan",
+        ))
+
+        if contact.company_id:
+            comp = await crm.get_company(str(contact.company_id))
+            if comp:
+                console.print(Panel(
+                    f"[bold]{comp.name}[/bold]\n"
+                    f"Region: {comp.region or '—'}\n"
+                    f"Industry: {comp.industry or '—'}\n"
+                    f"Website: {comp.website or '—'}",
+                    title="Company",
+                    border_style="blue",
+                ))
+
+        deals = await crm.get_deals_for_contact(str(contact.id))
+        if deals:
+            deal_table = Table(title=f"Deals ({len(deals)})", show_header=True)
+            deal_table.add_column("Title", width=30)
+            deal_table.add_column("Stage", width=14)
+            deal_table.add_column("Value", justify="right", width=12)
+            deal_table.add_column("Machine", width=16)
+
+            for d in deals:
+                deal_table.add_row(
+                    (d.get("title") or "")[:30],
+                    d.get("stage", "?"),
+                    f"{d.get('currency', 'USD')} {d.get('value', 0):,.0f}",
+                    (d.get("machine_model") or "—")[:16],
+                )
+            console.print(deal_table)
+        else:
+            console.print("[dim]No deals.[/dim]")
+
+        interactions = await crm.get_interactions_for_contact(str(contact.id))
+        if interactions:
+            int_table = Table(title=f"Interactions ({len(interactions)})", show_header=True)
+            int_table.add_column("Date", width=12)
+            int_table.add_column("Channel", width=10)
+            int_table.add_column("Dir", width=4)
+            int_table.add_column("Subject", width=45)
+
+            for ix in interactions[:15]:
+                date_str = ix.get("created_at", "")
+                if date_str and len(date_str) > 10:
+                    date_str = date_str[:10]
+                int_table.add_row(
+                    date_str,
+                    (ix.get("channel") or "")[:10],
+                    (ix.get("direction") or "")[:4],
+                    (ix.get("subject") or "")[:45],
+                )
+            console.print(int_table)
+            if len(interactions) > 15:
+                console.print(f"[dim]... and {len(interactions) - 15} more interactions[/dim]")
+        else:
+            console.print("[dim]No interactions.[/dim]")
+
+    _run(_show())
+
+
+@crm_app.command("stats")
+def crm_stats() -> None:
+    """Dashboard overview: contact counts, top companies, stale leads, pipeline."""
+
+    async def _stats() -> None:
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        _resolve_company._cache = {}
+
+        contacts = await crm.list_contacts()
+        companies = await crm.list_companies()
+
+        by_type: dict[str, int] = {}
+        by_company: dict[str, int] = {}
+        for c in contacts:
+            ct = c.contact_type.value if c.contact_type else "UNCLASSIFIED"
+            by_type[ct] = by_type.get(ct, 0) + 1
+            comp_name = await _resolve_company(crm, str(c.company_id) if c.company_id else None)
+            if comp_name:
+                by_company[comp_name] = by_company.get(comp_name, 0) + 1
+
+        console.print(Panel(
+            f"[bold]Contacts:[/bold] {len(contacts)}  |  "
+            f"[bold]Companies:[/bold] {len(companies)}",
+            title="CRM Overview",
+            border_style="cyan",
+        ))
+
+        type_table = Table(title="Contacts by Type", show_header=True)
+        type_table.add_column("Type", width=28)
+        type_table.add_column("Count", justify="right", width=6)
+        type_table.add_column("", width=40)
+
+        max_count = max(by_type.values()) if by_type else 1
+        type_order = ["LIVE_CUSTOMER", "PAST_CUSTOMER", "LEAD_WITH_INTERACTIONS", "LEAD_NO_INTERACTIONS", "UNCLASSIFIED"]
+        for ct_name in type_order:
+            count = by_type.get(ct_name, 0)
+            if count == 0:
+                continue
+            bar_len = int((count / max_count) * 35)
+            style = _type_style(ct_name)
+            bar = f"[{style}]{'█' * bar_len}[/{style}]"
+            type_table.add_row(f"[{style}]{ct_name}[/{style}]", str(count), bar)
+
+        console.print(type_table)
+
+        top_companies = sorted(by_company.items(), key=lambda x: -x[1])[:10]
+        if top_companies:
+            comp_table = Table(title="Top 10 Companies (by contact count)", show_header=True)
+            comp_table.add_column("#", style="dim", width=3)
+            comp_table.add_column("Company", width=28)
+            comp_table.add_column("Contacts", justify="right", width=8)
+
+            for i, (name, count) in enumerate(top_companies, 1):
+                comp_table.add_row(str(i), name[:28], str(count))
+            console.print(comp_table)
+
+        stale = await crm.get_stale_leads(days=14)
+        if stale:
+            console.print(f"\n[yellow bold]Stale leads (>14 days, no interaction): {len(stale)}[/yellow bold]")
+            stale_table = Table(show_header=True)
+            stale_table.add_column("Name", width=24)
+            stale_table.add_column("Email", style="cyan", width=32)
+            for s in stale[:10]:
+                stale_table.add_row(
+                    (s.get("name") or "")[:24],
+                    (s.get("email") or "")[:32],
+                )
+            console.print(stale_table)
+            if len(stale) > 10:
+                console.print(f"[dim]... and {len(stale) - 10} more[/dim]")
+
+        pipeline = await crm.get_pipeline_summary()
+        if pipeline.get("total_count", 0) > 0:
+            console.print(f"\n[bold]Pipeline:[/bold] {pipeline['total_count']} deals | ${pipeline['total_value']:,.0f} total value")
+            stages = pipeline.get("stages", {})
+            if stages:
+                pipe_table = Table(title="Deal Pipeline", show_header=True)
+                pipe_table.add_column("Stage", width=16)
+                pipe_table.add_column("Count", justify="right", width=6)
+                pipe_table.add_column("Value", justify="right", width=14)
+                for stage, data in stages.items():
+                    if isinstance(data, dict):
+                        pipe_table.add_row(stage, str(data.get("count", 0)), f"${data.get('total_value', 0):,.0f}")
+                console.print(pipe_table)
+
+    _run(_stats())
+
+
+@crm_app.command("companies")
+def crm_companies() -> None:
+    """List all companies with contact counts."""
+
+    async def _companies() -> None:
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        companies = await crm.list_companies()
+        contacts = await crm.list_contacts()
+
+        company_contacts: dict[str, list] = {}
+        for c in contacts:
+            cid = str(c.company_id) if c.company_id else ""
+            company_contacts.setdefault(cid, []).append(c)
+
+        rows = []
+        for comp in companies:
+            cid = str(comp.id)
+            contact_list = company_contacts.get(cid, [])
+            types = set()
+            for c in contact_list:
+                if c.contact_type:
+                    types.add(c.contact_type.value)
+            rows.append((comp.name, comp.region or "", len(contact_list), ", ".join(sorted(types))))
+
+        rows.sort(key=lambda r: -r[2])
+
+        table = Table(title=f"Companies ({len(rows)})", show_header=True)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Company", width=28)
+        table.add_column("Region", width=14)
+        table.add_column("Contacts", justify="right", width=8)
+        table.add_column("Types", width=30)
+
+        for i, (name, region, count, types) in enumerate(rows, 1):
+            table.add_row(str(i), name[:28], region[:14], str(count), types[:30])
+
+        console.print(table)
+
+    _run(_companies())
+
+
+@crm_app.command("override")
+def crm_override(
+    email: str = typer.Argument(..., help="Email address of the contact to reclassify."),
+    new_type: str = typer.Argument(..., help="New type: LIVE_CUSTOMER, PAST_CUSTOMER, LEAD_WITH_INTERACTIONS, LEAD_NO_INTERACTIONS."),
+) -> None:
+    """Reclassify a contact's type."""
+
+    async def _override() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.data.models import ContactType
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        try:
+            ct = ContactType(new_type)
+        except ValueError:
+            console.print(f"[red]Invalid type: {new_type}[/red]")
+            console.print(f"Valid: {', '.join(t.value for t in ContactType)}")
+            raise typer.Exit(1)
+
+        contact = await crm.get_contact_by_email(email)
+        if not contact:
+            console.print(f"[red]Contact not found: {email}[/red]")
+            raise typer.Exit(1)
+
+        old = contact.contact_type.value if contact.contact_type else "UNCLASSIFIED"
+        await crm.update_contact(str(contact.id), contact_type=ct)
+        console.print(f"[green]{contact.name} ({email}): {old} -> {new_type}[/green]")
+
+    _run(_override())
+
+
+@crm_app.command("export")
+def crm_export(
+    contact_type: str = typer.Option("", "--type", "-t", help="Filter by contact type."),
+    output: str = typer.Option("crm_export.csv", "--output", "-o", help="Output CSV file path."),
+) -> None:
+    """Export contacts to CSV."""
+
+    async def _export() -> None:
+        import csv as csv_mod
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        _resolve_company._cache = {}
+
+        filters = {}
+        if contact_type:
+            filters["contact_type"] = contact_type
+
+        contacts = await crm.list_contacts(filters or None)
+
+        if not contacts:
+            console.print("[yellow]No contacts to export.[/yellow]")
+            return
+
+        with open(output, "w", newline="", encoding="utf-8") as f:
+            writer = csv_mod.writer(f)
+            writer.writerow(["Name", "Email", "Company", "Type", "Score", "Role", "Source", "Created"])
+
+            for c in contacts:
+                comp_name = await _resolve_company(crm, str(c.company_id) if c.company_id else None)
+                ct = c.contact_type.value if c.contact_type else ""
+                created = c.created_at.strftime("%Y-%m-%d") if c.created_at else ""
+                writer.writerow([
+                    c.name or "",
+                    c.email or "",
+                    comp_name,
+                    ct,
+                    f"{c.lead_score:.0f}",
+                    c.role or "",
+                    c.source or "",
+                    created,
+                ])
+
+        console.print(f"[green]Exported {len(contacts)} contacts to {output}[/green]")
+
+    _run(_export())
+
+
+@crm_app.command("enrich")
+def crm_enrich(
+    contact_type: str = typer.Option("", "--type", "-t", help="Only enrich contacts of this type."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change without writing."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Enrich CRM contacts with KB data: regions, machines, deals, scores.
+
+    Searches the knowledge base for each contact's company to find
+    machine orders, delivery dates, pricing, and regional data, then
+    updates the CRM with deals, lead scores, and company details.
+    """
+    _configure_logging(verbose)
+
+    async def _enrich() -> None:
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.data.crm import CRMDatabase
+        from ira.systems.crm_enricher import CRMEnricher
+
+        embedding = EmbeddingService()
+        qdrant = QdrantManager(embedding_service=embedding)
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        enricher = CRMEnricher(crm=crm, qdrant=qdrant, dry_run=dry_run)
+
+        mode_label = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
+        ct_label = contact_type or "all"
+        console.print(Panel(
+            f"Mode: {mode_label}\nType filter: {ct_label}\n\n"
+            "Enrichment passes:\n"
+            "  1. Company region & industry (from KB)\n"
+            "  2. Contact roles (from KB)\n"
+            "  3. Deals with machine models (from order books)\n"
+            "  4. Deal values (from quotes/POs)\n"
+            "  5. Lead scores & warmth levels",
+            title="CRM Enrichment Pipeline",
+            border_style="cyan",
+        ))
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Enriching CRM contacts from knowledge base..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("enrich", total=None)
+            result = await enricher.enrich_all(
+                contact_type_filter=contact_type or None,
+            )
+
+        stats = result["stats"]
+        table = Table(title="Enrichment Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", justify="right", style="green")
+
+        table.add_row("Contacts processed", str(stats["contacts_processed"]))
+        table.add_row("Companies enriched", str(stats["companies_enriched"]))
+        table.add_row("Roles found", str(stats["roles_found"]))
+        table.add_row("Deals created", str(stats["deals_created"]))
+        table.add_row("Deals with value", str(stats["deals_valued"]))
+        table.add_row("Scores set", str(stats["scores_set"]))
+        table.add_row("Errors", str(stats["errors"]))
+
+        console.print(table)
+
+    _run(_enrich())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

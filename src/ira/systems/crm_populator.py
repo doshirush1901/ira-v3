@@ -38,6 +38,53 @@ _VALID_CRM_TYPES = {
 
 _OWN_DOMAINS = frozenset({"machinecraft.org", "machinecraft.in"})
 
+_REJECT_PREFIXES = frozenset({
+    "noreply", "no-reply", "donotreply", "do-not-reply", "billing",
+    "alerts", "newsletter", "news", "notifications", "notify",
+    "mailer", "marketing", "promo", "info@members", "hello@mail.",
+    "hello@email.", "hello@e.", "share@email.", "team@mail.",
+    "stories-recap", "support@mail.", "info@email.",
+})
+
+_REJECT_DOMAINS = frozenset({
+    "instagram.com", "facebook.com", "twitter.com", "linkedin.com",
+    "netflix.com", "spotify.com", "amazon.com", "google.com",
+    "apple.com", "microsoft.com", "github.com", "openai.com",
+    "moneycontrol.com", "squarespace.com", "medium.com",
+    "substack.com", "mailchimp.com", "hubspot.com",
+    "singaporeair.com", "shakeshack.com", "avg.com", "cursor.com",
+    "railway.app", "sampark.gov.in", "yatramailers.com",
+    "sunglasshut.com", "marcjacobs.com", "nordiskemedier.dk",
+    "economictimesnews.com", "fairygodboss.com", "careem.com",
+    "impactguru.com", "thomasnet.com", "freshplaza.com",
+    "nin-nin.fr", "sarahssilks.com", "rforrabbit.com",
+    "bombaysweetshop.com", "littletikes.com", "ethoswatches.com",
+    "nevertoosmall.com", "zamaorganics.com", "mapmygenome.in",
+    "cgboost.com", "strategyzer.com", "camsonline.com",
+    "smarttouchswitch.io", "onepercentclub.io", "dsij.in",
+    "msmegrowthhub.com", "danmartell.com",
+})
+
+
+def _is_obviously_not_business(email: str) -> bool:
+    """Fast pre-filter to reject consumer newsletters and automated senders."""
+    local, _, domain = email.partition("@")
+    if not domain:
+        return True
+
+    if domain in _REJECT_DOMAINS:
+        return True
+
+    parent_domain = ".".join(domain.split(".")[-2:])
+    if parent_domain in _REJECT_DOMAINS:
+        return True
+
+    for prefix in _REJECT_PREFIXES:
+        if email.startswith(prefix):
+            return True
+
+    return False
+
 
 class CRMPopulator:
     """Orchestrates contact extraction, classification, and CRM insertion."""
@@ -48,10 +95,12 @@ class CRMPopulator:
         crm: CRMDatabase,
         *,
         dry_run: bool = False,
+        event_bus: Any | None = None,
     ) -> None:
         self._delphi = delphi
         self._crm = crm
         self._dry_run = dry_run
+        self._event_bus = event_bus
 
         settings = get_settings()
         self._qdrant_url = settings.qdrant.url
@@ -136,6 +185,15 @@ class CRMPopulator:
             })
             return
 
+        if _is_obviously_not_business(email):
+            self._stats["skipped_rejected"] += 1
+            self._classifications.append({
+                "email": email, "company": contact.get("company", ""),
+                "contact_type": "OTHER", "confidence": "HIGH",
+                "reasoning": "Consumer/newsletter/automated sender (pre-filter)",
+            })
+            return
+
         existing = await self._crm.get_contact_by_email(email)
         if existing is not None:
             self._stats["skipped_duplicate"] += 1
@@ -191,6 +249,27 @@ class CRMPopulator:
         )
         self._stats["inserted"] += 1
         logger.info("Inserted: %s (%s) as %s", email, company_name, contact_type_str)
+
+        if self._event_bus is not None:
+            from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
+            try:
+                await self._event_bus.emit(DataEvent(
+                    event_type=EventType.CONTACT_CLASSIFIED,
+                    entity_type="contact",
+                    entity_id=email,
+                    payload={
+                        "email": email,
+                        "name": contact.get("name", ""),
+                        "company": company_name,
+                        "contact_type": contact_type_str,
+                        "confidence": classification.get("confidence", ""),
+                        "reasoning": classification.get("reasoning", ""),
+                        "source": contact.get("source", "populator"),
+                    },
+                    source_store=SourceStore.POPULATOR,
+                ))
+            except Exception:
+                logger.debug("Populator event emission failed", exc_info=True)
 
     # ── Evidence gathering (Clio cross-referencing) ──────────────────────
 
@@ -433,10 +512,12 @@ class CRMPopulator:
                             "kb_category": cat,
                         }
 
-            results = [c for c in contacts.values() if c.get("email")]
+            results = [c for c in contacts.values() if c.get("email") or c.get("company")]
             logger.info(
-                "Extracted %d contacts with emails from KB (plus %d company-only mentions)",
-                len(results), len(contacts) - len(results),
+                "Extracted %d contacts from KB (%d with email, %d company-only)",
+                len(results),
+                sum(1 for c in results if c.get("email")),
+                sum(1 for c in results if not c.get("email")),
             )
             return results
 

@@ -4,6 +4,7 @@
 .env
 credentials.json
 credentials_rushabh.json
+client_secret_*.json
 token.json
 Neo4j-*.txt
 *_api_key.txt

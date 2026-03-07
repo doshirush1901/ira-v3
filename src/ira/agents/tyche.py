@@ -2,7 +2,9 @@
 
 Analyses the sales pipeline to provide revenue forecasts,
 win/loss predictions, and trend analysis.  Uses skills for
-pipeline forecasting and revenue analysis.
+pipeline forecasting and revenue analysis.  Equipped with ReAct
+tools for pipeline data retrieval, revenue analysis, and
+cross-agent delegation to Prometheus.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,67 @@ class Tyche(BaseAgent):
     name = "tyche"
     role = "Pipeline Forecaster"
     description = "Revenue forecasting, win/loss prediction, and pipeline analysis"
+    knowledge_categories = [
+        "sales_and_crm",
+        "tally_exports",
+        "machinecraft finance",
+        "orders_and_pos",
+    ]
+
+    # ── tool registration ────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="get_pipeline_data",
+            description="Retrieve the current live sales pipeline forecast data.",
+            parameters={},
+            handler=self._tool_get_pipeline_data,
+        ))
+        self.register_tool(AgentTool(
+            name="get_revenue_data",
+            description="Retrieve revenue analysis data, optionally with filters.",
+            parameters={"filters": "Optional filter criteria (e.g. date range, region)"},
+            handler=self._tool_get_revenue_data,
+        ))
+        self.register_tool(AgentTool(
+            name="ask_prometheus",
+            description="Delegate a question to Prometheus, the CRM/sales pipeline agent.",
+            parameters={"query": "Question for Prometheus"},
+            handler=self._tool_ask_prometheus,
+        ))
+
+    # ── tool handlers ────────────────────────────────────────────────────
+
+    async def _tool_get_pipeline_data(self) -> str:
+        try:
+            return await self.use_skill("forecast_pipeline")
+        except Exception as exc:
+            return f"Pipeline skill error: {exc}"
+
+    async def _tool_get_revenue_data(self, filters: str = "") -> str:
+        try:
+            return await self.use_skill(
+                "analyze_revenue",
+                filters=filters if filters else None,
+            )
+        except Exception as exc:
+            return f"Revenue skill error: {exc}"
+
+    async def _tool_ask_prometheus(self, query: str) -> str:
+        pantheon = self._services.get("pantheon")
+        if not pantheon:
+            return "Pantheon service unavailable."
+        agent = pantheon.get_agent("prometheus")
+        if agent is None:
+            return "Prometheus agent not found."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Prometheus error: {exc}"
+
+    # ── handle ───────────────────────────────────────────────────────────
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = context or {}
@@ -43,22 +106,4 @@ class Tyche(BaseAgent):
                 f"Query: {query}\n\nRevenue Data:\n{revenue_data}",
             )
 
-        live_data = ""
-        try:
-            live_data = await self.use_skill("forecast_pipeline")
-        except Exception:
-            logger.debug("Pipeline skill unavailable, falling back to KB")
-
-        kb_results = await self.search_knowledge(query, limit=8)
-        kb_context = self._format_context(kb_results)
-
-        pipeline_data = ""
-        if ctx.get("pipeline"):
-            pipeline_data = f"\n\nPipeline Data (from context):\n{ctx['pipeline']}"
-
-        return await self.call_llm(
-            _SYSTEM_PROMPT,
-            f"Query: {query}\n\n"
-            f"Live Pipeline Intelligence:\n{live_data or '(not available)'}\n\n"
-            f"Historical Context:\n{kb_context}{pipeline_data}",
-        )
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)

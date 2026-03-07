@@ -7,6 +7,7 @@ quality dashboard.  Data is persisted in an aiosqlite database.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any
 
 import aiosqlite
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,88 @@ class Asclepius(BaseAgent):
     name = "asclepius"
     role = "Quality Manager"
     description = "Punch-list tracking, quality dashboards, and project quality oversight"
+    knowledge_categories = [
+        "production",
+        "orders_and_pos",
+    ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._db: aiosqlite.Connection | None = None
+
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="log_punch_item",
+            description="Log a new punch-list item for a project.",
+            parameters={
+                "project": "Project name",
+                "description": "Description of the issue",
+                "severity": "CRITICAL, MAJOR, MINOR, or OBSERVATION (default MAJOR)",
+                "category": "mechanical, electrical, software, hydraulic, pneumatic, or safety (default mechanical)",
+                "phase": "FAT, INSTALLATION, or COMMISSIONING (default FAT)",
+            },
+            handler=self._tool_log_punch_item,
+        ))
+        self.register_tool(AgentTool(
+            name="get_punch_list",
+            description="Get the punch list for a project (or all projects if empty).",
+            parameters={"project": "Project name (empty for all)"},
+            handler=self._tool_get_punch_list,
+        ))
+        self.register_tool(AgentTool(
+            name="close_punch_item",
+            description="Close a punch-list item by its ID with a resolution note.",
+            parameters={
+                "item_id": "The punch item ID number",
+                "resolution": "How the item was resolved",
+            },
+            handler=self._tool_close_punch_item,
+        ))
+        self.register_tool(AgentTool(
+            name="quality_dashboard",
+            description="Get a cross-project quality dashboard with open/closed counts and severity breakdown.",
+            parameters={},
+            handler=self._tool_quality_dashboard,
+        ))
+        self.register_tool(AgentTool(
+            name="search_quality_docs",
+            description="Search the knowledge base for quality-related documents and procedures.",
+            parameters={"query": "Search query"},
+            handler=self._tool_search_quality_docs,
+        ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_log_punch_item(
+        self,
+        project: str,
+        description: str,
+        severity: str = "MAJOR",
+        category: str = "mechanical",
+        phase: str = "FAT",
+    ) -> str:
+        return await self.log_punch_item(project, phase, severity, category, description)
+
+    async def _tool_get_punch_list(self, project: str = "") -> str:
+        if project:
+            return await self.get_punch_list(project)
+        return await self.quality_dashboard()
+
+    async def _tool_close_punch_item(self, item_id: str, resolution: str) -> str:
+        return await self.close_punch_item(int(item_id))
+
+    async def _tool_quality_dashboard(self) -> str:
+        return await self.quality_dashboard()
+
+    async def _tool_search_quality_docs(self, query: str) -> str:
+        results = await self.search_domain_knowledge(query)
+        return self._format_context(results)
+
+    # ── DB setup ──────────────────────────────────────────────────────────
 
     async def _ensure_db(self) -> aiosqlite.Connection:
         if self._db is not None:
@@ -229,15 +308,7 @@ class Asclepius(BaseAgent):
         if ctx.get("task") == "quality_dashboard":
             return await self.quality_dashboard()
 
-        kb_results = await self.search_knowledge(query, limit=5)
-        kb_context = self._format_context(kb_results)
-
-        dashboard = await self.quality_dashboard()
-
-        return await self.call_llm(
-            _SYSTEM_PROMPT,
-            f"Query: {query}\n\nQuality Dashboard:\n{dashboard}\n\nKnowledge Base:\n{kb_context}",
-        )
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
     async def close(self) -> None:
         if self._db is not None:

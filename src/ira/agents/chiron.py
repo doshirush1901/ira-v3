@@ -3,6 +3,9 @@
 Maintains a library of sales training patterns (trigger situations,
 wrong approaches, right approaches) and provides contextual coaching
 notes for live sales situations.
+
+Equipped with ReAct tools for pattern logging, coaching notes,
+sales guidance, pattern search, and cross-agent delegation to Prometheus.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,107 @@ class Chiron(BaseAgent):
     name = "chiron"
     role = "Sales Trainer"
     description = "Sales training patterns, coaching notes, and situational guidance"
+    knowledge_categories = [
+        "sales_and_crm",
+        "leads_and_contacts",
+        "webcall transcripts",
+    ]
+
+    # ── tool registration ────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        self.register_tool(AgentTool(
+            name="log_pattern",
+            description="Log a new sales training pattern (trigger, wrong approach, right approach).",
+            parameters={
+                "pattern": "Description of the trigger situation",
+                "context": "Category or context for the pattern",
+                "effectiveness": "Effectiveness rating (default 'unknown')",
+            },
+            handler=self._tool_log_pattern,
+        ))
+        self.register_tool(AgentTool(
+            name="get_coaching_notes",
+            description="Get contextual coaching notes for a sales situation based on training patterns.",
+            parameters={"scenario": "Description of the current sales situation"},
+            handler=self._tool_get_coaching_notes,
+        ))
+        self.register_tool(AgentTool(
+            name="get_sales_guidance",
+            description="Retrieve the full sales training guidance organised by category.",
+            parameters={"scenario": "Optional scenario context (can be empty)"},
+            handler=self._tool_get_sales_guidance,
+        ))
+        self.register_tool(AgentTool(
+            name="search_sales_patterns",
+            description="Search the sales training pattern library for matching patterns.",
+            parameters={"query": "Search query to match against patterns"},
+            handler=self._tool_search_sales_patterns,
+        ))
+        self.register_tool(AgentTool(
+            name="ask_prometheus",
+            description="Delegate a question to Prometheus, the sales/CRM agent.",
+            parameters={"query": "Question for Prometheus"},
+            handler=self._tool_ask_prometheus,
+        ))
+
+    # ── tool handlers ────────────────────────────────────────────────────
+
+    async def _tool_log_pattern(
+        self, pattern: str, context: str, effectiveness: str = "unknown",
+    ) -> str:
+        return await self.log_pattern(
+            trigger=pattern,
+            wrong=f"(to be refined — effectiveness: {effectiveness})",
+            right=pattern,
+            category=context or "general",
+        )
+
+    async def _tool_get_coaching_notes(self, scenario: str) -> str:
+        return await self.get_coaching_notes(scenario)
+
+    async def _tool_get_sales_guidance(self, scenario: str = "") -> str:
+        guidance = await self.get_sales_guidance()
+        return guidance or "No sales training patterns recorded yet."
+
+    async def _tool_search_sales_patterns(self, query: str) -> str:
+        patterns = _load_patterns()
+        if not patterns:
+            return "No sales training patterns recorded yet."
+
+        query_lower = query.lower()
+        matches = []
+        for p in patterns:
+            searchable = f"{p.get('trigger', '')} {p.get('category', '')} {p.get('right_approach', '')}".lower()
+            if any(word in searchable for word in query_lower.split()):
+                matches.append(p)
+
+        if not matches:
+            return f"No patterns matching '{query}'. Total patterns: {len(patterns)}."
+
+        lines = [f"Found {len(matches)} matching patterns:"]
+        for p in matches[:10]:
+            lines.append(
+                f"- [{p.get('id', '?')}] ({p.get('category', 'general')}) "
+                f"Trigger: {p.get('trigger', '')} → DO: {p.get('right_approach', '')}"
+            )
+        return "\n".join(lines)
+
+    async def _tool_ask_prometheus(self, query: str) -> str:
+        pantheon = self._services.get("pantheon")
+        if not pantheon:
+            return "Pantheon service unavailable."
+        agent = pantheon.get_agent("prometheus")
+        if agent is None:
+            return "Prometheus agent not found."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Prometheus error: {exc}"
+
+    # ── existing methods ─────────────────────────────────────────────────
 
     async def log_pattern(
         self,
@@ -132,14 +236,4 @@ class Chiron(BaseAgent):
         if ctx.get("task") == "coaching":
             return await self.get_coaching_notes(query)
 
-        kb_results = await self.search_knowledge(query, limit=5)
-        kb_context = self._format_context(kb_results)
-
-        guidance = await self.get_sales_guidance()
-
-        sections = [f"Query: {query}"]
-        if guidance:
-            sections.append(f"Training Patterns:\n{guidance}")
-        sections.append(f"Knowledge Base:\n{kb_context}")
-
-        return await self.call_llm(_SYSTEM_PROMPT, "\n\n".join(sections))
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)

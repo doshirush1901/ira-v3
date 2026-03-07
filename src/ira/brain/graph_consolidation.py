@@ -93,8 +93,8 @@ class GraphConsolidation:
         """Strengthen relationships between co-accessed entities in Neo4j.
 
         Pairs accessed together >= 3 times get a ``CO_RELEVANT`` edge with
-        a ``strength`` property.  Pairs that appear in the graph but have
-        zero co-access get their strength decremented.
+        a ``strength`` property.  Only links *existing* labeled nodes — never
+        creates label-less orphans.
         """
         strengthened = 0
         for pair_key, count in co_access.items():
@@ -106,13 +106,17 @@ class GraphConsolidation:
             entity_a, entity_b = parts
 
             try:
-                await self._graph.run_cypher(
+                result = await self._graph.run_cypher(
                     """
-                    MERGE (a {name: $a})
-                    MERGE (b {name: $b})
+                    MATCH (a) WHERE (a.name = $a OR a.email = $a OR a.model = $a)
+                                    AND size(labels(a)) > 0
+                    MATCH (b) WHERE (b.name = $b OR b.email = $b OR b.model = $b)
+                                    AND size(labels(b)) > 0
+                    WITH a, b LIMIT 1
                     MERGE (a)-[r:CO_RELEVANT]-(b)
                     SET r.strength = COALESCE(r.strength, 0) + $boost,
                         r.updated_at = $now
+                    RETURN count(r) AS created
                     """,
                     params={
                         "a": entity_a,
@@ -121,7 +125,8 @@ class GraphConsolidation:
                         "now": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-                strengthened += 1
+                if result and result[0].get("created", 0) > 0:
+                    strengthened += 1
             except Exception:
                 logger.debug("Failed to strengthen edge %s <-> %s", entity_a, entity_b)
 
@@ -166,7 +171,8 @@ class GraphConsolidation:
             result = await self._graph.run_cypher(
                 """
                 MATCH (n)
-                WHERE n.name IS NOT NULL AND NOT n.name IN $active
+                WHERE n.name IS NOT NULL AND size(labels(n)) > 0
+                      AND NOT n.name IN $active
                 SET n.stale = true, n.stale_since = $now
                 RETURN count(n) AS decayed
                 """,

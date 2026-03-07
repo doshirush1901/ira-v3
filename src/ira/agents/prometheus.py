@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-from ira.agents.base_agent import BaseAgent
+from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,14 @@ class Prometheus(BaseAgent):
     name = "prometheus"
     role = "Chief Revenue Officer"
     description = "Sales pipeline management, deal tracking, and revenue strategy"
+    knowledge_categories = [
+        "sales_and_crm",
+        "orders_and_pos",
+        "leads_and_contacts",
+        "quotes_and_proposals",
+        "current machine orders",
+        "webcall transcripts",
+    ]
 
     @property
     def _crm(self) -> Any | None:
@@ -33,34 +41,112 @@ class Prometheus(BaseAgent):
     def _quotes(self) -> Any | None:
         return self._services.get("quotes")
 
+    # ── tool registration ─────────────────────────────────────────────────
+
+    def _register_default_tools(self) -> None:
+        super()._register_default_tools()
+
+        if self._crm:
+            self.register_tool(AgentTool(
+                name="search_contacts",
+                description="Search CRM contacts by name, email, or company.",
+                parameters={"query": "Search term (name, email, company)"},
+                handler=self._tool_search_contacts,
+            ))
+            self.register_tool(AgentTool(
+                name="get_deal",
+                description="Get full details for a specific deal by ID.",
+                parameters={"deal_id": "The deal identifier"},
+                handler=self._tool_get_deal,
+            ))
+            self.register_tool(AgentTool(
+                name="get_pipeline_summary",
+                description="Get an overview of the current sales pipeline (stages, counts, values).",
+                parameters={},
+                handler=self._tool_get_pipeline_summary,
+            ))
+            self.register_tool(AgentTool(
+                name="get_stale_leads",
+                description="List leads with no activity in the given number of days.",
+                parameters={"days": "Inactivity threshold in days (default 14)"},
+                handler=self._tool_get_stale_leads,
+            ))
+
+        if self._quotes:
+            self.register_tool(AgentTool(
+                name="get_quote_analytics",
+                description="Get analytics on quotes (totals, conversion rates, follow-ups due).",
+                parameters={},
+                handler=self._tool_get_quote_analytics,
+            ))
+
+        if self._services.get("pantheon"):
+            self.register_tool(AgentTool(
+                name="ask_quotebuilder",
+                description="Delegate a quoting question to the Quotebuilder agent.",
+                parameters={"query": "The quoting question or request"},
+                handler=self._tool_ask_quotebuilder,
+            ))
+
+    # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_search_contacts(self, query: str) -> str:
+        results = await self._crm.search_contacts(query)
+        return json.dumps(results, default=str) if results else "No contacts found."
+
+    async def _tool_get_deal(self, deal_id: str) -> str:
+        deal = await self._crm.get_deal(deal_id)
+        return json.dumps(deal, default=str) if deal else f"Deal '{deal_id}' not found."
+
+    async def _tool_get_pipeline_summary(self) -> str:
+        summary = await self._crm.get_pipeline_summary()
+        return json.dumps(summary, default=str)
+
+    async def _tool_get_stale_leads(self, days: str = "14") -> str:
+        leads = await self._crm.get_stale_leads(days=int(days))
+        return json.dumps(leads, default=str) if leads else "No stale leads found."
+
+    async def _tool_get_quote_analytics(self) -> str:
+        analytics = await self._quotes.get_quote_analytics()
+        return json.dumps(analytics, default=str)
+
+    async def _tool_ask_quotebuilder(self, query: str) -> str:
+        pantheon = self._services["pantheon"]
+        agent = pantheon.get_agent("quotebuilder")
+        if agent is None:
+            return "Quotebuilder agent not available."
+        try:
+            return await agent.handle(query)
+        except Exception as exc:
+            return f"Quotebuilder error: {exc}"
+
+    # ── main handler ──────────────────────────────────────────────────────
+
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = context or {}
+        task = ctx.get("task", "")
 
-        kb_results = await self.search_knowledge(
-            query, limit=8, sources=["qdrant", "neo4j"],
-        )
-        kb_context = self._format_context(kb_results)
+        if task == "qualify_lead":
+            return await self.use_skill(
+                "qualify_lead",
+                email=ctx.get("email", ""),
+                company=ctx.get("company", ""),
+            )
+        if task == "deal_summary":
+            return await self.use_skill(
+                "generate_deal_summary",
+                deal_id=ctx.get("deal_id", ""),
+            )
+        if task == "update_crm":
+            return await self.use_skill(
+                "update_crm_record",
+                record_id=ctx.get("record_id", ""),
+                updates=ctx.get("updates", {}),
+            )
 
-        crm_context = ""
-        if self._crm:
-            crm_context = await self._build_crm_context(query, ctx)
+        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
-        quote_context = ""
-        if self._quotes:
-            quote_context = await self._build_quote_context(query, ctx)
-
-        sales_intel_context = await self._build_sales_intel_context(query, ctx)
-
-        sections = [f"Query: {query}"]
-        if crm_context:
-            sections.append(f"CRM Data:\n{crm_context}")
-        if quote_context:
-            sections.append(f"Quote Pipeline:\n{quote_context}")
-        if sales_intel_context:
-            sections.append(f"Sales Intelligence:\n{sales_intel_context}")
-        sections.append(f"Knowledge Base:\n{kb_context}")
-
-        return await self.call_llm(_SYSTEM_PROMPT, "\n\n".join(sections))
+    # ── private helpers (kept for backward compat) ────────────────────────
 
     async def _build_sales_intel_context(self, query: str, ctx: dict[str, Any]) -> str:
         try:
@@ -102,6 +188,14 @@ class Prometheus(BaseAgent):
                                 f"    - {d.get('title')} | {d.get('stage')} | "
                                 f"{d.get('currency', 'USD')} {d.get('value', 0):,.2f}"
                             )
+                            machine = d.get("machine_model", "")
+                            company_name = contact.get("company_name", "") or contact.get("company", "")
+                            if machine and company_name:
+                                await self.report_relationship(
+                                    "Company", company_name,
+                                    "INTERESTED_IN",
+                                    "Machine", machine,
+                                )
 
                     interactions = await self._crm.get_interactions_for_contact(contact["id"])
                     if interactions:

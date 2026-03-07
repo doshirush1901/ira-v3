@@ -1,11 +1,13 @@
 """Digestive system — data ingestion with nutrient extraction.
 
 Orchestrates the full data ingestion pipeline using a biological metaphor:
-MOUTH (receive) → STOMACH (LLM nutrient extraction) → SMALL INTESTINE
-(chunk + embed + upsert) → LIVER (entity extraction into knowledge graph).
+MOUTH (receive) → STOMACH (LLM nutrient extraction) → DUODENUM (LLM
+summarization into searchable statements) → SMALL INTESTINE (chunk +
+embed + upsert) → LIVER (entity extraction into knowledge graph).
 
 The key insight: not all data is equal.  The nutrient extraction step ensures
-only high-value information is stored, keeping the knowledge base clean.
+only high-value information is stored, and the summarization step rewrites
+raw facts into clean, self-contained statements that embed well for retrieval.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from ira.prompt_loader import load_prompt
 logger = logging.getLogger(__name__)
 
 _NUTRIENT_SYSTEM_PROMPT = load_prompt("digestive_nutrient")
-
+_SUMMARIZE_SYSTEM_PROMPT = load_prompt("digestive_summarize")
 _EMAIL_META_SYSTEM_PROMPT = load_prompt("digestive_email_meta")
 
 
@@ -139,6 +141,72 @@ class DigestiveSystem:
             logger.exception("Nutrient classification failed for window")
             return empty
 
+    # ── DUODENUM: summarization ─────────────────────────────────────────
+
+    async def _summarize_nutrients(
+        self, nutrients: dict[str, list[str]]
+    ) -> dict[str, list[str]]:
+        """Rewrite raw protein + carbs items as clean, searchable statements.
+
+        This bridges the gap between raw extracted facts and high-quality
+        embeddings.  Each statement is self-contained so it retrieves well
+        in semantic search.  Waste is passed through unchanged.
+        """
+        if not self._openai_key:
+            return nutrients
+
+        summarized: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": nutrients.get("waste", [])}
+
+        for nutrient_type in ("protein", "carbs"):
+            items = nutrients.get(nutrient_type, [])
+            if not items:
+                continue
+
+            batch_text = "\n".join(f"- {item}" for item in items)
+            for window in self._split_windows(batch_text):
+                statements = await self._call_summarize(window)
+                summarized[nutrient_type].extend(statements)
+
+        logger.debug(
+            "Summarized: protein %d->%d, carbs %d->%d statements",
+            len(nutrients.get("protein", [])), len(summarized["protein"]),
+            len(nutrients.get("carbs", [])), len(summarized["carbs"]),
+        )
+        return summarized
+
+    async def _call_summarize(self, text: str) -> list[str]:
+        """Send nutrient items to the LLM for summarization into searchable statements."""
+        headers = {
+            "Authorization": f"Bearer {self._openai_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self._openai_model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": _SUMMARIZE_SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                result = json.loads(content)
+                statements = result.get("statements", [])
+                if isinstance(statements, list):
+                    return [s for s in statements if isinstance(s, str) and s.strip()]
+                return []
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+            logger.exception("Summarization failed for window")
+            return []
+
     # ── SMALL INTESTINE: absorption ───────────────────────────────────────
 
     async def _absorb(
@@ -198,7 +266,7 @@ class DigestiveSystem:
     async def _extract_entities(self, protein_text: str) -> dict[str, int]:
         """Extract entities from protein content and add to the knowledge graph."""
         if not protein_text.strip():
-            return {"companies": 0, "people": 0, "machines": 0}
+            return {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
 
         extracted = await self._graph.extract_entities_from_text(protein_text)
 
@@ -233,6 +301,24 @@ class DigestiveSystem:
                 )
                 counts["machines"] += 1
 
+        rel_count = 0
+        for rel in extracted.get("relationships", []):
+            try:
+                ok = await self._graph.add_relationship(
+                    from_type=rel.get("from_type", ""),
+                    from_key=rel.get("from_key", ""),
+                    rel_type=rel.get("rel", ""),
+                    to_type=rel.get("to_type", ""),
+                    to_key=rel.get("to_key", ""),
+                    properties={k: v for k, v in rel.items()
+                                if k not in ("from_type", "from_key", "rel", "to_type", "to_key")},
+                )
+                if ok:
+                    rel_count += 1
+            except Exception:
+                logger.debug("Failed to add relationship: %s", rel, exc_info=True)
+        counts["relationships"] = rel_count
+
         return counts
 
     # ── public API ────────────────────────────────────────────────────────
@@ -260,6 +346,9 @@ class DigestiveSystem:
         nutrient_counts = {
             k: len(v) for k, v in nutrients.items()
         }
+
+        # DUODENUM — rewrite raw facts as searchable statements
+        nutrients = await self._summarize_nutrients(nutrients)
 
         # SMALL INTESTINE
         chunks_created = await self._absorb(nutrients, source, source_category)
@@ -340,7 +429,7 @@ class DigestiveSystem:
         total_processed = 0
         total_failed = 0
         total_chunks = 0
-        total_entities: dict[str, int] = {"companies": 0, "people": 0, "machines": 0}
+        total_entities: dict[str, int] = {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
         errors: list[str] = []
 
         for i, item in enumerate(items):

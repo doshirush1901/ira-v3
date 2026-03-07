@@ -26,7 +26,12 @@ _EXTRACTION_SYSTEM_PROMPT = load_prompt("extract_entities")
 class KnowledgeGraph:
     """Async wrapper around the Neo4j graph database."""
 
-    def __init__(self, config: Neo4jConfig | None = None, llm_config: LLMConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: Neo4jConfig | None = None,
+        llm_config: LLMConfig | None = None,
+        event_bus: Any | None = None,
+    ) -> None:
         cfg = config or get_settings().neo4j
         llm = llm_config or get_settings().llm
         self._driver = AsyncGraphDatabase.driver(
@@ -35,6 +40,25 @@ class KnowledgeGraph:
         )
         self._openai_key = llm.openai_api_key.get_secret_value()
         self._openai_model = llm.openai_model
+        self._event_bus = event_bus
+
+    def set_event_bus(self, event_bus: Any) -> None:
+        self._event_bus = event_bus
+
+    async def _emit(self, entity_type: str, entity_id: str, payload: dict[str, Any]) -> None:
+        if self._event_bus is None:
+            return
+        from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
+        try:
+            await self._event_bus.emit(DataEvent(
+                event_type=EventType.ENTITY_ADDED,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                payload={**payload, "entity_type": entity_type},
+                source_store=SourceStore.NEO4J,
+            ))
+        except Exception:
+            logger.debug("Neo4j event emission failed", exc_info=True)
 
     # ── schema / indexes ─────────────────────────────────────────────────
 
@@ -64,6 +88,9 @@ class KnowledgeGraph:
             await session.execute_write(
                 self._merge_company, name, region, industry, website
             )
+        await self._emit("company", name, {
+            "name": name, "region": region, "industry": industry, "website": website,
+        })
 
     @staticmethod
     async def _merge_company(
@@ -88,6 +115,9 @@ class KnowledgeGraph:
             await session.execute_write(
                 self._merge_person, name, email, company_name, role
             )
+        await self._emit("person", email, {
+            "name": name, "email": email, "company": company_name, "role": role,
+        })
 
     @staticmethod
     async def _merge_person(
@@ -168,6 +198,80 @@ class KnowledgeGraph:
             qid=quote_id, company=company_name, machine=machine_model,
             value=value, date=date, status=status,
         )
+
+    # ── generic relationship creation ────────────────────────────────────
+
+    _KEY_FIELDS: dict[str, str] = {
+        "Company": "name",
+        "Person": "email",
+        "Machine": "model",
+        "Quote": "quote_id",
+    }
+
+    _ALLOWED_REL_TYPES = frozenset({
+        "WORKS_AT", "INTERESTED_IN", "QUOTED_FOR", "SUPPLIES",
+        "MANUFACTURES", "COMPETES_WITH", "CONTACTED_BY", "REFERRED_BY",
+        "QUOTED_TO", "QUOTES_MACHINE", "CO_RELEVANT",
+        "DESCRIBES", "FROM_SOURCE", "REFERS_TO", "IN_CLUSTER",
+    })
+
+    async def add_relationship(
+        self,
+        from_type: str,
+        from_key: str,
+        rel_type: str,
+        to_type: str,
+        to_key: str,
+        properties: dict[str, Any] | None = None,
+    ) -> bool:
+        """Create a relationship between two nodes, merging idempotently.
+
+        ``from_type`` / ``to_type`` must be one of Company, Person, Machine,
+        Quote.  ``rel_type`` is validated against ``_ALLOWED_REL_TYPES``.
+        Returns True if the relationship was written, False if skipped.
+        """
+        if not from_key or not to_key:
+            return False
+        if rel_type not in self._ALLOWED_REL_TYPES:
+            logger.warning("Ignoring unknown relationship type: %s", rel_type)
+            return False
+
+        from_field = self._KEY_FIELDS.get(from_type)
+        to_field = self._KEY_FIELDS.get(to_type)
+        if not from_field or not to_field:
+            logger.warning(
+                "Unknown node type(s): %s, %s", from_type, to_type,
+            )
+            return False
+
+        props = properties or {}
+        set_clause = ""
+        if props:
+            assignments = ", ".join(f"r.{k} = ${k}" for k in props)
+            set_clause = f"SET {assignments}"
+
+        query = (
+            f"MERGE (a:{from_type} {{{from_field}: $from_key}}) "
+            f"MERGE (b:{to_type} {{{to_field}: $to_key}}) "
+            f"MERGE (a)-[r:{rel_type}]->(b) "
+            f"{set_clause}"
+        )
+        params: dict[str, Any] = {"from_key": from_key, "to_key": to_key, **props}
+
+        try:
+            async with self._driver.session() as session:
+                await session.run(query, params)
+            logger.debug(
+                "Relationship created: (%s:%s)-[%s]->(%s:%s)",
+                from_type, from_key, rel_type, to_type, to_key,
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "Failed to create relationship (%s:%s)-[%s]->(%s:%s)",
+                from_type, from_key, rel_type, to_type, to_key,
+            )
+            return False
 
     # ── relationship helpers ─────────────────────────────────────────────
 
@@ -260,24 +364,57 @@ class KnowledgeGraph:
         entity_name: str,
         max_hops: int = 2,
     ) -> dict[str, Any]:
-        """Return a subgraph of nodes within *max_hops* of the named entity."""
+        """Return a subgraph of nodes within *max_hops* of the named entity.
+
+        Tries APOC ``subgraphAll`` first for efficiency; falls back to a
+        standard variable-length MATCH if APOC is not installed.
+        """
+        try:
+            records = await self._read(
+                f"""
+                MATCH (start)
+                WHERE start.name = $name OR start.email = $name
+                      OR start.model = $name OR start.quote_id = $name
+                CALL apoc.path.subgraphAll(start, {{maxLevel: {max_hops}}})
+                YIELD nodes, relationships
+                RETURN nodes, relationships
+                """,
+                name=entity_name,
+            )
+            if not records:
+                return {"nodes": [], "relationships": []}
+            row = records[0]
+            return {
+                "nodes": row.get("nodes", []),
+                "relationships": row.get("relationships", []),
+            }
+        except Exception:
+            logger.debug("APOC not available, falling back to MATCH path query")
+
         records = await self._read(
             f"""
             MATCH (start)
             WHERE start.name = $name OR start.email = $name
                   OR start.model = $name OR start.quote_id = $name
-            CALL apoc.path.subgraphAll(start, {{maxLevel: {max_hops}}})
-            YIELD nodes, relationships
-            RETURN nodes, relationships
+            OPTIONAL MATCH path = (start)-[r*1..{max_hops}]-(related)
+            WITH start,
+                 collect(DISTINCT related) AS related_nodes,
+                 [rel IN collect(DISTINCT r) | head(rel)] AS flat_rels
+            UNWIND (CASE WHEN size(flat_rels) = 0 THEN [null] ELSE flat_rels END) AS rel
+            WITH start, related_nodes,
+                 collect(CASE WHEN rel IS NOT NULL THEN
+                   {{type: type(rel), from: startNode(rel).name, to: endNode(rel).name}}
+                 END) AS rels
+            RETURN [start] + related_nodes AS nodes,
+                   [r IN rels WHERE r IS NOT NULL] AS relationships
             """,
             name=entity_name,
         )
         if not records:
             return {"nodes": [], "relationships": []}
-        row = records[0]
         return {
-            "nodes": row.get("nodes", []),
-            "relationships": row.get("relationships", []),
+            "nodes": records[0].get("nodes", []),
+            "relationships": records[0].get("relationships", []),
         }
 
     async def run_cypher(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -329,6 +466,82 @@ class KnowledgeGraph:
         except (httpx.HTTPError, json.JSONDecodeError, KeyError):
             logger.exception("Entity extraction failed")
             return empty
+
+    # ── bulk enrichment ────────────────────────────────────────────────
+
+    async def enrich_interested_in_from_quotes(self) -> int:
+        """Infer Company-[INTERESTED_IN]->Machine from existing quote chains."""
+        result = await self._read(
+            """
+            MATCH (q:Quote)-[:QUOTED_TO]->(c:Company),
+                  (q)-[:QUOTES_MACHINE]->(m:Machine)
+            WHERE NOT (c)-[:INTERESTED_IN]->(m)
+            MERGE (c)-[:INTERESTED_IN]->(m)
+            RETURN count(*) AS created
+            """
+        )
+        created = result[0].get("created", 0) if result else 0
+        logger.info("Enrichment: created %d INTERESTED_IN from quotes", created)
+        return created
+
+    async def enrich_manufactures(self) -> int:
+        """Link Machinecraft -[MANUFACTURES]-> all Machine nodes."""
+        result = await self._read(
+            """
+            MERGE (mc:Company {name: 'Machinecraft'})
+            WITH mc
+            MATCH (m:Machine) WHERE NOT (mc)-[:MANUFACTURES]->(m)
+            MERGE (mc)-[:MANUFACTURES]->(m)
+            RETURN count(*) AS created
+            """
+        )
+        created = result[0].get("created", 0) if result else 0
+        logger.info("Enrichment: created %d MANUFACTURES relationships", created)
+        return created
+
+    async def cleanup_labelless_orphans(self) -> int:
+        """Delete nodes that have no labels and no relationships."""
+        result = await self._read(
+            "MATCH (n) WHERE size(labels(n)) = 0 AND NOT (n)--() "
+            "DELETE n RETURN count(n) AS deleted"
+        )
+        deleted = result[0].get("deleted", 0) if result else 0
+        logger.info("Cleanup: deleted %d label-less orphan nodes", deleted)
+        return deleted
+
+    async def graph_stats(self) -> dict[str, Any]:
+        """Return summary statistics about the graph."""
+        rows = await self._read("MATCH (n) RETURN count(n) AS nodes")
+        nodes = rows[0]["nodes"] if rows else 0
+        rows = await self._read("MATCH ()-[r]->() RETURN count(r) AS rels")
+        rels = rows[0]["rels"] if rows else 0
+        rows = await self._read(
+            "MATCH (n) WHERE NOT (n)--() RETURN count(n) AS orphans"
+        )
+        orphans = rows[0]["orphans"] if rows else 0
+
+        label_rows = await self._read(
+            "CALL db.labels() YIELD label "
+            "CALL { WITH label MATCH (n) WHERE label IN labels(n) "
+            "RETURN count(n) AS c } RETURN label, c ORDER BY c DESC"
+        )
+        labels = {r["label"]: r["c"] for r in label_rows}
+
+        rel_rows = await self._read(
+            "CALL db.relationshipTypes() YIELD relationshipType AS type "
+            "CALL { WITH type MATCH ()-[r]->() WHERE type(r) = type "
+            "RETURN count(r) AS c } RETURN type, c ORDER BY c DESC"
+        )
+        rel_types = {r["type"]: r["c"] for r in rel_rows}
+
+        return {
+            "nodes": nodes,
+            "relationships": rels,
+            "orphans": orphans,
+            "ratio": round(rels / max(nodes, 1), 3),
+            "labels": labels,
+            "relationship_types": rel_types,
+        }
 
     # ── internals ────────────────────────────────────────────────────────
 

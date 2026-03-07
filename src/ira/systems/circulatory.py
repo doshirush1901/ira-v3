@@ -64,6 +64,7 @@ class CirculatorySystem:
             self._bus.subscribe(EventType.CONTACT_CLASSIFIED, self._crm_to_neo4j_contact)
             self._bus.subscribe(EventType.COMPANY_CREATED, self._crm_to_neo4j_company)
             self._bus.subscribe(EventType.DEAL_CREATED, self._crm_to_neo4j_deal)
+            self._bus.subscribe(EventType.RELATIONSHIP_DISCOVERED, self._relationship_to_neo4j)
 
         if self._qdrant and self._embedding:
             self._bus.subscribe(EventType.CONTACT_CREATED, self._crm_to_qdrant)
@@ -175,6 +176,25 @@ class CirculatorySystem:
             logger.debug("Synced deal %s to Neo4j", deal_id)
         except Exception:
             logger.exception("CRM→Neo4j deal sync failed for %s", event.entity_id)
+
+    async def _relationship_to_neo4j(self, event: DataEvent) -> None:
+        """Write an agent-discovered relationship to Neo4j."""
+        p = event.payload
+        try:
+            await self._graph.add_relationship(
+                from_type=p.get("from_type", ""),
+                from_key=p.get("from_key", ""),
+                rel_type=p.get("rel", ""),
+                to_type=p.get("to_type", ""),
+                to_key=p.get("to_key", ""),
+                properties=p.get("properties"),
+            )
+            logger.debug(
+                "Synced relationship %s-[%s]->%s to Neo4j",
+                p.get("from_key"), p.get("rel"), p.get("to_key"),
+            )
+        except Exception:
+            logger.exception("Relationship→Neo4j sync failed for %s", event.entity_id)
 
     # ── CRM → Qdrant ────────────────────────────────────────────────────
 
