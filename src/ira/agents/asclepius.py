@@ -110,7 +110,7 @@ class Asclepius(BaseAgent):
         return await self.quality_dashboard()
 
     async def _tool_close_punch_item(self, item_id: str, resolution: str) -> str:
-        return await self.close_punch_item(int(item_id))
+        return await self.close_punch_item(int(item_id), resolution=resolution)
 
     async def _tool_quality_dashboard(self) -> str:
         return await self.quality_dashboard()
@@ -138,7 +138,8 @@ class Asclepius(BaseAgent):
                 description TEXT NOT NULL,
                 status      TEXT NOT NULL DEFAULT 'OPEN',
                 created_at  TEXT NOT NULL,
-                closed_at   TEXT
+                closed_at   TEXT,
+                resolution  TEXT DEFAULT ''
             )
             """
         )
@@ -209,7 +210,7 @@ class Asclepius(BaseAgent):
         lines.append(f"\nOpen items: {open_count}/{len(rows)}")
         return "\n".join(lines)
 
-    async def close_punch_item(self, item_id: int) -> str:
+    async def close_punch_item(self, item_id: int, resolution: str = "") -> str:
         db = await self._ensure_db()
         cursor = await db.execute(
             "SELECT id, status, project_name FROM punch_items WHERE id = ?",
@@ -225,12 +226,12 @@ class Asclepius(BaseAgent):
 
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
-            "UPDATE punch_items SET status = 'CLOSED', closed_at = ? WHERE id = ?",
-            (now, item_id),
+            "UPDATE punch_items SET status = 'CLOSED', closed_at = ?, resolution = ? WHERE id = ?",
+            (now, resolution, item_id),
         )
         await db.commit()
-        logger.info("Punch item #%d closed for project '%s'", item_id, row[2])
-        return f"Punch item #{item_id} closed for project '{row[2]}'."
+        logger.info("Punch item #%d closed for project '%s': %s", item_id, row[2], resolution)
+        return f"Punch item #{item_id} closed for project '{row[2]}'. Resolution: {resolution}"
 
     async def quality_dashboard(self) -> str:
         db = await self._ensure_db()
@@ -302,7 +303,7 @@ class Asclepius(BaseAgent):
                 description=ctx["description"],
             )
         if ctx.get("task") == "close_punch_item":
-            return await self.close_punch_item(ctx["item_id"])
+            return await self.close_punch_item(ctx["item_id"], resolution=ctx.get("resolution", ""))
         if ctx.get("task") == "punch_list":
             return await self.get_punch_list(ctx["project_name"])
         if ctx.get("task") == "quality_dashboard":

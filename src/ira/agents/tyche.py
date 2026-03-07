@@ -13,7 +13,9 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,8 @@ class Tyche(BaseAgent):
     async def _tool_get_pipeline_data(self) -> str:
         try:
             return await self.use_skill("forecast_pipeline")
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Pipeline skill failed: %s", exc)
             return f"Pipeline skill error: {exc}"
 
     async def _tool_get_revenue_data(self, filters: str = "") -> str:
@@ -75,7 +78,8 @@ class Tyche(BaseAgent):
                 "analyze_revenue",
                 filters=filters if filters else None,
             )
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Revenue skill failed: %s", exc)
             return f"Revenue skill error: {exc}"
 
     async def _tool_search_forecast_knowledge(self, query: str) -> str:
@@ -85,7 +89,7 @@ class Tyche(BaseAgent):
         return self._format_context(results)
 
     async def _tool_ask_prometheus(self, query: str) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent("prometheus")
@@ -93,7 +97,8 @@ class Tyche(BaseAgent):
             return "Prometheus agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Prometheus delegation failed: %s", exc)
             return f"Prometheus error: {exc}"
 
     # ── handle ───────────────────────────────────────────────────────────

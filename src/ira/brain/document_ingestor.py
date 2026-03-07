@@ -26,7 +26,7 @@ import tiktoken
 
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.models import KnowledgeItem
-from ira.exceptions import PathTraversalError
+from ira.exceptions import DatabaseError, IngestionError, LLMError, PathTraversalError
 
 from typing import TYPE_CHECKING
 
@@ -87,14 +87,16 @@ def read_xlsx(path: Path) -> str:
     from openpyxl import load_workbook
 
     wb = load_workbook(str(path), read_only=True, data_only=True)
-    parts: list[str] = []
-    for sheet in wb.sheetnames:
-        ws = wb[sheet]
-        parts.append(f"[Sheet: {sheet}]")
-        for row in ws.iter_rows(values_only=True):
-            parts.append("\t".join(str(cell) if cell is not None else "" for cell in row))
-    wb.close()
-    return "\n".join(parts)
+    try:
+        parts: list[str] = []
+        for sheet in wb.sheetnames:
+            ws = wb[sheet]
+            parts.append(f"[Sheet: {sheet}]")
+            for row in ws.iter_rows(values_only=True):
+                parts.append("\t".join(str(cell) if cell is not None else "" for cell in row))
+        return "\n".join(parts)
+    finally:
+        wb.close()
 
 
 def read_docx(path: Path) -> str:
@@ -361,7 +363,7 @@ class DocumentIngestor:
                     per_category[cat] = per_category.get(cat, 0) + n
                 else:
                     files_skipped += 1
-            except Exception as exc:
+            except (IngestionError, Exception) as exc:
                 logger.exception("Failed to ingest %s", file_info["path"])
                 errors.append({"path": file_info["path"], "error": str(exc)})
 
@@ -382,7 +384,7 @@ class DocumentIngestor:
         assert self._graph is not None
         try:
             entities = await self._graph.extract_entities_from_text(text)
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Entity extraction failed for %s", source)
             return
 
@@ -393,7 +395,7 @@ class DocumentIngestor:
                     region=company.get("region", ""),
                     industry=company.get("industry", ""),
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.warning("Failed to add company from %s: %s", source, company)
 
         for person in entities.get("people", []):
@@ -404,7 +406,7 @@ class DocumentIngestor:
                     company_name=person.get("company", ""),
                     role=person.get("role", ""),
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.warning("Failed to add person from %s: %s", source, person)
 
         for machine in entities.get("machines", []):
@@ -414,7 +416,7 @@ class DocumentIngestor:
                     category=machine.get("category", ""),
                     description=machine.get("description", ""),
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.warning("Failed to add machine from %s: %s", source, machine)
 
         rel_count = 0
@@ -431,7 +433,7 @@ class DocumentIngestor:
                 )
                 if ok:
                     rel_count += 1
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.warning("Failed to add relationship from %s: %s", source, rel)
 
         logger.info(

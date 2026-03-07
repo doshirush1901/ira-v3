@@ -34,6 +34,7 @@ from googleapiclient.discovery import build
 
 from ira.config import EmailMode, get_settings
 from ira.data.models import Channel, Direction, Email
+from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ class EmailProcessor:
                 email = self._parse_message(raw_msg)
                 analysis = await self._analyze_email(email)
                 results.append(analysis)
-            except Exception:
+            except (LLMError, DatabaseError, IraError, Exception):
                 msg_id = raw_msg.get("id", "unknown")
                 logger.exception("Failed to process message %s", msg_id)
 
@@ -224,7 +225,7 @@ class EmailProcessor:
                 await self._mark_as_read(service, email.id)
                 analysis["draft_created"] = draft_created
                 results.append(analysis)
-            except Exception:
+            except (ToolExecutionError, LLMError, DatabaseError, IraError, Exception):
                 logger.exception(
                     "Failed to process message %s", raw_msg.get("id", "unknown"),
                 )
@@ -338,7 +339,7 @@ class EmailProcessor:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json={"chat_id": chat_id, "text": text})
                 resp.raise_for_status()
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Failed to send Telegram draft notification")
 
     # ── Thread retrieval ──────────────────────────────────────────────────
@@ -385,7 +386,7 @@ class EmailProcessor:
                 logger.info(
                     "Poll cycle complete — %d emails processed", len(results),
                 )
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("Poll cycle failed — will retry next cycle")
             await asyncio.sleep(interval_seconds)
 
@@ -445,7 +446,7 @@ class EmailProcessor:
                     company=contact.company,
                     source="email_inbound",
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.warning("Could not create CRM contact for %s", contact.email)
 
         if crm_contact is not None:
@@ -467,7 +468,7 @@ class EmailProcessor:
                     email.body[:500] if direction is Direction.INBOUND else summary,
                     analysis_summary[:500] if direction is Direction.INBOUND else email.body[:500],
                 )
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("UnifiedContextManager recording failed for email")
 
         return {
@@ -603,7 +604,7 @@ class GmailDraftSender:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json={"chat_id": chat_id, "text": message})
                 resp.raise_for_status()
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Failed to send Telegram drip notification")
 
     async def check_replies(self, thread_id: str) -> list[dict[str, Any]]:
@@ -620,6 +621,6 @@ class GmailDraftSender:
 
         try:
             return await asyncio.to_thread(_list)
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Failed to check replies for thread %s", thread_id)
             return []

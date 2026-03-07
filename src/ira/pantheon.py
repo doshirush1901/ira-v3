@@ -39,6 +39,7 @@ from ira.agents.tyche import Tyche
 from ira.agents.vera import Vera
 from ira.agents.base_agent import BaseAgent
 from ira.brain.deterministic_router import DeterministicRouter
+from ira.exceptions import ToolExecutionError
 from ira.brain.retriever import UnifiedRetriever
 from ira.data.models import BoardMeetingMinutes
 from ira.message_bus import MessageBus
@@ -223,7 +224,7 @@ class Pantheon:
             try:
                 response = await agent.handle(query, context)
                 return name, response
-            except Exception:
+            except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed", name)
                 return name, f"(Agent '{name}' encountered an error)"
 

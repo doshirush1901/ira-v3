@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ira.brain.knowledge_graph import KnowledgeGraph
+from ira.exceptions import DatabaseError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class GraphConsolidation:
                 )
                 if result and result[0].get("created", 0) > 0:
                     strengthened += 1
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.debug("Failed to strengthen edge %s <-> %s", entity_a, entity_b)
 
         logger.info("Tuned %d co-access relationships", strengthened)
@@ -196,7 +197,7 @@ class GraphConsolidation:
             )
             decayed = result[0].get("decayed", 0) if result else 0
             logger.info("Marked %d nodes as stale (threshold=%d days)", decayed, days_threshold)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to decay stale nodes")
 
     # ── full pipeline ─────────────────────────────────────────────────────
@@ -216,7 +217,7 @@ class GraphConsolidation:
             stats["decay"] = "completed"
 
             stats["status"] = "success"
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Graph consolidation failed")
             stats["status"] = "error"
 

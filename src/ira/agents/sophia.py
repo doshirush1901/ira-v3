@@ -13,7 +13,9 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ class Sophia(BaseAgent):
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = dict(context or {})
 
-        ep_mem = self._services.get("episodic_memory")
+        ep_mem = self._services.get(SK.EPISODIC_MEMORY)
         if ep_mem is not None:
             try:
                 episodes = await ep_mem.surface_relevant_episodes(query, "global")
@@ -56,10 +58,10 @@ class Sophia(BaseAgent):
                     ctx["recent_episodes"] = [
                         e.get("narrative", "")[:300] for e in episodes[:3]
                     ]
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.debug("Sophia: episodic memory lookup failed")
 
-        rel_mem = self._services.get("relationship_memory")
+        rel_mem = self._services.get(SK.RELATIONSHIP_MEMORY)
         if rel_mem is not None:
             contact_id = (ctx.get("perception") or {}).get("email", "")
             if contact_id:
@@ -69,24 +71,20 @@ class Sophia(BaseAgent):
                         "warmth": getattr(rel.warmth_level, "value", str(rel.warmth_level)),
                         "interaction_count": rel.interaction_count,
                     }
-                except Exception:
+                except (DatabaseError, Exception):
                     logger.debug("Sophia: relationship memory lookup failed")
 
         return await self.run(query, ctx, system_prompt=_SYSTEM_PROMPT)
 
     async def _tool_get_correction_history(self) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if pantheon is None:
             return "Correction store not available."
         nemesis = pantheon.get_agent("nemesis")
-        if nemesis is None:
+        if nemesis is None or not hasattr(nemesis, "get_pending_corrections"):
             return "Correction store not available."
         try:
-            await nemesis._ensure_correction_store()
-            store = nemesis._correction_store
-            if store is None:
-                return "Correction store not available."
-            corrections = await store.get_pending_corrections(limit=20)
+            corrections = await nemesis.get_pending_corrections(limit=20)
             if not corrections:
                 return "No recent corrections found."
             return json.dumps(
@@ -99,7 +97,7 @@ class Sophia(BaseAgent):
                  for c in corrections],
                 default=str,
             )
-        except Exception as exc:
+        except (DatabaseError, Exception) as exc:
             logger.debug("Failed to fetch correction history: %s", exc)
             return "Correction store not available."
 

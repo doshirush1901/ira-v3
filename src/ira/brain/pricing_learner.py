@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from ira.config import get_settings
+from ira.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class PricingLearner:
             await self._save_index()
             logger.info("Learned %d prices from quotes", learned)
             return {"status": "ok", "prices_learned": learned}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to learn from quotes")
             return {"status": "error"}
 
@@ -126,7 +127,7 @@ class PricingLearner:
             await self._save_index()
             logger.info("Learned %d prices from Qdrant", learned)
             return {"status": "ok", "prices_learned": learned}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to learn from Qdrant")
             return {"status": "error"}
 

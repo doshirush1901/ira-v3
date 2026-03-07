@@ -12,7 +12,9 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ class Calliope(BaseAgent):
         )
 
     async def _tool_ask_clio(self, query: str) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent("clio")
@@ -95,7 +97,8 @@ class Calliope(BaseAgent):
             return "Clio agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Clio delegation failed: %s", exc)
             return f"Clio error: {exc}"
 
     # ── handle ───────────────────────────────────────────────────────────

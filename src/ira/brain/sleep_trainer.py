@@ -28,6 +28,7 @@ from ira.brain.embeddings import EmbeddingService
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
 from ira.data.models import KnowledgeItem
+from ira.exceptions import DatabaseError, IraError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class SleepTrainer:
             hints = parsed.get("hints", []) if isinstance(parsed, dict) else []
             stats["phases"]["1_truth_hints"] = {"status": "ok", "hints_generated": len(hints)}
             logger.info("Phase 1: generated %d truth hints", len(hints))
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Phase 1 (truth hints) failed")
             stats["phases"]["1_truth_hints"] = {"status": "error"}
         return hints
@@ -162,7 +163,7 @@ class SleepTrainer:
                 "corrected_upserted": upserted,
             }
             logger.info("Phase 2: flagged %d stale, upserted %d corrected", flagged, upserted)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Phase 2 (Qdrant re-index) failed")
             stats["phases"]["2_qdrant_reindex"] = {"status": "error"}
 
@@ -205,7 +206,7 @@ class SleepTrainer:
 
             stats["phases"]["3_mem0_reinforce"] = {"status": "ok", "memories_stored": stored}
             logger.info("Phase 3: stored %d corrections in Mem0", stored)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Phase 3 (Mem0 reinforcement) failed")
             stats["phases"]["3_mem0_reinforce"] = {"status": "error"}
 
@@ -246,7 +247,7 @@ class SleepTrainer:
                 "total_hints": len(existing),
             }
             logger.info("Phase 4: wrote %d total hints to %s", len(existing), _GUIDANCE_PATH)
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Phase 4 (training guidance) failed")
             stats["phases"]["4_training_guidance"] = {"status": "error"}
 
@@ -287,7 +288,7 @@ class SleepTrainer:
                 "total_learned": len(existing),
             }
             logger.info("Phase 5: persisted %d total learned corrections", len(existing))
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Phase 5 (persist learned) failed")
             stats["phases"]["5_persist_learned"] = {"status": "error"}
 

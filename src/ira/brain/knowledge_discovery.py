@@ -28,7 +28,7 @@ from ira.brain.qdrant_manager import QdrantManager
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.data.models import KnowledgeItem
-from ira.exceptions import PathTraversalError
+from ira.exceptions import DatabaseError, PathTraversalError
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ class KnowledgeDiscovery:
                 try:
                     await self._qdrant.upsert_items([item])
                     discovered.append(fact)
-                except Exception:
+                except (DatabaseError, Exception):
                     logger.exception("Failed to store discovered fact from %s", filepath)
 
         logger.info(

@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError, ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +163,7 @@ class Chiron(BaseAgent):
         return "\n".join(lines)
 
     async def _tool_ask_prometheus(self, query: str) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent("prometheus")
@@ -169,7 +171,8 @@ class Chiron(BaseAgent):
             return "Prometheus agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Prometheus delegation failed: %s", exc)
             return f"Prometheus error: {exc}"
 
     # ── existing methods ─────────────────────────────────────────────────
@@ -248,7 +251,7 @@ class Chiron(BaseAgent):
         if ctx.get("task") == "coaching":
             return await self.get_coaching_notes(query)
 
-        conv_mem = self._services.get("conversation_memory")
+        conv_mem = self._services.get(SK.CONVERSATION_MEMORY)
         if conv_mem is not None:
             contact_id = (ctx.get("perception") or {}).get("email", "")
             if contact_id:
@@ -263,7 +266,7 @@ class Chiron(BaseAgent):
                         ctx["recent_sales_context"] = [
                             m.get("content", "")[:200] for m in sales_msgs[:5]
                         ]
-                except Exception:
+                except (DatabaseError, Exception):
                     logger.debug("Chiron: conversation memory lookup failed")
 
         return await self.run(query, ctx, system_prompt=_SYSTEM_PROMPT)

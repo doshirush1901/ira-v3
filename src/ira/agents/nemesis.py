@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.brain.correction_store import CorrectionCategory, CorrectionSeverity, CorrectionStore
+from ira.exceptions import DatabaseError, ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,11 @@ class Nemesis(BaseAgent):
             self._correction_store = CorrectionStore()
             await self._correction_store.initialize()
         return self._correction_store
+
+    async def get_pending_corrections(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Public API for other agents (e.g. Sophia) to read correction history."""
+        store = await self._ensure_correction_store()
+        return await store.get_pending_corrections(limit=limit)
 
     # ── tool registration ────────────────────────────────────────────────
 
@@ -246,7 +252,7 @@ class Nemesis(BaseAgent):
                 ],
             }
             return json.dumps(stats, default=str)
-        except Exception as exc:
+        except (DatabaseError, Exception) as exc:
             return f"Could not retrieve training stats: {exc}"
 
     # ── correction ingestion ──────────────────────────────────────────────
@@ -490,7 +496,7 @@ class Nemesis(BaseAgent):
 
         try:
             result.agent_response = await agent.handle(test_query)
-        except Exception:
+        except (ToolExecutionError, Exception):
             logger.exception("Agent '%s' failed on training query", agent_name)
             result.agent_response = f"(Agent '{agent_name}' raised an error)"
             result.overall_score = 0
@@ -531,7 +537,7 @@ class Nemesis(BaseAgent):
                         result.ideal_response if result.overall_score <= 5 else None
                     ),
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Failed to log training result to LearningHub")
 
         logger.info(

@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import IraError, ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ class Athena(BaseAgent):
             return f"Agent '{agent_name}' not found. Available: {available}"
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Agent '{agent_name}' error: {exc}"
 
     async def _tool_board_meeting(self, topic: str, participants: str = "all") -> str:
@@ -100,7 +101,7 @@ class Athena(BaseAgent):
                 f"Participants: {', '.join(minutes.participants)}\n"
                 f"Synthesis: {minutes.synthesis}"
             )
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Board meeting failed: {exc}"
 
     async def _tool_system_health(self) -> str:
@@ -114,5 +115,5 @@ class Athena(BaseAgent):
                 s = status.get("status", "unknown")
                 lines.append(f"  {svc}: {s}")
             return "System health:\n" + "\n".join(lines)
-        except Exception as exc:
+        except (IraError, Exception) as exc:
             return f"Health check failed: {exc}"

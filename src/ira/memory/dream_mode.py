@@ -23,6 +23,7 @@ import httpx
 
 from ira.config import LLMConfig, get_settings
 from ira.data.models import DreamReport
+from ira.exceptions import ConfigurationError, DatabaseError, IngestionError, IraError, LLMError
 from ira.memory.conversation import ConversationMemory
 from ira.memory.episodic import EpisodicMemory
 from ira.memory.long_term import LongTermMemory
@@ -72,6 +73,17 @@ class DreamMode:
         self._openai_model = llm.openai_model
         self._db: aiosqlite.Connection | None = None
         self._dream_log_path = Path(dream_log_path) if dream_log_path else _DREAM_LOG_PATH
+
+    def configure(self, **kwargs: Any) -> None:
+        """Late-bind optional dependencies after construction."""
+        if "procedural_memory" in kwargs:
+            self._procedural = kwargs["procedural_memory"]
+        if "crm" in kwargs:
+            self._crm = kwargs["crm"]
+        if "musculoskeletal" in kwargs:
+            self._musculoskeletal = kwargs["musculoskeletal"]
+        if "retriever" in kwargs:
+            self._retriever = kwargs["retriever"]
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self._db_path)
@@ -202,7 +214,7 @@ class DreamMode:
                             logger.info("Deferred ingestion: %s -> %d chunks", entry.get("filename", ""), chunks)
                         ingestor.close()
                         await qdrant.close()
-                except Exception:
+                except (IngestionError, Exception):
                     logger.exception("Deferred ingestion failed for %s", filepath)
 
             stage_log["stages"]["0_deferred_ingestion"] = {"status": "ok", "files_ingested": ingested}
@@ -210,7 +222,7 @@ class DreamMode:
         except ImportError:
             logger.debug("Stage 0: imports fallback retriever not available")
             stage_log["stages"]["0_deferred_ingestion"] = {"status": "skipped"}
-        except Exception:
+        except (IngestionError, Exception):
             logger.exception("Dream Stage 0 (deferred ingestion) failed")
             stage_log["stages"]["0_deferred_ingestion"] = {"status": "error"}
 
@@ -246,7 +258,7 @@ class DreamMode:
                 "status": "ok",
                 "interactions_found": len(interactions),
             }
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 1 (memory ingestion) failed")
             stage_log["stages"]["1_memory_ingestion"] = {"status": "error"}
 
@@ -300,7 +312,7 @@ class DreamMode:
                             ep = await self._episodic.consolidate_episode(history, user_id)
                             episodes.append(ep)
                             memories_consolidated += 1
-            except Exception:
+            except (LLMError, Exception):
                 logger.exception("Stage 2: conversation-memory consolidation failed")
 
             logger.info(
@@ -313,7 +325,7 @@ class DreamMode:
                 "episodes_created": len(episodes),
                 "memories_consolidated": memories_consolidated,
             }
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Dream Stage 2 (episodic consolidation) failed")
             stage_log["stages"]["2_episodic_consolidation"] = {"status": "error"}
 
@@ -350,7 +362,7 @@ class DreamMode:
                 "contradictions": len(insights.get("contradictions", [])),
                 "recommendations": len(insights.get("recommendations", [])),
             }
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Dream Stage 3a (cross-episode insights) failed")
             stage_log.setdefault("stages", {})["3a_cross_episode_insights"] = {"status": "error"}
 
@@ -378,7 +390,7 @@ class DreamMode:
                 "status": "ok",
                 "gaps_found": len(gaps),
             }
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 3b (gap detection) failed")
             stage_log["stages"]["3b_gap_detection"] = {"status": "error"}
 
@@ -415,7 +427,7 @@ class DreamMode:
                 "status": "ok",
                 "connections_found": len(connections),
             }
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Dream Stage 3c (creative synthesis) failed")
             stage_log["stages"]["3c_creative_synthesis"] = {"status": "error"}
 
@@ -436,7 +448,7 @@ class DreamMode:
                 "status": "ok",
                 "campaign_insights": len(campaign_insights),
             }
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Dream Stage 3d (campaign reflection) failed")
             stage_log["stages"]["3d_campaign_reflection"] = {"status": "error"}
 
@@ -509,7 +521,7 @@ class DreamMode:
                 "status": "ok",
                 "procedures_created": procedures_created,
             }
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Dream Stage 4 (procedural learning) failed")
             stage_log["stages"]["4_procedural_learning"] = {"status": "error"}
 
@@ -579,7 +591,7 @@ class DreamMode:
                 "archived": archived,
                 "summarised": summarised,
             }
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 5 (memory pruning) failed")
             stage_log["stages"]["5_memory_pruning"] = {"status": "error"}
 
@@ -635,7 +647,7 @@ class DreamMode:
                 mem0_key = get_settings().memory.api_key.get_secret_value()
                 if mem0_key:
                     mem0_client = MemoryClient(api_key=mem0_key)
-            except Exception:
+            except (ConfigurationError, Exception):
                 logger.debug("Mem0 not available for sleep training")
 
             trainer = SleepTrainer(
@@ -650,7 +662,7 @@ class DreamMode:
             await qdrant.close()
         except ImportError:
             stage_log["stages"]["0_5_sleep_training"] = {"status": "skipped"}
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Dream Stage 0.5 (sleep training) failed")
             stage_log["stages"]["0_5_sleep_training"] = {"status": "error"}
 
@@ -671,7 +683,7 @@ class DreamMode:
             logger.info("Stage 6: %d price conflicts found", len(conflicts))
         except ImportError:
             stage_log["stages"]["6_price_conflict"] = {"status": "skipped"}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 6 (price conflict) failed")
             stage_log["stages"]["6_price_conflict"] = {"status": "error"}
         return conflicts
@@ -694,7 +706,7 @@ class DreamMode:
             await graph.close()
         except ImportError:
             stage_log["stages"]["7_quality_review"] = {"status": "skipped"}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 7 (quality review) failed")
             stage_log["stages"]["7_quality_review"] = {"status": "error"}
 
@@ -714,7 +726,7 @@ class DreamMode:
             await graph.close()
         except ImportError:
             stage_log["stages"]["8_graph_consolidation"] = {"status": "skipped"}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 8 (graph consolidation) failed")
             stage_log["stages"]["8_graph_consolidation"] = {"status": "error"}
 
@@ -742,7 +754,7 @@ class DreamMode:
 
             stage_log["stages"]["9_follow_up"] = {"status": "ok", "stale_deals": len(stale_deals)}
             logger.info("Stage 9: %d stale deals found for follow-up", len(stale_deals))
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Dream Stage 9 (follow-up) failed")
             stage_log["stages"]["9_follow_up"] = {"status": "error"}
 
@@ -786,7 +798,7 @@ class DreamMode:
                 )
             stage_log["stages"]["10_morning_summary"] = {"status": "ok"}
             logger.info("Stage 10: morning summary sent to Telegram")
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}
 

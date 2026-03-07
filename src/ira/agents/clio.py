@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class Clio(BaseAgent):
             return "Alexandros agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Alexandros error: {exc}"
 
     async def _tool_ask_iris(self, query: str) -> str:
@@ -97,7 +98,7 @@ class Clio(BaseAgent):
             return "Iris agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Iris error: {exc}"
 
     async def _tool_verify_with_vera(self, claim: str) -> str:
@@ -109,7 +110,7 @@ class Clio(BaseAgent):
             return "Vera agent not found."
         try:
             return await agent.handle(claim)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Vera error: {exc}"
 
     # ── handle ───────────────────────────────────────────────────────────

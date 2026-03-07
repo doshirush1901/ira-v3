@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Any
 
+from ira.exceptions import DatabaseError
+
 logger = logging.getLogger(__name__)
 
 _MIN_WORDS = 20
@@ -142,7 +144,7 @@ class QualityFilter:
                         hit.get("content", "")[:80],
                     )
                     return True
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Semantic duplicate check failed")
 
         return False
@@ -207,6 +209,6 @@ class QualityFilter:
 
             logger.info("Cleanup scan: %d scanned, %d waste candidates", scanned, removed)
             return {"status": "ok", "scanned": scanned, "waste_candidates": removed}
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Cleanup waste scan failed")
             return {"status": "error"}

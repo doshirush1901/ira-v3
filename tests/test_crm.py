@@ -37,6 +37,7 @@ from ira.systems.drip_engine import AutonomousDripEngine
 @pytest.fixture()
 async def crm_db():
     """In-memory SQLite CRMDatabase for testing."""
+    CRMDatabase._reset_instances()
     with patch("ira.data.crm.get_settings") as mock_settings:
         mock_settings.return_value.database.url = "sqlite+aiosqlite://"
         db = CRMDatabase(database_url="sqlite+aiosqlite://")
@@ -45,6 +46,7 @@ async def crm_db():
     async with db._engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await db._engine.dispose()
+    CRMDatabase._reset_instances()
 
 
 @pytest.fixture()
@@ -65,19 +67,12 @@ async def drip_engine(crm_db, quote_manager):
     mock_gmail.send_notification = AsyncMock()
     mock_gmail.check_replies = AsyncMock(return_value=[])
 
-    with patch("ira.systems.drip_engine.get_settings") as mock_settings:
-        mock_llm = MagicMock()
-        mock_llm.openai_api_key.get_secret_value.return_value = ""
-        mock_llm.openai_model = "gpt-4.1"
-        mock_settings.return_value.llm = mock_llm
-        mock_settings.return_value.google.ira_email = "ira@machinecraft.org"
-
-        engine = AutonomousDripEngine(
-            crm=crm_db,
-            quotes=quote_manager,
-            message_bus=mock_bus,
-            gmail=mock_gmail,
-        )
+    engine = AutonomousDripEngine(
+        crm=crm_db,
+        quotes=quote_manager,
+        message_bus=mock_bus,
+        gmail=mock_gmail,
+    )
 
     return engine, mock_bus, mock_gmail
 
@@ -662,3 +657,25 @@ class TestDripEngine:
         assert updated_step is not None
         assert updated_step.reply_received is True
         assert updated_step.reply_content == "Yes, I'm interested!"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6. Singleton Pattern
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_singleton_identity():
+    """CRMDatabase() returns the same instance for the same URL."""
+    CRMDatabase._reset_instances()
+    with patch("ira.data.crm.get_settings") as mock_settings:
+        mock_settings.return_value.database.url = "sqlite+aiosqlite://"
+        a = CRMDatabase()
+        b = CRMDatabase()
+        assert a is b
+
+        # Explicit URL creates a separate instance
+        c = CRMDatabase(database_url="sqlite+aiosqlite:///other.db")
+        assert c is not a
+
+    CRMDatabase._reset_instances()

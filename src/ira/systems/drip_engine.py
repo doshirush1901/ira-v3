@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from ira.exceptions import DatabaseError, IraError
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,7 @@ class AutonomousDripEngine:
         """Check active campaigns and evaluate performance metrics."""
         try:
             campaigns = await self._crm.list_campaigns()
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to list campaigns")
             return {"campaigns": 0, "active": 0, "error": "CRM query failed"}
 
@@ -56,7 +58,7 @@ class AutonomousDripEngine:
                     "replied": replied,
                     "reply_rate": round(reply_rate, 3),
                 })
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Failed to evaluate campaign %s", campaign.name)
 
         return {"campaigns": len(campaigns), "active": len(active), "stats": stats}
@@ -68,7 +70,7 @@ class AutonomousDripEngine:
 
         try:
             campaigns = await self._crm.list_campaigns()
-        except Exception:
+        except (DatabaseError, Exception):
             return {"sent": 0, "errors": ["CRM query failed"]}
 
         active = [c for c in campaigns if getattr(c, "status", None) in ("ACTIVE", "active")]
@@ -90,11 +92,11 @@ class AutonomousDripEngine:
                             )
                             step.sent_at = datetime.now(timezone.utc)
                             sent_count += 1
-                        except Exception as exc:
+                        except (IraError, Exception) as exc:
                             errors.append(f"Send failed for step {step.step_number}: {exc}")
                     else:
                         logger.debug("Gmail sender not configured — skipping step %d", step.step_number)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Failed to process campaign %s", campaign.name)
 
         logger.info("Drip engine: sent %d steps, %d errors", sent_count, len(errors))
@@ -126,10 +128,10 @@ class AutonomousDripEngine:
                         if has_reply:
                             step.reply_received = True
                             reply_count += 1
-                    except Exception:
+                    except (IraError, Exception):
                         logger.debug("Reply check failed for step %d", step.step_number)
 
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Reply check cycle failed")
 
         return {"replies_detected": reply_count}

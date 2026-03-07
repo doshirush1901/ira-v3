@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -171,7 +172,7 @@ class Hermes(BaseAgent):
             return "Cadmus agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Cadmus error: {exc}"
 
     async def _tool_ask_arachne(self, query: str) -> str:
@@ -183,7 +184,7 @@ class Hermes(BaseAgent):
             return "Arachne agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Arachne error: {exc}"
 
     # ── handle ───────────────────────────────────────────────────────────

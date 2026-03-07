@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Any
 
+from ira.exceptions import DatabaseError, IraError, LLMError
+from ira.service_keys import ServiceKey as SK
 from ira.skills import SKILL_MATRIX
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ async def _llm_call(system: str, user: str, *, temperature: float = 0.3) -> str:
                 )
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"]
-        except Exception:
+        except (LLMError, Exception):
             logger.warning("OpenAI call failed in skill handler — trying Anthropic fallback")
 
     if anthropic_key:
@@ -84,7 +86,7 @@ async def _llm_call(system: str, user: str, *, temperature: float = 0.3) -> str:
                 )
                 resp.raise_for_status()
                 return resp.json()["content"][0]["text"]
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Anthropic fallback also failed in skill handler")
 
     return "(LLM call failed — no provider available)"
@@ -98,7 +100,7 @@ async def summarize_document(**kwargs: Any) -> str:
     if not text:
         return "Error: 'text' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     context = ""
     if retriever:
         results = await retriever.search(text[:500], limit=3)
@@ -145,7 +147,7 @@ async def compare_documents(**kwargs: Any) -> str:
 
 
 async def search_knowledge_base(**kwargs: Any) -> str:
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     query = kwargs.get("query", "")
     if not query:
         return "Error: 'query' argument required"
@@ -182,8 +184,8 @@ async def draft_outreach_email(**kwargs: Any) -> str:
     region = kwargs.get("region", "")
     context_notes = kwargs.get("context", "")
 
-    retriever = _svc("retriever")
-    crm = _svc("crm")
+    retriever = _svc(SK.RETRIEVER)
+    crm = _svc(SK.CRM)
 
     crm_context = ""
     if crm and contact_email:
@@ -231,7 +233,7 @@ async def draft_outreach_email(**kwargs: Any) -> str:
 
 
 async def qualify_lead(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     email = kwargs.get("email", "")
     if not email:
         return "Error: 'email' argument required"
@@ -255,7 +257,7 @@ async def qualify_lead(**kwargs: Any) -> str:
 
 
 async def generate_deal_summary(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     deal_id = kwargs.get("deal_id", "")
     contact_email = kwargs.get("email", "")
 
@@ -281,7 +283,7 @@ async def generate_deal_summary(**kwargs: Any) -> str:
 
 
 async def update_crm_record(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     if not crm:
         return "CRM not available"
 
@@ -301,7 +303,7 @@ async def update_crm_record(**kwargs: Any) -> str:
             result = await crm.update_company(record_id, **updates)
         else:
             return f"Unknown record type: {record_type}"
-    except Exception as exc:
+    except (DatabaseError, Exception) as exc:
         return f"CRM update failed for {record_type} {record_id}: {exc}"
 
     if result is None:
@@ -313,7 +315,7 @@ async def update_crm_record(**kwargs: Any) -> str:
 
 
 async def calculate_quote(**kwargs: Any) -> str:
-    pricing = _svc("pricing_engine")
+    pricing = _svc(SK.PRICING_ENGINE)
     if not pricing:
         return "Pricing engine not available"
 
@@ -328,7 +330,7 @@ async def calculate_quote(**kwargs: Any) -> str:
 
 
 async def analyze_revenue(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     if not crm:
         return "CRM not available for revenue analysis"
 
@@ -338,12 +340,12 @@ async def analyze_revenue(**kwargs: Any) -> str:
 
 
 async def forecast_pipeline(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     if not crm:
         return "CRM not available for pipeline forecasting"
 
     summary = await crm.get_pipeline_summary()
-    quotes_mgr = _svc("quotes")
+    quotes_mgr = _svc(SK.QUOTES)
     analytics = {}
     if quotes_mgr:
         analytics = await quotes_mgr.get_quote_analytics()
@@ -362,7 +364,7 @@ async def generate_invoice(**kwargs: Any) -> str:
     if not customer:
         return "Error: 'customer' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever and quote_id:
         results = await retriever.search(f"quote {quote_id} {customer}", limit=5)
@@ -397,7 +399,7 @@ async def create_drip_sequence(**kwargs: Any) -> str:
     machine_interest = kwargs.get("machine", "")
     num_stages = kwargs.get("stages", 6)
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
         search_term = f"{company} {machine_interest} thermoforming".strip()
@@ -430,7 +432,7 @@ async def generate_social_post(**kwargs: Any) -> str:
     if not topic:
         return "Error: 'topic' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
         results = await retriever.search(topic, limit=5)
@@ -453,7 +455,7 @@ async def generate_social_post(**kwargs: Any) -> str:
 
 
 async def build_lead_report(**kwargs: Any) -> str:
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     if not crm:
         return "CRM not available"
 
@@ -472,7 +474,7 @@ async def schedule_campaign(**kwargs: Any) -> str:
     if not campaign_name:
         return "Error: 'name' argument required"
 
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     if crm:
         campaign = await crm.create_campaign(
             name=campaign_name,
@@ -503,7 +505,7 @@ async def draft_proposal(**kwargs: Any) -> str:
     if not customer:
         return "Error: 'customer' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
         search_terms = [customer, machine_model, "proposal"]
@@ -512,7 +514,7 @@ async def draft_proposal(**kwargs: Any) -> str:
         kb_context = "\n".join(r.get("content", "")[:400] for r in results)
 
     pricing_context = ""
-    pricing = _svc("pricing_engine")
+    pricing = _svc(SK.PRICING_ENGINE)
     if pricing and machine_model:
         try:
             estimate = await pricing.estimate_price(machine_model, {})
@@ -523,8 +525,8 @@ async def draft_proposal(**kwargs: Any) -> str:
                     f"{ep.get('low', '?')} – {ep.get('high', '?')} "
                     f"(mid: {ep.get('mid', '?')})"
                 )
-        except Exception:
-            pass
+        except (IraError, Exception):
+            logger.debug("Pricing engine not available for proposal", exc_info=True)
 
     return await _llm_call(
         "You are a proposal writer for Machinecraft, an industrial thermoforming "
@@ -603,7 +605,7 @@ async def generate_meeting_notes(**kwargs: Any) -> str:
 
 
 async def lookup_machine_spec(**kwargs: Any) -> str:
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     machine = kwargs.get("machine_model", kwargs.get("query", ""))
     if not machine:
         return "Error: 'machine_model' or 'query' argument required"
@@ -629,8 +631,8 @@ async def lookup_machine_spec(**kwargs: Any) -> str:
             for m in data if isinstance(data, list) else []:
                 if machine.upper() in (m.get("model", "")).upper():
                     return _json.dumps(m, indent=2)
-    except Exception:
-        pass
+    except (IraError, Exception):
+        logger.debug("Machine knowledge lookup failed for %s", machine, exc_info=True)
 
     return f"No specs found for {machine}"
 
@@ -643,7 +645,7 @@ async def estimate_production_time(**kwargs: Any) -> str:
     if not machine_model:
         return "Error: 'machine_model' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
         results = await retriever.search(
@@ -672,7 +674,7 @@ async def lookup_employee(**kwargs: Any) -> str:
     if not name:
         return "Error: 'name' or 'query' argument required"
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     if retriever:
         results = await retriever.search(
             f"employee {name} role contact team",
@@ -690,7 +692,7 @@ async def lookup_employee(**kwargs: Any) -> str:
 async def generate_org_chart(**kwargs: Any) -> str:
     department = kwargs.get("department", "")
 
-    retriever = _svc("retriever")
+    retriever = _svc(SK.RETRIEVER)
     kb_context = ""
     if retriever:
         query = f"organization structure team roles {department}".strip()

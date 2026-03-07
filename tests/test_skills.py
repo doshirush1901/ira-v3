@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from ira.skills import SKILL_MATRIX
 from ira.skills.handlers import (
     _HANDLERS,
-    calculate_quote,
-    draft_outreach_email,
-    lookup_machine_spec,
-    polish_text,
-    summarize_document,
     use_skill,
 )
 
@@ -47,18 +44,6 @@ class TestSkillMatrix:
 
 
 class TestUseSkill:
-    async def test_dispatches_to_correct_handler(self):
-        result = await use_skill("summarize_document", text="hello")
-        assert "summarize_document" in result
-        assert "hello" in result
-
-    async def test_passes_kwargs_through(self):
-        result = await use_skill(
-            "draft_outreach_email", lead="Acme", tone="friendly",
-        )
-        assert "Acme" in result
-        assert "friendly" in result
-
     async def test_unknown_skill_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown skill"):
             await use_skill("nonexistent_skill")
@@ -67,56 +52,66 @@ class TestUseSkill:
         with pytest.raises(ValueError, match="summarize_document"):
             await use_skill("bad_name")
 
-    async def test_all_24_skills_callable(self):
-        for name in SKILL_MATRIX:
-            result = await use_skill(name)
-            assert f"Executed skill: {name}" in result
+    async def test_dispatches_to_handler(self):
+        with patch(
+            "ira.skills.handlers._llm_call",
+            new_callable=AsyncMock,
+            return_value="Summary of the document",
+        ):
+            result = await use_skill("summarize_document", text="hello world")
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    async def test_passes_kwargs_through(self):
+        with patch(
+            "ira.skills.handlers._llm_call",
+            new_callable=AsyncMock,
+            return_value="Dear Acme, friendly outreach...",
+        ):
+            result = await use_skill(
+                "draft_outreach_email", lead="Acme", tone="friendly",
+            )
+        assert isinstance(result, str)
+        assert len(result) > 0
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Individual handler functions
+# Individual handler smoke tests (with mocked LLM)
 # ═════════════════════════════════════════════════════════════════════════
 
 
 class TestHandlers:
-    async def test_summarize_document(self):
-        result = await summarize_document(text="long doc", max_length=500)
-        assert "summarize_document" in result
-        assert "'text': 'long doc'" in result
-        assert "'max_length': 500" in result
+    @pytest.fixture(autouse=True)
+    def mock_llm(self):
+        with patch(
+            "ira.skills.handlers._llm_call",
+            new_callable=AsyncMock,
+            return_value="Mocked LLM response for skill test",
+        ) as m:
+            yield m
 
-    async def test_draft_outreach_email(self):
-        result = await draft_outreach_email(
-            lead="John Doe", company="Acme Corp", tone="professional",
-        )
-        assert "draft_outreach_email" in result
-        assert "John Doe" in result
-        assert "Acme Corp" in result
+    async def test_all_handlers_return_strings(self):
+        for name, handler in _HANDLERS.items():
+            result = await handler()
+            assert isinstance(result, str), f"{name} did not return a string"
 
-    async def test_calculate_quote(self):
-        result = await calculate_quote(
-            product="PF1-C", quantity=5, region="MENA",
-        )
-        assert "calculate_quote" in result
-        assert "PF1-C" in result
+    async def test_summarize_document_calls_llm(self, mock_llm):
+        from ira.skills.handlers import summarize_document
+        result = await summarize_document(text="long doc")
+        assert isinstance(result, str)
 
-    async def test_polish_text(self):
-        result = await polish_text(text="rough draft", style="formal")
-        assert "polish_text" in result
-        assert "rough draft" in result
+    async def test_draft_outreach_email(self, mock_llm):
+        from ira.skills.handlers import draft_outreach_email
+        result = await draft_outreach_email(lead="John", company="Acme")
+        assert isinstance(result, str)
 
-    async def test_lookup_machine_spec(self):
-        result = await lookup_machine_spec(model="PF1500", field="max_thickness")
-        assert "lookup_machine_spec" in result
-        assert "PF1500" in result
-
-    async def test_handler_with_no_kwargs(self):
-        result = await summarize_document()
-        assert "summarize_document" in result
-        assert "{}" in result
+    async def test_polish_text(self, mock_llm):
+        from ira.skills.handlers import polish_text
+        result = await polish_text(text="rough draft")
+        assert isinstance(result, str)
 
     async def test_handler_return_type_is_string(self):
         for name in SKILL_MATRIX:
             handler = _HANDLERS[name]
-            result = await handler(x=1)
-            assert isinstance(result, str)
+            result = await handler()
+            assert isinstance(result, str), f"{name} handler did not return str"

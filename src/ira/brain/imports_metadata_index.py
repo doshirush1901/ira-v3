@@ -32,6 +32,7 @@ from ira.brain.document_ingestor import (
     read_xlsx,
 )
 from ira.config import get_settings
+from ira.exceptions import IngestionError, IraError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +65,14 @@ def _extract_preview(filepath: Path) -> str:
     if reader is not None:
         try:
             return reader(filepath)[:_TEXT_PREVIEW_CHARS]
-        except Exception:
+        except (IngestionError, Exception):
             logger.debug("Reader failed for %s, trying plain text", filepath.name)
 
     if filepath.suffix.lower() in (".txt", ".json", ".csv", ".md"):
         try:
             return filepath.read_text(errors="ignore")[:_TEXT_PREVIEW_CHARS]
-        except Exception:
-            pass
+        except (IraError, Exception):
+            logger.debug("Plain-text read failed for %s", filepath.name)
     return ""
 
 
@@ -137,7 +138,7 @@ Return ONLY valid JSON with these fields:
             elif "```" in text:
                 text = text.split("```")[1].split("```")[0]
             return json.loads(text)
-    except Exception as exc:
+    except (LLMError, Exception) as exc:
         logger.warning("LLM metadata failed for %s: %s", filename, exc)
         return None
 
@@ -279,7 +280,7 @@ async def build_index(
             if use_llm and preview and len(preview) > 50:
                 await asyncio.sleep(0.3)
 
-        except Exception as exc:
+        except (IngestionError, Exception) as exc:
             logger.warning("Error indexing %s: %s", fp.name, exc)
             errors += 1
 

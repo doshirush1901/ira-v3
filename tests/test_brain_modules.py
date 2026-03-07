@@ -1,16 +1,19 @@
 """Tests for previously-untested brain modules.
 
 Covers: truth_hints, quality_filter, power_levels, adaptive_style,
-knowledge_graph, feedback_handler, knowledge_health.
+knowledge_graph, feedback_handler, knowledge_health, correction_store,
+correction_learner, graph_consolidation.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiosqlite
 import pytest
 
 
@@ -70,6 +73,30 @@ class TestTruthHints:
         result = engine.match("Who founded Machinecraft?")
         assert result is not None
 
+    @pytest.mark.asyncio
+    async def test_stale_pricing_hints_skipped(self, tmp_path: Path):
+        """Stale pricing hints (>90 days old) are skipped when query has pricing keywords."""
+        old_date = (datetime.now(timezone.utc) - timedelta(days=95)).isoformat()
+        manual = {
+            "hints": [
+                {
+                    "patterns": [r"pf1\s+price", r"price\s+of\s+pf1"],
+                    "keywords": ["pf1", "price", "cost"],
+                    "answer": "The PF1 costs $200,000.",
+                    "created_at": old_date,
+                },
+            ]
+        }
+        (tmp_path / "truth_hints.json").write_text(json.dumps(manual))
+        (tmp_path / "learned_truth_hints.json").write_text(json.dumps({"hints": []}))
+
+        from ira.brain.truth_hints import TruthHintsEngine
+        engine = TruthHintsEngine(data_dir=tmp_path)
+        await engine._load()
+
+        result = engine.match("What is the PF1 price?")
+        assert result is None
+
 
 # ── QualityFilter ────────────────────────────────────────────────────────
 
@@ -100,9 +127,22 @@ class TestQualityFilter:
         result = qf.filter_chunk("")
         assert result["pass"] is False
 
+    def test_filter_chunk_rejects_high_numeric_ratio(self):
+        """Content with >70% numeric characters is rejected."""
+        qf = self._make_filter()
+        # 50 digits + 20 letters = 70 chars, ratio 50/70 ≈ 0.71 > 0.7
+        text = (
+            "a b c d e f g h i j k l m n o p q r s t "
+            "12345678901234567890123456789012345678901234567890"
+        )
+        result = qf.filter_chunk(text)
+        assert result["pass"] is False
+        assert "numeric" in result["reason"]
+
     def test_detect_boilerplate(self):
         qf = self._make_filter()
-        assert qf.detect_boilerplate("Page 3 of 10") is True
+        # Requires 2+ pattern matches; "Page X of Y" + "confidential" = 2 hits
+        assert qf.detect_boilerplate("Page 3 of 10. Confidential document.") is True
         assert qf.detect_boilerplate("The machine operates at high speed") is False
 
 
@@ -123,10 +163,27 @@ class TestPowerLevels:
         assert level["tier"] == "MORTAL"
 
     @pytest.mark.asyncio
+    async def test_record_failure_decreases_score(self, tmp_path: Path):
+        """record_failure() decreases score when above floor."""
+        tracker = self._make_tracker(tmp_path)
+        await tracker.record_success("clio", boost=100)
+        await tracker.record_failure("clio", penalty=30)
+        assert tracker.get_level("clio")["score"] == 70
+
+    @pytest.mark.asyncio
     async def test_record_failure_floors_at_zero(self, tmp_path: Path):
         tracker = self._make_tracker(tmp_path)
         await tracker.record_failure("clio", penalty=100)
         assert tracker.get_level("clio")["score"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_tier_returns_correct_tier(self, tmp_path: Path):
+        tracker = self._make_tracker(tmp_path)
+        await tracker.record_success("clio", boost=50)
+        level = tracker.get_level("clio")
+        assert level["tier"] == "MORTAL"
+        await tracker.record_success("athena", boost=350)  # 350 >= 301 = HERO
+        assert tracker.get_level("athena")["tier"] == "HERO"
 
     @pytest.mark.asyncio
     async def test_leaderboard_sorted(self, tmp_path: Path):
@@ -409,6 +466,27 @@ class TestCorrectionStore:
         await store.initialize()
         return store
 
+    @pytest.mark.asyncio
+    async def test_initialize_creates_table(self, tmp_path: Path):
+        """initialize() creates the corrections table."""
+        from ira.brain.correction_store import CorrectionStore
+
+        db_path = tmp_path / "corrections.db"
+        store = CorrectionStore(db_path=db_path)
+        await store.initialize()
+        try:
+            async with aiosqlite.connect(str(db_path)) as conn:
+                cursor = await conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='corrections'"
+                )
+                row = await cursor.fetchone()
+                await cursor.close()
+            assert row is not None
+            assert row[0] == "corrections"
+        finally:
+            await store.close()
+
+    @pytest.mark.asyncio
     async def test_add_and_get_pending(self, tmp_path: Path):
         store = await self._make_store(tmp_path)
         try:
@@ -500,6 +578,54 @@ class TestCorrectionStore:
             assert len(limited) == 2
         finally:
             await store.close()
+
+
+# ── CorrectionLearner ────────────────────────────────────────────────────
+
+
+class TestCorrectionLearner:
+    def _make_learner(self, tmp_path: Path):
+        from ira.brain.correction_learner import CorrectionLearner
+        return CorrectionLearner(data_path=tmp_path / "learned_corrections.json")
+
+    @pytest.mark.asyncio
+    async def test_learn_from_correction_entity_role(self, tmp_path: Path):
+        """learn_from_correction() parses entity role corrections (competitor, customer)."""
+        learner = self._make_learner(tmp_path)
+        learned = await learner.learn_from_correction("Acme Corp is a competitor")
+        assert "Acme Corp" in learned["competitors_added"]
+        assert learner.is_competitor("Acme Corp") is True
+        assert learner.is_customer("Acme Corp") is False
+
+    @pytest.mark.asyncio
+    async def test_learn_from_correction_customer(self, tmp_path: Path):
+        learner = self._make_learner(tmp_path)
+        await learner.learn_from_correction("Beta Industries are customers")
+        assert learner.is_customer("Beta Industries") is True
+        assert learner.is_competitor("Beta Industries") is False
+
+    def test_is_competitor_and_is_customer(self, tmp_path: Path):
+        """is_competitor() and is_customer() return correct values after learning."""
+        learner = self._make_learner(tmp_path)
+        learner._state["competitors"] = ["Acme Corp", "Rival Inc"]
+        learner._state["customers"] = ["Happy Client Ltd"]
+        assert learner.is_competitor("Acme Corp") is True
+        assert learner.is_competitor("acme corp") is True
+        assert learner.is_competitor("Unknown Co") is False
+        assert learner.is_customer("Happy Client Ltd") is True
+        assert learner.is_customer("happy client ltd") is True
+        assert learner.is_customer("Acme Corp") is False
+
+    @pytest.mark.asyncio
+    async def test_get_entity_correction(self, tmp_path: Path):
+        """get_entity_correction() returns rename mapping from learned corrections."""
+        learner = self._make_learner(tmp_path)
+        await learner.learn_from_correction(
+            "PF1 is not PF2, it's PF1-X"
+        )
+        assert learner.get_entity_correction("PF2") == "PF1-X"
+        assert learner.get_entity_correction("pf2") == "PF1-X"
+        assert learner.get_entity_correction("unknown") is None
 
 
 # ── DataEventBus ─────────────────────────────────────────────────────────

@@ -8,10 +8,34 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
+from typing_extensions import TypedDict, NotRequired
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+
+
+# ── Pipeline context contract ─────────────────────────────────────────────────
+
+
+class PipelineContext(TypedDict, total=False):
+    """Typed contract for the dict passed through the 11-stage pipeline.
+
+    Stages add keys progressively; ``total=False`` allows partial dicts.
+    """
+
+    perception: dict[str, Any]
+    channel: str
+    services: dict[str, Any]
+    history: list[dict[str, str]]
+    cross_channel_history: list[dict[str, str]]
+    active_goal: dict[str, Any] | None
+    resolved_input: str
+    enrichment: str
+    route_method: str
+    required_agents: list[str]
+    agent_responses: dict[str, str]
+    _delegation_depth: int
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────

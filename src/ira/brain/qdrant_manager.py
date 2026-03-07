@@ -18,6 +18,7 @@ from qdrant_client import AsyncQdrantClient, models
 from ira.brain.embeddings import EmbeddingService
 from ira.config import QdrantConfig, get_settings
 from ira.data.models import KnowledgeItem
+from ira.exceptions import DatabaseError, IraError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class QdrantManager:
                 ),
             )
             logger.info("Created Qdrant collection '%s' (dim=%d)", collection, vector_size)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to ensure collection '%s'", collection)
             raise
 
@@ -94,7 +95,7 @@ class QdrantManager:
 
         try:
             vectors = await self._embeddings.embed_texts(texts)
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Embedding failed for %d items", len(items))
             raise
 
@@ -119,7 +120,7 @@ class QdrantManager:
             try:
                 await self._client.upsert(collection_name=col, points=batch)
                 upserted += len(batch)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception(
                     "Qdrant upsert failed at offset %d (batch size %d)",
                     start,
@@ -143,7 +144,7 @@ class QdrantManager:
                     },
                     source_store=SourceStore.QDRANT,
                 ))
-            except Exception:
+            except (IraError, Exception):
                 logger.debug("Qdrant event emission failed", exc_info=True)
 
         return upserted
@@ -169,7 +170,7 @@ class QdrantManager:
                 score_threshold=score_threshold,
             )
             hits = result.points
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Search failed in '%s'", col)
             raise
 
@@ -214,7 +215,7 @@ class QdrantManager:
                 limit=limit,
             )
             hits = result.points
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Hybrid search failed in '%s'", col)
             raise
 
@@ -244,7 +245,7 @@ class QdrantManager:
                 ),
             )
             logger.info("Deleted points with source='%s' from '%s'", source, col)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Failed to delete points for source '%s'", source)
             raise
 

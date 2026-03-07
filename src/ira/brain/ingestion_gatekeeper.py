@@ -34,6 +34,8 @@ from ira.brain.ingestion_log import (
     save_log,
 )
 
+from ira.exceptions import IngestionError, IraError
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY = 5
@@ -202,7 +204,7 @@ async def run_ingestion_cycle(
                 if progress_callback is not None:
                     progress_callback(done_count, batch_total, file_info["name"], result)
 
-        except Exception as exc:
+        except (IngestionError, Exception) as exc:
             logger.exception("Gatekeeper: failed to ingest %s", rel_path)
             async with lock:
                 errors.append(f"{rel_path}: {exc}")
@@ -227,11 +229,11 @@ async def run_ingestion_cycle(
         for closeable in [qdrant, graph]:
             try:
                 await closeable.close()
-            except Exception:
+            except (IraError, Exception):
                 logger.debug("Failed to close %s", type(closeable).__name__, exc_info=True)
         try:
             ingestor.close()
-        except Exception:
+        except (IraError, Exception):
             logger.debug("Failed to close ingestor", exc_info=True)
 
     summary = {

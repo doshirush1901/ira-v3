@@ -107,11 +107,19 @@ class ProceduralMemory:
         query: str,
         successful_response_path: list[str],
     ) -> Procedure:
-        raw = await self._llm_call(_PATTERN_SYSTEM_PROMPT, query)
+        user_msg = f"Query: {query}\n\nSuccessful agent path: {', '.join(successful_response_path)}"
+        raw = await self._llm_call(_PATTERN_SYSTEM_PROMPT, user_msg)
         if raw in ("(LLM call failed)", "(No OpenAI key configured)") or not raw or not raw.strip():
             trigger_pattern = query.lower()
         else:
-            trigger_pattern = raw.strip()
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and parsed.get("trigger", "").strip():
+                    trigger_pattern = parsed["trigger"].strip()
+                else:
+                    trigger_pattern = raw.strip()
+            except (json.JSONDecodeError, TypeError):
+                trigger_pattern = raw.strip()
 
         procedures = await self._load_cache()
         best_match: Procedure | None = None

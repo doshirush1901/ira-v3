@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
+from ira.exceptions import IraError
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,7 +114,7 @@ class DataEventBus:
         for handler in handlers:
             try:
                 await handler(event)
-            except Exception:
+            except (IraError, Exception):
                 logger.exception(
                     "DataEventBus handler failed for %s (%s)",
                     event.event_type.value, event.entity_id,

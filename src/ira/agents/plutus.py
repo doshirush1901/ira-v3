@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError, LLMError, ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ class Plutus(BaseAgent):
             return "Prometheus agent not available."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Prometheus error: {exc}"
 
     # ── main handler ──────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ class Plutus(BaseAgent):
                     lines.append(f"  - {sq.get('content', '')[:200]}")
 
             return "\n".join(lines)
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("PricingEngine call failed in Plutus")
             return "(Pricing engine unavailable)"
 
@@ -224,7 +225,7 @@ class Plutus(BaseAgent):
                     f"Machine: {d.get('machine_model', 'N/A')}"
                 )
             return "\n".join(lines)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("CRM query failed in Plutus")
             return "(CRM data unavailable)"
 

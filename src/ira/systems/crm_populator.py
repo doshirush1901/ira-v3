@@ -26,6 +26,7 @@ from ira.agents.delphi import Delphi
 from ira.config import get_settings
 from ira.data.crm import CRMDatabase
 from ira.data.models import ContactType
+from ira.exceptions import DatabaseError, IraError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ class CRMPopulator:
                         self._stats["inserted"],
                         self._stats["skipped_rejected"],
                     )
-            except Exception:
+            except (LLMError, DatabaseError, IraError, Exception):
                 self._stats["errors"] += 1
                 logger.exception(
                     "Failed to process contact: %s",
@@ -268,7 +269,7 @@ class CRMPopulator:
                     },
                     source_store=SourceStore.POPULATOR,
                 ))
-            except Exception:
+            except (IraError, Exception):
                 logger.debug("Populator event emission failed", exc_info=True)
 
     # ── Evidence gathering (Clio cross-referencing) ──────────────────────
@@ -336,7 +337,7 @@ class CRMPopulator:
                     )
                 ).strip()
 
-        except Exception:
+        except (DatabaseError, Exception):
             logger.debug("KB evidence gathering failed for %s", search_term, exc_info=True)
 
         return evidence
@@ -449,7 +450,7 @@ class CRMPopulator:
             logger.info("Extracted %d contacts from Gmail", len(results))
             return results
 
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Gmail extraction failed")
             return []
 
@@ -521,7 +522,7 @@ class CRMPopulator:
             )
             return results
 
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("KB extraction failed")
             return []
 
@@ -557,7 +558,7 @@ class CRMPopulator:
                 })
             logger.info("Extracted %d contacts from Neo4j", len(results))
             return results
-        except Exception:
+        except (DatabaseError, Exception):
             logger.debug("Neo4j extraction failed", exc_info=True)
             return []
 

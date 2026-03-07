@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from ira.data.models import AgentMessage
+from ira.exceptions import ToolExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ class MessageBus:
         for handler in handlers:
             try:
                 await handler(message)
-            except Exception:
+            except (ToolExecutionError, Exception):
                 logger.exception(
                     "Handler failed for message from '%s' to '%s'",
                     message.from_agent,

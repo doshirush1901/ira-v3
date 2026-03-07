@@ -20,6 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ira.config import get_settings
+from ira.exceptions import IngestionError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class RespiratorySystem:
                 )
                 if self._is_unhealthy(vitals) and self._immune_system is not None:
                     await self._immune_system.respond(vitals)
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("Heartbeat iteration failed")
             await asyncio.sleep(self._heartbeat_interval)
 
@@ -113,14 +114,14 @@ class RespiratorySystem:
             from ira.brain.ingestion_gatekeeper import run_ingestion_cycle
             result = await run_ingestion_cycle()
             logger.info("INHALE Alexandros ingestion: %s", result)
-        except Exception:
+        except (IngestionError, Exception):
             logger.exception("INHALE Alexandros ingestion failed")
 
         if self._email_processor is not None:
             try:
                 await self._email_processor.fetch_and_process()
                 logger.info("INHALE email processing complete")
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("INHALE email processing failed")
         else:
             logger.debug("INHALE skipping email processing (no EmailProcessor)")
@@ -142,7 +143,7 @@ class RespiratorySystem:
                 len(report.gaps_identified),
                 len(report.creative_connections),
             )
-        except Exception:
+        except (IraError, Exception):
             logger.exception("DREAM cycle failed")
 
     # ── EXHALE ────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ class RespiratorySystem:
             try:
                 dream_report = await self._dream_mode.run_dream_cycle()
                 summary_parts.append(f"Dream cycle: {dream_report}")
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("EXHALE dream cycle failed")
         else:
             logger.debug("EXHALE skipping dream mode (not configured)")
@@ -164,7 +165,7 @@ class RespiratorySystem:
             try:
                 drip_result = await self._drip_engine.evaluate_campaigns()
                 summary_parts.append(f"Drip evaluation: {drip_result}")
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("EXHALE drip evaluation failed")
         else:
             logger.debug("EXHALE skipping drip engine (not configured)")
@@ -192,7 +193,7 @@ class RespiratorySystem:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Failed to send Telegram daily summary")
 
     # ── BREATH TIMING ─────────────────────────────────────────────────────

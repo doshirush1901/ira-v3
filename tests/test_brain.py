@@ -83,10 +83,14 @@ def embedding_config():
 
 
 @pytest.fixture()
-def embedding_service(embedding_config):
+def embedding_service(embedding_config, tmp_path):
     from ira.brain.embeddings import EmbeddingService
 
-    return EmbeddingService(config=embedding_config, cache_size=64)
+    return EmbeddingService(
+        config=embedding_config,
+        cache_size=64,
+        cache_path=str(tmp_path / "embedding_cache.db"),
+    )
 
 
 @pytest.fixture()

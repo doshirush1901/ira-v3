@@ -15,7 +15,9 @@ from typing import Any
 import aiosqlite
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +94,7 @@ class Atlas(BaseAgent):
             handler=self._tool_get_production_schedule,
         ))
 
-        if self._services.get("pantheon"):
+        if self._services.get(SK.PANTHEON):
             self.register_tool(AgentTool(
                 name="ask_hephaestus",
                 description="Delegate a production/machine specs question to the Hephaestus agent.",
@@ -115,7 +117,7 @@ class Atlas(BaseAgent):
         return await self.production_schedule()
 
     async def _tool_ask_hephaestus(self, query: str) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent("hephaestus")
@@ -123,7 +125,8 @@ class Atlas(BaseAgent):
             return "Hephaestus agent not available."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Hephaestus delegation failed: %s", exc)
             return f"Hephaestus error: {exc}"
 
     # ── DB setup ──────────────────────────────────────────────────────────

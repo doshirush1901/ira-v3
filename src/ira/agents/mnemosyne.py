@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ class Mnemosyne(BaseAgent):
                 return "No episodic memories found."
             lines = [f"- {e.get('summary', e.get('content', ''))[:300]}" for e in results]
             return "\n".join(lines)
-        except Exception as exc:
+        except (DatabaseError, Exception) as exc:
             return f"Episodic memory error: {exc}"
 
     async def _tool_get_relationship(self, contact_id: str) -> str:

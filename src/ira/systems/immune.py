@@ -19,6 +19,7 @@ from ira.brain.embeddings import EmbeddingService
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
+from ira.exceptions import DatabaseError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +220,7 @@ class ImmuneSystem:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
-        except Exception:
+        except (IraError, Exception):
             logger.exception("Failed to send Telegram alert")
 
     # ── KNOWLEDGE HEALTH ──────────────────────────────────────────────────
@@ -236,7 +237,7 @@ class ImmuneSystem:
                 "point_count": info.points_count,
                 "status": str(info.status),
             }
-        except Exception as exc:
+        except (DatabaseError, Exception) as exc:
             report["qdrant"] = {"error": str(exc)}
 
         try:
@@ -256,7 +257,7 @@ class ImmuneSystem:
                 "orphaned_nodes": orphaned,
                 "node_counts": node_counts,
             }
-        except Exception as exc:
+        except (DatabaseError, Exception) as exc:
             report["neo4j"] = {"error": str(exc)}
 
         try:
@@ -271,7 +272,7 @@ class ImmuneSystem:
                     f"Knowledge health: {len(chronic)} chronic issue(s) detected",
                     severity="warning",
                 )
-        except Exception:
+        except (IraError, Exception):
             logger.debug("KnowledgeHealthMonitor not available", exc_info=True)
 
         return report
@@ -311,7 +312,7 @@ class ImmuneSystem:
                 result["action"] = "unknown_service"
                 result["error"] = f"No recovery action for '{service_name}'"
 
-        except Exception as exc:
+        except (DatabaseError, IraError, Exception) as exc:
             result["error"] = str(exc)
             logger.exception("Recovery failed for %s", service_name)
 

@@ -3,17 +3,20 @@
 Every component that needs to convert text into dense vectors — the Qdrant
 manager, the retriever, the document ingestor, sales intelligence — goes
 through :class:`EmbeddingService`.  It wraps the Voyage AI embeddings API,
-handles batching, retries, and an in-memory cache so that repeated texts
-(e.g. the same query issued by multiple agents in one request) are never
-re-embedded.
+handles batching, retries, and a two-tier cache (in-memory L1 + SQLite L2)
+so that repeated texts are never re-embedded across restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import sqlite3
 from collections import OrderedDict
+from datetime import datetime
+from pathlib import Path
 from typing import Sequence
 
 import httpx
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 _VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
 _MAX_BATCH_SIZE = 128
 _DEFAULT_CACHE_SIZE = 4096
+_DEFAULT_CACHE_PATH = "data/brain/embedding_cache.db"
 
 _MAX_RETRIES = 5
 _INITIAL_BACKOFF_S = 0.5
@@ -35,6 +39,69 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _init_sqlite_cache(path: str) -> None:
+    """Create cache directory and table if they do not exist."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_cache (
+                text_hash TEXT PRIMARY KEY,
+                embedding BLOB,
+                created_at TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sqlite_get_sync(path: str, text_hash: str) -> list[float] | None:
+    """Synchronous SQLite cache lookup."""
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            row = conn.execute(
+                "SELECT embedding FROM embedding_cache WHERE text_hash = ?",
+                (text_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            blob = row[0]
+            return json.loads(blob.decode("utf-8") if isinstance(blob, bytes) else blob)
+        finally:
+            conn.close()
+    except (sqlite3.Error, json.JSONDecodeError) as e:
+        logger.warning("SQLite cache read failed for %s: %s", text_hash[:16], e)
+        return None
+
+
+def _sqlite_put_sync(path: str, text_hash: str, embedding: list[float]) -> None:
+    """Synchronous SQLite cache write."""
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    text_hash,
+                    json.dumps(embedding).encode("utf-8"),
+                    datetime.now(tz=None).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("SQLite cache write failed for %s: %s", text_hash[:16], e)
+
+
 class EmbeddingService:
     """Async wrapper around the Voyage AI embeddings endpoint."""
 
@@ -43,12 +110,15 @@ class EmbeddingService:
         config: EmbeddingConfig | None = None,
         *,
         cache_size: int = _DEFAULT_CACHE_SIZE,
+        cache_path: str = _DEFAULT_CACHE_PATH,
     ) -> None:
         cfg = config or get_settings().embedding
         self._api_key = cfg.api_key.get_secret_value()
         self._model = cfg.model
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._cache_size = cache_size
+        self._cache_path = cache_path
+        _init_sqlite_cache(cache_path)
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -60,28 +130,61 @@ class EmbeddingService:
     ) -> list[list[float]]:
         """Embed a list of texts, returning one vector per input.
 
-        Texts already in the cache are served from memory.  The remainder
+        L1 (in-memory) is checked first, then L2 (SQLite). Uncached texts
         are sent to Voyage AI in batches of up to ``_MAX_BATCH_SIZE``.
+        New embeddings are stored in both caches.
         """
         if not texts:
             return []
 
         results: list[list[float] | None] = [None] * len(texts)
-        uncached_indices: list[int] = []
+        l1_miss_indices: list[int] = []
 
         for i, text in enumerate(texts):
             cached = self._cache_get(text)
             if cached is not None:
                 results[i] = cached
             else:
-                uncached_indices.append(i)
+                l1_miss_indices.append(i)
 
-        if uncached_indices:
-            uncached_texts = [texts[i] for i in uncached_indices]
-            vectors = await self._embed_batched(uncached_texts, input_type=input_type)
-            for idx, vec in zip(uncached_indices, vectors):
+        if not l1_miss_indices:
+            return results  # type: ignore[return-value]
+
+        # L2 (SQLite) lookup for L1 misses (parallel)
+        l2_results = await asyncio.gather(
+            *[
+                asyncio.to_thread(
+                    _sqlite_get_sync, self._cache_path, _text_hash(texts[idx])
+                )
+                for idx in l1_miss_indices
+            ]
+        )
+        l2_miss_indices: list[int] = []
+        for idx, vec in zip(l1_miss_indices, l2_results):
+            if vec is not None:
                 results[idx] = vec
                 self._cache_put(texts[idx], vec)
+            else:
+                l2_miss_indices.append(idx)
+
+        if l2_miss_indices:
+            uncached_texts = [texts[i] for i in l2_miss_indices]
+            vectors = await self._embed_batched(uncached_texts, input_type=input_type)
+            for idx, vec in zip(l2_miss_indices, vectors):
+                results[idx] = vec
+                text = texts[idx]
+                self._cache_put(text, vec)
+            await asyncio.gather(
+                *[
+                    asyncio.to_thread(
+                        _sqlite_put_sync,
+                        self._cache_path,
+                        _text_hash(texts[idx]),
+                        vec,
+                    )
+                    for idx, vec in zip(l2_miss_indices, vectors)
+                ]
+            )
 
         return results  # type: ignore[return-value]
 
@@ -91,8 +194,18 @@ class EmbeddingService:
         if cached is not None:
             return cached
 
+        vec = await asyncio.to_thread(
+            _sqlite_get_sync, self._cache_path, _text_hash(query)
+        )
+        if vec is not None:
+            self._cache_put(query, vec)
+            return vec
+
         vectors = await self._call_api([query], input_type="query")
         self._cache_put(query, vectors[0])
+        await asyncio.to_thread(
+            _sqlite_put_sync, self._cache_path, _text_hash(query), vectors[0]
+        )
         return vectors[0]
 
     # ── batching ─────────────────────────────────────────────────────────

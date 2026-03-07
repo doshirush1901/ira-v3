@@ -37,6 +37,7 @@ from ira.brain.ingestion_gatekeeper import (
     run_ingestion_cycle,
     scan_for_undigested,
 )
+from ira.exceptions import LLMError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,7 @@ class Alexandros(BaseAgent):
                 user_message=user_msg,
                 temperature=0.2,
             )
-        except Exception:
+        except (LLMError, Exception):
             logger.warning("LLM synthesis failed, returning raw documents")
             preamble = (
                 f"**Alexandros retrieved {len(doc_texts)} document(s) from the archive "

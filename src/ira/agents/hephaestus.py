@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ class Hephaestus(BaseAgent):
             return "Asclepius agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Asclepius error: {exc}"
 
     async def _tool_ask_atlas(self, query: str) -> str:
@@ -117,7 +118,7 @@ class Hephaestus(BaseAgent):
             return "Atlas agent not found."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Atlas error: {exc}"
 
     # ── handle ───────────────────────────────────────────────────────────

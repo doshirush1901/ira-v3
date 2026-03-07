@@ -168,16 +168,26 @@ class ConversationMemory:
         ]
         return results
 
-    async def extract_entities(self, message: str) -> list[dict]:
+    async def extract_entities(self, message: str) -> dict[str, list]:
+        """Extract entities from a message. Returns dict with keys: companies, people, emails, machines, quote_ids, dates, amounts."""
         system = load_prompt("conversation_extract_entities")
         raw = await self._llm_call(system, message)
+        empty: dict[str, list] = {
+            "companies": [],
+            "people": [],
+            "emails": [],
+            "machines": [],
+            "quote_ids": [],
+            "dates": [],
+            "amounts": [],
+        }
         try:
             parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return parsed
+            if isinstance(parsed, dict):
+                return {k: parsed.get(k, []) if isinstance(parsed.get(k), list) else [] for k in empty}
         except (json.JSONDecodeError, TypeError):
             logger.warning("Entity extraction LLM returned non-JSON")
-        return []
+        return empty
 
     async def resolve_coreferences(self, message: str, history: list[dict]) -> str:
         context = "\n".join(

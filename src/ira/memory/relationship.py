@@ -82,11 +82,18 @@ class RelationshipMemory:
             raw = await self._llm_call(_MOMENTS_SYSTEM_PROMPT, interaction.content)
             try:
                 parsed = json.loads(raw)
-                if isinstance(parsed, list):
+                moments = []
+                if isinstance(parsed, dict) and "moments" in parsed:
+                    for m in parsed["moments"]:
+                        if isinstance(m, dict) and m.get("content", "").strip():
+                            moments.append(m["content"].strip())
+                elif isinstance(parsed, list):
                     for m in parsed:
                         if isinstance(m, str) and m.strip():
-                            rel.memorable_moments.append(m.strip())
-                    rel.memorable_moments = rel.memorable_moments[-50:]
+                            moments.append(m.strip())
+                for m in moments:
+                    rel.memorable_moments.append(m)
+                rel.memorable_moments = rel.memorable_moments[-50:]
             except (json.JSONDecodeError, TypeError):
                 pass
 

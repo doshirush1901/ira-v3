@@ -19,6 +19,7 @@ from flashrank import Ranker, RerankRequest
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
+from ira.exceptions import DatabaseError, IngestionError, IraError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ class UnifiedRetriever:
                 for r in results:
                     r["source_type"] = source_type
                 merged.extend(results)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Retrieval from %s failed", source_type)
 
         if not merged:
@@ -94,7 +95,7 @@ class UnifiedRetriever:
                     for d in discovered:
                         d["source_type"] = "discovery"
                     merged.extend(discovered)
-            except Exception:
+            except (IraError, Exception):
                 logger.warning("Knowledge discovery fallback failed", exc_info=True)
 
         if not merged:
@@ -289,7 +290,7 @@ class UnifiedRetriever:
                 }
                 for m in (memories if isinstance(memories, list) else [])
             ]
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Mem0 search failed")
             return []
 
@@ -302,7 +303,7 @@ class UnifiedRetriever:
             chunks = [r.get("content", "")[:100] for r in results[:10]]
             sources = [r.get("source_type", "") for r in results[:10]]
             await gc.log_retrieval(query, chunks, sources)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.warning("Retrieval logging failed", exc_info=True)
 
     # ── imports fallback ───────────────────────────────────────────────────
@@ -325,7 +326,7 @@ class UnifiedRetriever:
                 }
                 for r in results[:limit]
             ]
-        except Exception:
+        except (IngestionError, Exception):
             logger.debug("Imports fallback not available", exc_info=True)
             return []
 
@@ -349,7 +350,7 @@ class UnifiedRetriever:
             reranked = self._ranker.rerank(
                 RerankRequest(query=query, passages=passages)
             )
-        except Exception:
+        except (IraError, Exception):
             logger.exception("FlashRank reranking failed; returning by original score")
             results.sort(key=lambda r: r.get("score", 0), reverse=True)
             return results[:limit]
@@ -388,7 +389,7 @@ class UnifiedRetriever:
                 for entity in learner.get_all_learned().get("competitors", []):
                     if entity.lower() in content.lower():
                         r.setdefault("metadata", {})["competitor_mentioned"] = True
-        except Exception:
+        except (IraError, Exception):
             logger.debug("Learned corrections failed", exc_info=True)
         return results
 

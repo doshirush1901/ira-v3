@@ -17,6 +17,7 @@ import httpx
 
 from ira.config import get_settings
 from ira.data.models import Contact, WarmthLevel
+from ira.exceptions import LLMError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ class VoiceSystem:
                 )
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"]
-        except Exception:
+        except (LLMError, Exception):
             logger.exception("Voice LLM reshaping failed — returning raw response")
             return text
 

@@ -17,6 +17,7 @@ import httpx
 from neo4j import AsyncGraphDatabase
 
 from ira.config import LLMConfig, Neo4jConfig, get_settings
+from ira.exceptions import DatabaseError, IraError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class KnowledgeGraph:
                 payload={**payload, "entity_type": entity_type},
                 source_store=SourceStore.NEO4J,
             ))
-        except Exception:
+        except (IraError, Exception):
             logger.debug("Neo4j event emission failed", exc_info=True)
 
     # ── schema / indexes ─────────────────────────────────────────────────
@@ -294,7 +295,7 @@ class KnowledgeGraph:
                 from_type, from_key, rel_type, to_type, to_key,
             )
             return True
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception(
                 "Failed to create relationship (%s:%s)-[%s]->(%s:%s)",
                 from_type, from_key, rel_type, to_type, to_key,
@@ -416,7 +417,7 @@ class KnowledgeGraph:
                 "nodes": row.get("nodes", []),
                 "relationships": row.get("relationships", []),
             }
-        except Exception:
+        except (DatabaseError, Exception):
             logger.debug("APOC not available, falling back to MATCH path query")
 
         records = await self._read(

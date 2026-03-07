@@ -29,6 +29,7 @@ from telegram.ext import (
 )
 
 from ira.config import get_settings
+from ira.exceptions import ConfigurationError, DatabaseError, IraError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         _last_exchange[user_id] = {"query": query, "response": response, "agents_used": agents_used}
         await update.effective_message.reply_text(_truncate(response))
-    except Exception:
+    except (ToolExecutionError, Exception):
         logger.exception("Pantheon query failed")
         await update.effective_message.reply_text(
             "Something went wrong while processing your request."
@@ -161,7 +162,7 @@ async def cmd_draft(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             draft_context,
             {"draft_type": "email", "tone": "professional"},
         )
-    except Exception:
+    except (ToolExecutionError, Exception):
         logger.exception("Calliope draft failed")
         await update.effective_message.reply_text("Failed to generate draft.")
         return
@@ -259,7 +260,7 @@ async def cmd_campaign(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 f"*Campaign Plan — {campaign_name}*\n\n{_truncate(response, 3800)}",
                 parse_mode="Markdown",
             )
-        except Exception:
+        except (ToolExecutionError, Exception):
             logger.exception("Campaign start failed")
             await update.effective_message.reply_text("Failed to start campaign.")
 
@@ -306,7 +307,7 @@ async def cmd_campaign(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.effective_message.reply_text(
                 _truncate(status_text), parse_mode="Markdown"
             )
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Campaign status failed")
             await update.effective_message.reply_text(
                 "Failed to retrieve campaign status."
@@ -336,7 +337,7 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         minutes = await _board_meeting.run_meeting(topic)
-    except Exception:
+    except (ToolExecutionError, Exception):
         logger.exception("Board meeting failed")
         await update.effective_message.reply_text(
             "The board meeting encountered an error."
@@ -397,7 +398,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         await nemesis.ingest_telegram_feedback(
                             text, prev.get("query", ""), prev.get("response", ""),
                         )
-        except Exception:
+        except (IraError, Exception):
             logger.debug("Feedback detection failed (non-critical)")
 
     try:
@@ -420,7 +421,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         _last_exchange[user_id] = {"query": text, "response": response, "agents_used": agents_used}
         await update.effective_message.reply_text(_truncate(response))
-    except Exception:
+    except (ToolExecutionError, Exception):
         logger.exception("Pantheon message handling failed")
         await update.effective_message.reply_text(
             "Something went wrong while processing your message."
@@ -476,7 +477,7 @@ async def start_bot(
             try:
                 from mem0 import MemoryClient
                 _mem0 = MemoryClient(api_key=_mem0_key)
-            except Exception:
+            except (ConfigurationError, Exception):
                 logger.debug("Mem0 not available for feedback handler")
 
         _feedback_handler = FeedbackHandler(
@@ -485,7 +486,7 @@ async def start_bot(
         )
         await _feedback_handler.load_scores()
         logger.info("Feedback handler initialized for Telegram (with correction store)")
-    except Exception:
+    except (ConfigurationError, Exception):
         logger.debug("FeedbackHandler not available — feedback detection disabled")
 
     token = get_settings().telegram.bot_token.get_secret_value()

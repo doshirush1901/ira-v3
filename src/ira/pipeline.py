@@ -28,6 +28,7 @@ import time
 from typing import Any
 
 from ira.data.models import Channel, Contact, Direction
+from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ class RequestPipeline:
         crm: Any | None = None,
         musculoskeletal: Any | None = None,
         unified_context: Any | None = None,
+        adaptive_style: Any | None = None,
+        realtime_observer: Any | None = None,
+        power_level_tracker: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -69,6 +73,9 @@ class RequestPipeline:
         self._crm = crm
         self._musculoskeletal = musculoskeletal
         self._unified_ctx = unified_context
+        self._adaptive_style = adaptive_style
+        self._realtime_observer = realtime_observer
+        self._power_level_tracker = power_level_tracker
 
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
@@ -124,7 +131,7 @@ class RequestPipeline:
                         raw_response, channel,
                     )
                     return shaped, [pending["agent_name"]]
-                except Exception:
+                except (ToolExecutionError, Exception):
                     logger.exception("Clarification resume failed")
 
         # ── 1. PERCEIVE ───────────────────────────────────────────────
@@ -158,7 +165,7 @@ class RequestPipeline:
                 resolved_input = await self._conversation.resolve_coreferences(
                     raw_input, history,
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Coreference resolution failed")
 
         cross_channel_history: list[dict[str, Any]] = []
@@ -167,7 +174,7 @@ class RequestPipeline:
                 cross_channel_history = self._unified_ctx.recent_history(
                     contact_email, limit=10,
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("UnifiedContextManager lookup failed")
 
         # Still fetch active_goal for the LEARN step (slot extraction)
@@ -175,7 +182,7 @@ class RequestPipeline:
         if self._goals is not None:
             try:
                 active_goal = await self._goals.get_active_goal(contact_email)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("GoalManager lookup failed")
 
         logger.info(
@@ -209,7 +216,7 @@ class RequestPipeline:
                         route_method = "truth_hint"
                         agent_names = []
                         logger.info("TRUTH HINT | matched: %s", hint.get("patterns", ["?"])[0][:60])
-            except Exception:
+            except (IraError, Exception):
                 logger.debug("Truth hints check failed (non-critical)")
 
         # ── 4. ROUTE (Procedure) ─────────────────────────────────────
@@ -217,7 +224,7 @@ class RequestPipeline:
         if route_method is None and self._procedural is not None:
             try:
                 procedure = await self._procedural.find_procedure(resolved_input)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("ProceduralMemory lookup failed")
 
             if procedure is not None:
@@ -238,24 +245,30 @@ class RequestPipeline:
         enrichment_parts: list[str] = []
 
         try:
-            from ira.brain.adaptive_style import AdaptiveStyleTracker
-            style_tracker = AdaptiveStyleTracker()
-            await style_tracker._load()
+            if self._adaptive_style is not None:
+                style_tracker = self._adaptive_style
+            else:
+                from ira.brain.adaptive_style import AdaptiveStyleTracker
+                style_tracker = AdaptiveStyleTracker()
+                await style_tracker._load()
             await style_tracker.update_profile(contact_email, raw_input)
             style_prompt = style_tracker.get_style_prompt(contact_email)
             if style_prompt:
                 enrichment_parts.append(style_prompt)
-        except Exception:
+        except (IraError, Exception):
             logger.debug("AdaptiveStyle not available")
 
         try:
-            from ira.brain.realtime_observer import RealTimeObserver
-            observer = RealTimeObserver()
-            await observer._load()
+            if self._realtime_observer is not None:
+                observer = self._realtime_observer
+            else:
+                from ira.brain.realtime_observer import RealTimeObserver
+                observer = RealTimeObserver()
+                await observer._load()
             learnings_prompt = observer.format_for_prompt(contact_email)
             if learnings_prompt:
                 enrichment_parts.append(learnings_prompt)
-        except Exception:
+        except (IraError, Exception):
             logger.debug("RealTimeObserver not available")
 
         if self._endocrine is not None:
@@ -265,13 +278,16 @@ class RequestPipeline:
                     f"System state: confidence={status.get('confidence', 0.5):.2f} "
                     f"energy={status.get('energy', 0.5):.2f}"
                 )
-            except Exception:
-                pass
+            except (IraError, Exception):
+                logger.debug("Endocrine status not available", exc_info=True)
 
         try:
-            from ira.brain.power_levels import PowerLevelTracker
-            tracker = PowerLevelTracker()
-            await tracker._load()
+            if self._power_level_tracker is not None:
+                tracker = self._power_level_tracker
+            else:
+                from ira.brain.power_levels import PowerLevelTracker
+                tracker = PowerLevelTracker()
+                await tracker._load()
             top = tracker.get_leaderboard()[:3]
             if top:
                 enrichment_parts.append(
@@ -279,18 +295,17 @@ class RequestPipeline:
                         f"{a['agent']}({a['tier']})" for a in top
                     )
                 )
-        except Exception:
-            pass
+        except (IraError, Exception):
+            logger.debug("PowerLevelTracker not available", exc_info=True)
 
         try:
-            from ira.agents.chiron import Chiron
             chiron = self._pantheon.get_agent("chiron")
             if chiron is not None and hasattr(chiron, "get_sales_guidance"):
                 guidance = await chiron.get_sales_guidance()
                 if guidance and len(guidance) > 20:
                     enrichment_parts.append(f"Sales coaching:\n{guidance[:500]}")
-        except Exception:
-            pass
+        except (ToolExecutionError, Exception):
+            logger.debug("Chiron sales guidance not available", exc_info=True)
 
         # ── 6. EXECUTE ───────────────────────────────────────────────
         # Pass perception and enrichment for prompt context, plus live
@@ -362,7 +377,7 @@ class RequestPipeline:
                         assessment["state"],
                         assessment["gaps"],
                     )
-            except Exception:
+            except (LLMError, Exception):
                 logger.exception("Metacognition assessment failed")
 
         # ── 8. REFLECT ───────────────────────────────────────────────
@@ -375,7 +390,7 @@ class RequestPipeline:
                 )
                 if reflection.get("should_surface") and reflection.get("content"):
                     reflection_text = f"\n\n_{reflection['content']}_"
-            except Exception:
+            except (LLMError, Exception):
                 logger.exception("InnerVoice reflection failed")
 
         # ── 9. SHAPE ─────────────────────────────────────────────────
@@ -393,7 +408,7 @@ class RequestPipeline:
         if self._endocrine is not None:
             try:
                 modifiers = self._endocrine.get_behavioral_modifiers()
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("Endocrine modifiers failed")
 
         shaped = await self._voice.shape_response(
@@ -451,7 +466,7 @@ class RequestPipeline:
                 resp = await agent.handle(query, context)
                 responses[name] = resp
                 used.append(name)
-            except Exception:
+            except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed during execution", name)
                 responses[name] = f"(Agent '{name}' encountered an error)"
                 used.append(name)
@@ -491,7 +506,7 @@ class RequestPipeline:
         try:
             await self._conversation.add_message(contact_email, channel, "user", raw_input)
             await self._conversation.add_message(contact_email, channel, "assistant", raw_response)
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("ConversationMemory recording failed")
 
         # CRM interaction log
@@ -511,7 +526,7 @@ class RequestPipeline:
                             "agents": agents_used,
                         }, default=str),
                     )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("CRM interaction logging failed")
 
         # Musculoskeletal action tracking
@@ -531,7 +546,7 @@ class RequestPipeline:
                         },
                     )
                 )
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("MusculoskeletalSystem recording failed")
 
         # Goal slot extraction
@@ -540,7 +555,7 @@ class RequestPipeline:
                 extracted = await self._goals.extract_slots(active_goal, raw_input)
                 if extracted:
                     await self._goals.update_goal(active_goal.id, extracted)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("GoalManager slot update failed")
 
         # Goal detection for new goals
@@ -550,7 +565,7 @@ class RequestPipeline:
                     resolved_input,
                     {"contact_id": contact_email, "channel": channel},
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("GoalManager detection failed")
 
         # Procedural learning
@@ -559,7 +574,7 @@ class RequestPipeline:
                 await self._procedural.learn_procedure(
                     resolved_input, agents_used,
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("ProceduralMemory learning failed")
 
         # Trigger Sophia for background reflection (fire-and-forget)
@@ -570,7 +585,7 @@ class RequestPipeline:
                     f"Reflect on this interaction: {raw_input[:300]}",
                     {"response": raw_response[:300], "route": route_method},
                 )
-            except Exception:
+            except (ToolExecutionError, Exception):
                 logger.warning("Sophia reflection failed", exc_info=True)
 
         try:
@@ -585,7 +600,7 @@ class RequestPipeline:
                     "RealTimeObserver task failed: %s", t.exception()
                 )
             )
-        except Exception:
+        except (IraError, Exception):
             logger.warning("RealTimeObserver not available", exc_info=True)
 
         # Endocrine feedback
@@ -594,7 +609,7 @@ class RequestPipeline:
                 self._endocrine.boost("growth_signal", 0.02)
                 if route_method == "deterministic":
                     self._endocrine.boost("confidence", 0.01)
-            except Exception:
+            except (IraError, Exception):
                 logger.warning("Endocrine update failed", exc_info=True)
 
         if self._unified_ctx is not None:
@@ -602,7 +617,7 @@ class RequestPipeline:
                 self._unified_ctx.record_turn(
                     contact_email, channel, raw_input, raw_response,
                 )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("UnifiedContextManager recording failed")
 
         logger.info("LEARN | recorded for %s", contact_email)

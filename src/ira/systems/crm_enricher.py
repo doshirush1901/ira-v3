@@ -24,6 +24,7 @@ from ira.brain.embeddings import EmbeddingService
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.crm import CRMDatabase
 from ira.data.models import ContactType, DealStage, WarmthLevel
+from ira.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class CRMEnricher:
                         self._stats["scores_set"],
                         self._stats["companies_enriched"],
                     )
-            except Exception:
+            except (DatabaseError, Exception):
                 self._stats["errors"] += 1
                 logger.exception("Failed to enrich %s", contact.email)
 
@@ -136,7 +137,7 @@ class CRMEnricher:
             )
             evidence["quotes"] = results
 
-        except Exception:
+        except (DatabaseError, Exception):
             logger.debug("KB search failed for %s", search_term, exc_info=True)
 
         return evidence

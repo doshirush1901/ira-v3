@@ -43,6 +43,7 @@ from sqlalchemy.orm import (
 
 from ira.config import get_settings
 from ira.data.models import Channel, ContactType, DealStage, Direction, WarmthLevel
+from ira.exceptions import IraError
 
 _str_uuid = lambda: str(uuid4())  # noqa: E731
 
@@ -302,13 +303,31 @@ class DripStepModel(Base):
 class CRMDatabase:
     """Async CRM service backed by PostgreSQL (or SQLite for tests)."""
 
+    _instances: dict[str, CRMDatabase] = {}
+
+    def __new__(cls, database_url: str | None = None, **kwargs: Any) -> CRMDatabase:
+        url = database_url or get_settings().database.url
+        if url not in cls._instances:
+            instance = super().__new__(cls)
+            instance._initialized = False
+            cls._instances[url] = instance
+        return cls._instances[url]
+
     def __init__(self, database_url: str | None = None, event_bus: Any | None = None) -> None:
+        if self._initialized:
+            return
         url = database_url or get_settings().database.url
         self._engine = create_async_engine(url, echo=False)
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine, expire_on_commit=False
         )
         self._event_bus = event_bus
+        self._initialized = True
+
+    @classmethod
+    def _reset_instances(cls) -> None:
+        """Reset singleton instances (for testing only)."""
+        cls._instances.clear()
 
     def set_event_bus(self, event_bus: Any) -> None:
         """Late-bind the event bus after construction."""
@@ -326,7 +345,7 @@ class CRMDatabase:
                 payload=payload,
                 source_store=SourceStore.CRM,
             ))
-        except Exception:
+        except (IraError, Exception):
             logger.debug("CRM event emission failed for %s", event_type, exc_info=True)
 
     @property

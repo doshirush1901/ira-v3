@@ -45,7 +45,7 @@ from ira.brain.imports_metadata_index import (
     search_index,
 )
 from ira.config import get_settings
-from ira.exceptions import PathTraversalError
+from ira.exceptions import IngestionError, IraError, LLMError, PathTraversalError
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
 
     try:
         vectors = await _embed_texts_voyage(texts, input_type="document")
-    except Exception as exc:
+    except (LLMError, Exception) as exc:
         logger.warning("Failed to build summary embeddings: %s", exc)
         return {}
 
@@ -197,7 +197,7 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
             }),
         )
         logger.info("Built and cached %d summary embeddings", len(embeddings))
-    except Exception as exc:
+    except (IraError, Exception) as exc:
         logger.warning("Failed to save embedding cache: %s", exc)
 
     return embeddings
@@ -321,14 +321,15 @@ async def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_
                     lambda: fp.read_text(errors="ignore"),
                 )
                 return raw[:max_chars]
-            except Exception:
+            except (IraError, Exception):
+                logger.debug("Plain-text read failed for %s", fp.name)
                 return ""
         return ""
 
     try:
         text = await asyncio.to_thread(reader, fp)
         return text[:max_chars]
-    except Exception as exc:
+    except (IngestionError, Exception) as exc:
         logger.warning("Text extraction failed for %s: %s", fp.name, exc)
         return ""
 
@@ -372,14 +373,14 @@ async def queue_for_deferred_ingestion(
                         f.write("\n")
                 f.write(entry + "\n")
             os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-        except Exception:
+        except (IraError, Exception):
             os.unlink(tmp_path)
             raise
 
     try:
         await asyncio.to_thread(_write)
         logger.info("Queued %s for deferred ingestion", filename)
-    except Exception as exc:
+    except (IngestionError, Exception) as exc:
         logger.warning("Failed to queue %s: %s", filename, exc)
 
 
@@ -428,7 +429,7 @@ async def mark_deferred_ingested(filepath: str) -> None:
             with os.fdopen(fd, "w") as f:
                 f.write(content)
             os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-        except Exception:
+        except (IraError, Exception):
             try:
                 os.unlink(tmp_path)
             except OSError:

@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from ira.config import get_settings
+from ira.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class KnowledgeHealthMonitor:
                 has_match = any(r.get("score", 0) >= 0.5 for r in results)
                 if not has_match:
                     missing.append(doc_name)
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.exception("Failed to check for '%s' in Qdrant", doc_name)
                 missing.append(doc_name)
         if missing:

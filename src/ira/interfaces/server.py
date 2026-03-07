@@ -28,6 +28,8 @@ from ira.middleware.auth import require_api_key
 from ira.middleware.request_context import RequestContextMiddleware, RequestIdFilter
 
 from ira.config import get_settings
+from ira.exceptions import ConfigurationError, IraError
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             from mem0 import MemoryClient
             mem0_client = MemoryClient(api_key=mem0_key)
             logger.info("Mem0 client initialised")
-        except Exception:
+        except (ConfigurationError, Exception):
             logger.warning("Mem0 init failed — continuing without conversational memory")
 
     retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
@@ -128,8 +130,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await crm.create_tables()
     quotes = QuoteManager(session_factory=crm.session_factory)
 
-    _services["crm"] = crm
-    _services["quotes"] = quotes
+    _services[SK.CRM] = crm
+    _services[SK.QUOTES] = quotes
 
     # ── Circulatory system (data sync) ────────────────────────────────
     from ira.systems.circulatory import CirculatorySystem
@@ -150,15 +152,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         embedding=embedding,
     )
 
-    _services["data_event_bus"] = data_event_bus
-    _services["circulatory"] = circulatory
+    _services[SK.DATA_EVENT_BUS] = data_event_bus
+    _services[SK.CIRCULATORY] = circulatory
 
     # ── Pricing engine ────────────────────────────────────────────────
     from ira.brain.pricing_engine import PricingEngine
 
     pricing_engine = PricingEngine(retriever=retriever, crm=crm)
 
-    _services["pricing_engine"] = pricing_engine
+    _services[SK.PRICING_ENGINE] = pricing_engine
 
     # ── Pantheon ──────────────────────────────────────────────────────
     from ira.message_bus import MessageBus
@@ -168,10 +170,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     pantheon = Pantheon(retriever=retriever, bus=bus)
 
     shared_services = {
-        "crm": crm,
-        "quotes": quotes,
-        "pricing_engine": pricing_engine,
-        "retriever": retriever,
+        SK.CRM: crm,
+        SK.QUOTES: quotes,
+        SK.PRICING_ENGINE: pricing_engine,
+        SK.RETRIEVER: retriever,
     }
 
     pantheon.inject_services(shared_services)
@@ -231,7 +233,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.info("Initialised %s", name)
         except asyncio.TimeoutError:
             logger.warning("Timed out initialising %s after %ds — skipping", name, _INIT_TIMEOUT)
-        except Exception:
+        except (ConfigurationError, Exception):
             logger.warning("Failed to initialise %s — skipping", name, exc_info=True)
 
     long_term = LongTermMemory()
@@ -266,7 +268,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _safe_init("procedural_memory", procedural_memory.initialize())
     learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
 
-    dream_mode._procedural = procedural_memory
+    dream_mode.configure(procedural_memory=procedural_memory)
 
     _services["procedural_memory"] = procedural_memory
     _services["learning_hub"] = learning_hub
@@ -307,16 +309,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # ── Inject ALL memory services into Pantheon agents ───────────────
     pantheon.inject_services({
-        "long_term_memory": long_term,
-        "episodic_memory": episodic,
-        "conversation_memory": conversation,
-        "relationship_memory": relationship_memory,
-        "goal_manager": goal_manager,
-        "emotional_intelligence": emotional_intelligence,
-        "procedural_memory": procedural_memory,
-        "learning_hub": learning_hub,
-        "data_event_bus": data_event_bus,
-        "pantheon": pantheon,
+        SK.LONG_TERM_MEMORY: long_term,
+        SK.EPISODIC_MEMORY: episodic,
+        SK.CONVERSATION_MEMORY: conversation,
+        SK.RELATIONSHIP_MEMORY: relationship_memory,
+        SK.GOAL_MANAGER: goal_manager,
+        SK.EMOTIONAL_INTELLIGENCE: emotional_intelligence,
+        SK.PROCEDURAL_MEMORY: procedural_memory,
+        SK.LEARNING_HUB: learning_hub,
+        SK.DATA_EVENT_BUS: data_event_bus,
+        SK.PANTHEON: pantheon,
     })
 
     # ── Unified context ───────────────────────────────────────────────
@@ -410,7 +412,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         )
         status = "ALL HEALTHY" if healthy else "DEGRADED"
         logger.info("Startup validation: %s — %s", status, list(health_report))
-    except Exception:
+    except (IraError, Exception):
         logger.exception("Startup validation failed — continuing in degraded mode")
 
     # ── Ready ─────────────────────────────────────────────────────────
@@ -451,7 +453,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if svc is not None and hasattr(svc, "close"):
             try:
                 await svc.close()
-            except Exception:
+            except (IraError, Exception):
                 logger.exception("Failed to close %s", svc_name)
 
     _services.clear()
@@ -492,7 +494,7 @@ app.include_router(dashboard_router)
 async def request_timing(request: Request, call_next: Any) -> Any:
     """Log request duration and wrap through RespiratorySystem breath timing."""
     start = time.monotonic()
-    respiratory = _services.get("respiratory")
+    respiratory = _services.get(SK.RESPIRATORY)
 
     try:
         if respiratory is not None:
@@ -500,8 +502,8 @@ async def request_timing(request: Request, call_next: Any) -> Any:
                 response = await call_next(request)
         else:
             response = await call_next(request)
-    except Exception as exc:
-        immune = _services.get("immune")
+    except (IraError, Exception) as exc:
+        immune = _services.get(SK.IMMUNE)
         if immune is not None:
             immune.log_error(exc, {"path": request.url.path, "method": request.method})
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -537,7 +539,7 @@ async def query(req: QueryRequest) -> QueryResponse:
             metadata=metadata,
         )
     else:
-        pantheon = _svc("pantheon")
+        pantheon = _svc(SK.PANTHEON)
         ctx = metadata.copy()
         if req.user_id:
             unified_context = _services.get("unified_context")
@@ -559,10 +561,10 @@ async def query(req: QueryRequest) -> QueryResponse:
 @app.get("/api/health")
 async def health_check() -> dict[str, Any]:
     """Run the immune system health check."""
-    immune = _svc("immune")
+    immune = _svc(SK.IMMUNE)
     try:
         report = await immune.run_startup_validation()
-    except Exception as exc:
+    except (IraError, Exception) as exc:
         report = getattr(exc, "health_report", {"error": str(exc)})
     return {"status": "ok", "services": report}
 
@@ -572,11 +574,11 @@ async def deep_health_check() -> dict[str, Any]:
     """Check connectivity to all external services."""
     checks: dict[str, Any] = {}
 
-    immune = _services.get("immune")
+    immune = _services.get(SK.IMMUNE)
     if immune is not None:
         try:
             checks["core"] = await immune.run_startup_validation()
-        except Exception as exc:
+        except (IraError, Exception) as exc:
             checks["core"] = {"status": "error", "detail": str(exc)}
 
     mem0_key = get_settings().memory.api_key.get_secret_value()
@@ -589,7 +591,7 @@ async def deep_health_check() -> dict[str, Any]:
                     headers={"Authorization": f"Token {mem0_key}"},
                 )
                 checks["mem0"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}
-        except Exception as exc:
+        except (ConfigurationError, Exception) as exc:
             checks["mem0"] = {"status": "unhealthy", "detail": str(exc)}
 
     all_healthy = all(
@@ -602,7 +604,7 @@ async def deep_health_check() -> dict[str, Any]:
 @app.get("/api/pipeline")
 async def pipeline_summary() -> dict[str, Any]:
     """Return the CRM sales pipeline summary."""
-    crm = _svc("crm")
+    crm = _svc(SK.CRM)
     summary = await crm.get_pipeline_summary()
     return {"pipeline": summary}
 
@@ -610,7 +612,7 @@ async def pipeline_summary() -> dict[str, Any]:
 @app.get("/api/agents")
 async def list_agents() -> dict[str, Any]:
     """List all Pantheon agents."""
-    pantheon = _svc("pantheon")
+    pantheon = _svc(SK.PANTHEON)
     agents = [
         {
             "name": agent.name,
@@ -649,7 +651,7 @@ async def ingest_file(file: UploadFile) -> dict[str, Any]:
             detail=f"File too large ({len(content)} bytes). Maximum: {_MAX_UPLOAD_BYTES} bytes",
         )
 
-    digestive = _svc("digestive")
+    digestive = _svc(SK.DIGESTIVE)
     text = content.decode("utf-8", errors="replace")
     result = await digestive.ingest(
         raw_data=text,
@@ -680,7 +682,7 @@ async def board_meeting(req: BoardMeetingRequest) -> dict[str, Any]:
 @app.get("/api/dream-report")
 async def dream_report() -> dict[str, Any]:
     """Trigger a dream cycle and return the report."""
-    dm = _svc("dream_mode")
+    dm = _svc(SK.DREAM_MODE)
     report = await dm.run_dream_cycle()
     return {
         "cycle_date": str(report.cycle_date),
@@ -694,7 +696,7 @@ async def dream_report() -> dict[str, Any]:
 @app.post("/api/email/draft")
 async def email_draft(req: EmailDraftRequest) -> dict[str, Any]:
     """Generate an email draft via Calliope."""
-    pantheon = _svc("pantheon")
+    pantheon = _svc(SK.PANTHEON)
     calliope = pantheon.get_agent("calliope")
     if calliope is None:
         raise HTTPException(status_code=503, detail="Calliope agent not available")

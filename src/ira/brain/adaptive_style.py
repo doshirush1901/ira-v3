@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ira.exceptions import ConfigurationError
+
 logger = logging.getLogger(__name__)
 
 _PROFILES_PATH = Path("data/brain/style_profiles.json")
@@ -66,7 +68,7 @@ class AdaptiveStyleTracker:
             data = json.loads(raw)
             for cid, vals in data.items():
                 self._profiles[cid] = StyleProfile(**vals)
-        except Exception:
+        except (ConfigurationError, Exception):
             logger.debug("Failed to load style profiles")
 
     async def _save(self) -> None:

@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from ira.config import MemoryConfig, get_settings
+from ira.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class LongTermMemory:
                 for m in filtered
                 if "preference_type" in m.get("metadata", {})
             }
-        except Exception as e:
+        except (DatabaseError, Exception) as e:
             logger.exception("Mem0 get_user_preferences failed: %s", e)
             return {}
 

@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -295,7 +296,7 @@ class Delphi(BaseAgent):
                         f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
                         for r in results
                     )
-            except Exception:
+            except (DatabaseError, Exception):
                 logger.debug("KB search failed during contact classification")
 
         email_history = ctx.get("email_history", "")

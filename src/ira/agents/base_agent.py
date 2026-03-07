@@ -21,9 +21,11 @@ import httpx
 
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
+from ira.exceptions import IraError, ToolExecutionError
 from ira.message_bus import MessageBus
 from ira.prompt_loader import load_prompt
 from ira.skills import SKILL_MATRIX
+from ira.service_keys import ServiceKey as SK
 from ira.skills.handlers import use_skill as _use_skill
 
 logger = logging.getLogger(__name__)
@@ -110,8 +112,6 @@ class BaseAgent(ABC):
         Only registers tools whose backing service is present in
         ``self._services``.  Called lazily at the start of ``run()``.
         """
-        from ira.service_keys import ServiceKey as SK
-
         if self._default_tools_registered:
             return
         self._default_tools_registered = True
@@ -193,7 +193,7 @@ class BaseAgent(ABC):
         return "\n".join(lines)
 
     async def _tool_recall_memory(self, query: str, user_id: str = "global") -> str:
-        mem = self._services["long_term_memory"]
+        mem = self._services[SK.LONG_TERM_MEMORY]
         results = await mem.search(query, user_id=user_id)
         if not results:
             return "No memories found."
@@ -203,14 +203,14 @@ class BaseAgent(ABC):
         return "\n".join(lines)
 
     async def _tool_store_memory(self, content: str, user_id: str = "global") -> str:
-        mem = self._services["long_term_memory"]
+        mem = self._services[SK.LONG_TERM_MEMORY]
         result = await mem.store(content, user_id=user_id)
         return f"Stored. ({len(result)} memory entries affected)"
 
     async def _tool_get_conversation_history(
         self, user_id: str, channel: str = "CLI", limit: str = "20",
     ) -> str:
-        conv = self._services["conversation_memory"]
+        conv = self._services[SK.CONVERSATION_MEMORY]
         history = await conv.get_history(user_id, channel, limit=int(limit))
         if not history:
             return "No conversation history found."
@@ -220,7 +220,7 @@ class BaseAgent(ABC):
         return "\n".join(lines)
 
     async def _tool_check_relationship(self, contact_id: str) -> str:
-        rel_mem = self._services["relationship_memory"]
+        rel_mem = self._services[SK.RELATIONSHIP_MEMORY]
         rel = await rel_mem.get_relationship(contact_id)
         return json.dumps({
             "contact_id": rel.contact_id,
@@ -231,7 +231,7 @@ class BaseAgent(ABC):
         }, default=str)
 
     async def _tool_check_goals(self, contact_id: str) -> str:
-        gm = self._services["goal_manager"]
+        gm = self._services[SK.GOAL_MANAGER]
         goal = await gm.get_active_goal(contact_id)
         if goal is None:
             return f"No active goal for contact '{contact_id}'."
@@ -244,7 +244,7 @@ class BaseAgent(ABC):
         }, default=str)
 
     async def _tool_recall_episodes(self, query: str, user_id: str = "global", limit: str = "5") -> str:
-        ep = self._services["episodic_memory"]
+        ep = self._services[SK.EPISODIC_MEMORY]
         results = await ep.surface_relevant_episodes(query, user_id)
         if not results:
             return "No episodic memories found."
@@ -264,7 +264,7 @@ class BaseAgent(ABC):
                 f"Cannot delegate to '{agent_name}': maximum delegation "
                 f"depth ({self._MAX_DELEGATION_DEPTH}) reached."
             )
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent(agent_name.lower())
@@ -272,7 +272,8 @@ class BaseAgent(ABC):
             return f"Agent '{agent_name}' not found."
         try:
             return await agent.handle(question, {"_delegation_depth": depth + 1})
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Delegation to '%s' failed in %s: %s", agent_name, self.name, exc)
             return f"Agent '{agent_name}' error: {exc}"
 
     # ── ReAct loop ────────────────────────────────────────────────────────
@@ -337,8 +338,6 @@ class BaseAgent(ABC):
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name."""
-        from ira.exceptions import ToolExecutionError
-
         for tool in self.tools:
             if tool.name == name:
                 try:
@@ -346,7 +345,7 @@ class BaseAgent(ABC):
                     return str(result)[:4000]
                 except ToolExecutionError:
                     raise
-                except Exception as exc:
+                except (IraError, Exception) as exc:
                     logger.warning("Tool '%s' failed in %s: %s", name, self.name, exc)
                     return f"Tool error: {exc}"
         return f"Unknown tool: {name}"
@@ -733,7 +732,7 @@ class BaseAgent(ABC):
         Any agent can call this to contribute graph edges without needing
         direct access to the KnowledgeGraph.
         """
-        event_bus = self._services.get("data_event_bus")
+        event_bus = self._services.get(SK.DATA_EVENT_BUS)
         if event_bus is None:
             return
         from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
@@ -752,7 +751,7 @@ class BaseAgent(ABC):
                 },
                 source_store=SourceStore.NEO4J,
             ))
-        except Exception:
+        except (IraError, Exception):
             logger.debug("Relationship event emission failed in %s", self.name, exc_info=True)
 
     # ── utility ──────────────────────────────────────────────────────────

@@ -13,7 +13,9 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import DatabaseError, IraError, ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +37,11 @@ class Prometheus(BaseAgent):
 
     @property
     def _crm(self) -> Any | None:
-        return self._services.get("crm")
+        return self._services.get(SK.CRM)
 
     @property
     def _quotes(self) -> Any | None:
-        return self._services.get("quotes")
+        return self._services.get(SK.QUOTES)
 
     # ── tool registration ─────────────────────────────────────────────────
 
@@ -99,7 +101,7 @@ class Prometheus(BaseAgent):
                 handler=self._tool_get_quote_analytics,
             ))
 
-        if self._services.get("pantheon"):
+        if self._services.get(SK.PANTHEON):
             self.register_tool(AgentTool(
                 name="ask_quotebuilder",
                 description="Delegate a quoting question to the Quotebuilder agent.",
@@ -184,7 +186,7 @@ class Prometheus(BaseAgent):
         return json.dumps(analytics, default=str)
 
     async def _tool_ask_quotebuilder(self, query: str) -> str:
-        pantheon = self._services.get("pantheon")
+        pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
             return "Pantheon service unavailable."
         agent = pantheon.get_agent("quotebuilder")
@@ -192,7 +194,8 @@ class Prometheus(BaseAgent):
             return "Quotebuilder agent not available."
         try:
             return await agent.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("Quotebuilder delegation failed: %s", exc)
             return f"Quotebuilder error: {exc}"
 
     # ── main handler ──────────────────────────────────────────────────────
@@ -229,7 +232,7 @@ class Prometheus(BaseAgent):
             si = SalesIntelligence(
                 retriever=self._retriever,
                 crm=self._crm,
-                pricing_engine=self._services.get("pricing_engine"),
+                pricing_engine=self._services.get(SK.PRICING_ENGINE),
             )
             contact_email = ctx.get("perception", {}).get("resolved_contact", {}).get("email")
             if contact_email:
@@ -237,7 +240,7 @@ class Prometheus(BaseAgent):
                 if health:
                     return f"Customer health: {health}"
             return ""
-        except Exception:
+        except (IraError, Exception):
             logger.debug("SalesIntelligence not available")
             return ""
 
@@ -292,7 +295,7 @@ class Prometheus(BaseAgent):
                     parts.append(f"  - {s.get('name')} ({s.get('email')})")
 
             return "\n".join(parts) if parts else "(No CRM data found)"
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("CRM context build failed in Prometheus")
             return "(CRM query failed)"
 
@@ -313,6 +316,6 @@ class Prometheus(BaseAgent):
                     )
 
             return "\n".join(parts) if parts else ""
-        except Exception:
+        except (DatabaseError, Exception):
             logger.exception("Quote context build failed in Prometheus")
             return ""

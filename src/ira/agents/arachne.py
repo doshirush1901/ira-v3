@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -109,5 +110,5 @@ class Arachne(BaseAgent):
             return "Cadmus agent not found."
         try:
             return await cadmus.handle(query)
-        except Exception as exc:
+        except (ToolExecutionError, Exception) as exc:
             return f"Cadmus error: {exc}"

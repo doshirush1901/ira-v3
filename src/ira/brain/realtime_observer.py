@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from ira.config import get_settings
+from ira.exceptions import ConfigurationError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class RealTimeObserver:
                 entry = json.loads(line)
                 cid = entry.get("contact_id", "unknown")
                 self._learnings.setdefault(cid, []).append(entry)
-        except Exception:
+        except (ConfigurationError, Exception):
             logger.debug("Failed to load realtime learnings")
 
     async def _persist(self, entry: dict[str, Any]) -> None:
@@ -101,7 +102,7 @@ class RealTimeObserver:
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"]
                 extracted = json.loads(raw)
-        except Exception:
+        except (LLMError, Exception):
             logger.debug("RealTimeObserver extraction failed")
             return {"facts": [], "corrections": [], "preferences": []}
 
