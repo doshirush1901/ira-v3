@@ -23,6 +23,7 @@ import httpx
 
 from ira.config import LLMConfig, get_settings
 from ira.data.crm import CRMDatabase
+from ira.exceptions import DatabaseError
 from ira.memory.procedural import Procedure, ProceduralMemory
 from ira.prompt_loader import load_prompt
 from ira.skills import SKILL_MATRIX
@@ -220,6 +221,66 @@ class LearningHub:
             for r in poor[:limit]
         ]
 
+    async def trigger_micro_learning_cycle(self) -> dict[str, Any]:
+        """Run a targeted SleepTrainer cycle on recent high-priority corrections.
+
+        Unlike the full dream-mode sleep training which processes all pending
+        corrections in batch, this processes only the most recent HIGH/CRITICAL
+        corrections for just-in-time learning during an active chat session.
+        """
+        try:
+            from ira.brain.correction_store import CorrectionStore
+            from ira.brain.embeddings import EmbeddingService
+            from ira.brain.qdrant_manager import QdrantManager
+            from ira.brain.sleep_trainer import SleepTrainer
+
+            correction_store = CorrectionStore()
+            await correction_store.initialize()
+
+            pending = await correction_store.get_pending_corrections(limit=5)
+            high_priority = [
+                c for c in pending
+                if c.get("severity") in ("HIGH", "CRITICAL")
+            ]
+
+            if not high_priority:
+                await correction_store.close()
+                return {"status": "no_high_priority_corrections", "processed": 0}
+
+            embedding = EmbeddingService()
+            qdrant = QdrantManager(embedding_service=embedding)
+            trainer = SleepTrainer(
+                correction_store=correction_store,
+                qdrant_manager=qdrant,
+                embedding_service=embedding,
+            )
+
+            stats = await trainer.run_training()
+            await correction_store.close()
+
+            logger.info(
+                "Micro-learning cycle complete: processed %d corrections",
+                stats.get("corrections_count", 0),
+            )
+            return stats
+
+        except (DatabaseError, Exception):
+            logger.exception("Micro-learning cycle failed")
+            return {"status": "error", "processed": 0}
+
+    async def notify_new_feedback(
+        self,
+        polarity: str,
+        query: str,
+        correction: str | None = None,
+    ) -> None:
+        """Called by FeedbackHandler when new feedback arrives.
+
+        Triggers micro-learning for negative feedback with corrections.
+        """
+        if polarity == "negative" and correction:
+            await self.trigger_micro_learning_cycle()
+
     def get_all_feedback(self) -> list[FeedbackRecord]:
         """Return all recorded feedback (most recent last)."""
         return list(self._recent_feedback)
@@ -270,7 +331,7 @@ class LearningHub:
                 ))
             if self._recent_feedback:
                 logger.info("Loaded %d feedback records from disk", len(self._recent_feedback))
-        except Exception:
+        except (DatabaseError, Exception):
             logger.warning("Failed to load feedback from disk", exc_info=True)
 
     def _save_feedback(self, record: FeedbackRecord) -> None:
@@ -291,7 +352,7 @@ class LearningHub:
             )
             conn.commit()
             conn.close()
-        except Exception:
+        except (DatabaseError, Exception):
             logger.warning("Failed to persist feedback record", exc_info=True)
 
     # ── internal helpers ──────────────────────────────────────────────────

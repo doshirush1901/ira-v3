@@ -31,6 +31,8 @@ from typing import Any, Optional
 
 import typer
 from rich.console import Console
+from ira.exceptions import ConfigurationError, IraError
+from ira.service_keys import ServiceKey as SK
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
@@ -119,8 +121,8 @@ def _build_pantheon() -> tuple[Any, dict[str, Any]]:
         try:
             from mem0 import MemoryClient
             mem0_client = MemoryClient(api_key=mem0_key)
-        except Exception:
-            pass
+        except (ConfigurationError, Exception):
+            logger.warning("Mem0 init failed — continuing without conversational memory")
 
     retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
     bus = MessageBus()
@@ -144,11 +146,12 @@ def _build_pantheon() -> tuple[Any, dict[str, Any]]:
     pantheon = Pantheon(retriever=retriever, bus=bus)
 
     shared_services = {
-        "crm": crm,
-        "quotes": quotes,
-        "pricing_engine": pricing_engine,
-        "retriever": retriever,
-        "data_event_bus": data_event_bus,
+        SK.CRM: crm,
+        SK.QUOTES: quotes,
+        SK.PRICING_ENGINE: pricing_engine,
+        SK.RETRIEVER: retriever,
+        SK.DATA_EVENT_BUS: data_event_bus,
+        "mem0_client": mem0_client,
     }
     pantheon.inject_services(shared_services)
     bind_skill_services(shared_services)
@@ -156,17 +159,24 @@ def _build_pantheon() -> tuple[Any, dict[str, Any]]:
     return pantheon, shared_services
 
 
-async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any:
-    """Construct a full RequestPipeline for CLI use.
+async def _build_pipeline(
+    pantheon: Any,
+    shared_services: dict[str, Any],
+) -> tuple[Any, Any]:
+    """Construct a full RequestPipeline and FeedbackHandler for CLI use.
 
     *shared_services* is the dict returned by ``_build_pantheon()`` and
     contains at least ``crm`` and ``quotes`` so we reuse the same
     connection pool instead of opening a duplicate.
+
+    Returns ``(pipeline, feedback_handler)``.
     """
-    data_event_bus = shared_services.get("data_event_bus")
+    data_event_bus = shared_services.get(SK.DATA_EVENT_BUS)
     if data_event_bus is not None:
         await data_event_bus.start()
 
+    from ira.brain.correction_store import CorrectionStore
+    from ira.brain.feedback_handler import FeedbackHandler
     from ira.brain.knowledge_graph import KnowledgeGraph
     from ira.context import UnifiedContextManager
     from ira.memory.conversation import ConversationMemory
@@ -210,11 +220,24 @@ async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any
 
     voice = VoiceSystem()
     endocrine = EndocrineSystem()
-    crm = shared_services["crm"]
+    crm = shared_services[SK.CRM]
     await crm.create_tables()
     unified_context = UnifiedContextManager()
 
     learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
+
+    correction_store = CorrectionStore()
+    await correction_store.initialize()
+
+    mem0_client = shared_services.get("mem0_client")
+
+    feedback_handler = FeedbackHandler(
+        learning_hub=learning_hub,
+        correction_store=correction_store,
+        mem0_client=mem0_client,
+        procedural_memory=procedural_memory,
+    )
+    await feedback_handler.load_scores()
 
     sensory.configure_memory(
         emotional_intelligence=emotional_intelligence,
@@ -223,25 +246,25 @@ async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any
     )
 
     pantheon.inject_services({
-        "long_term_memory": long_term,
-        "episodic_memory": episodic,
-        "conversation_memory": conversation,
-        "relationship_memory": relationship_memory,
-        "goal_manager": goal_manager,
-        "procedural_memory": procedural_memory,
-        "emotional_intelligence": emotional_intelligence,
-        "learning_hub": learning_hub,
-        "pantheon": pantheon,
-        "data_event_bus": shared_services.get("data_event_bus"),
+        SK.LONG_TERM_MEMORY: long_term,
+        SK.EPISODIC_MEMORY: episodic,
+        SK.CONVERSATION_MEMORY: conversation,
+        SK.RELATIONSHIP_MEMORY: relationship_memory,
+        SK.GOAL_MANAGER: goal_manager,
+        SK.PROCEDURAL_MEMORY: procedural_memory,
+        SK.EMOTIONAL_INTELLIGENCE: emotional_intelligence,
+        SK.LEARNING_HUB: learning_hub,
+        SK.PANTHEON: pantheon,
+        SK.DATA_EVENT_BUS: shared_services.get(SK.DATA_EVENT_BUS),
     })
 
     nemesis = pantheon.get_agent("nemesis")
     if nemesis is not None and hasattr(nemesis, "configure"):
         nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
 
-    logger.info("CLI pipeline ready (degraded mode: no dream, immune, or respiratory systems)")
+    logger.info("CLI pipeline ready with feedback handler")
 
-    return RequestPipeline(
+    pipeline = RequestPipeline(
         sensory=sensory,
         conversation_memory=conversation,
         relationship_memory=relationship_memory,
@@ -255,6 +278,8 @@ async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any
         crm=crm,
         unified_context=unified_context,
     )
+
+    return pipeline, feedback_handler
 
 
 def _build_digestive() -> tuple[Any, Any, Any]:
@@ -278,18 +303,29 @@ def _build_digestive() -> tuple[Any, Any, Any]:
     return digestive, ingestor, qdrant
 
 
-def _build_email_processor(pantheon: Any, digestive: Any) -> Any:
-    """Construct an EmailProcessor wired to the Pantheon's Delphi agent."""
-    from ira.brain.embeddings import EmbeddingService
+def _build_email_processor(
+    pantheon: Any,
+    digestive: Any,
+    shared_services: dict[str, Any] | None = None,
+) -> Any:
+    """Construct an EmailProcessor wired to the Pantheon's Delphi agent.
+
+    Reuses the CRM instance from *shared_services* when available to
+    avoid opening a duplicate database connection pool.
+    """
     from ira.brain.knowledge_graph import KnowledgeGraph
-    from ira.brain.qdrant_manager import QdrantManager
-    from ira.data.crm import CRMDatabase
     from ira.interfaces.email_processor import EmailProcessor
     from ira.systems.sensory import SensorySystem
 
     graph = KnowledgeGraph()
     sensory = SensorySystem(knowledge_graph=graph)
-    crm = CRMDatabase()
+
+    if shared_services and SK.CRM in shared_services:
+        crm = shared_services[SK.CRM]
+    else:
+        from ira.data.crm import CRMDatabase
+        crm = CRMDatabase()
+
     delphi = pantheon.get_agent("delphi")
     return EmailProcessor(
         delphi=delphi,
@@ -332,13 +368,14 @@ def _update_env_file(updates: dict[str, str]) -> None:
 def chat(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Interactive chat session with Ira."""
+    """Interactive chat session with Ira (feedback-aware)."""
     _configure_logging(verbose)
 
     console.print(
         Panel(
             "[bold]Ira[/bold] — Machinecraft AI Pantheon\n"
-            "Type your message and press Enter.  Use [bold]/quit[/bold] to exit.",
+            "Type your message and press Enter.  Use [bold]/quit[/bold] to exit.\n"
+            "[dim]Feedback is detected automatically — just correct Ira naturally.[/dim]",
             title="Chat Session",
             border_style="blue",
         )
@@ -350,7 +387,9 @@ def chat(
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline = await _build_pipeline(pantheon, shared_services)
+            pipeline, feedback_handler = await _build_pipeline(pantheon, shared_services)
+
+            last_exchange: dict[str, Any] | None = None
 
             while True:
                 try:
@@ -364,6 +403,34 @@ def chat(
                 if text.lower() in ("/quit", "/exit", "/q"):
                     break
 
+                if last_exchange is not None:
+                    try:
+                        fb_result = await feedback_handler.detect_feedback(
+                            text,
+                            last_exchange["query"],
+                            last_exchange["response"],
+                        )
+
+                        if fb_result["polarity"] in ("positive", "negative"):
+                            await feedback_handler.process_feedback(
+                                text,
+                                last_exchange["query"],
+                                last_exchange["response"],
+                                last_exchange["agents_used"],
+                                user_id=user_id,
+                            )
+
+                            if fb_result["polarity"] == "negative":
+                                console.print(
+                                    "[dim yellow]  ↳ Correction noted and queued for learning.[/dim yellow]"
+                                )
+                            elif fb_result["polarity"] == "positive":
+                                console.print(
+                                    "[dim green]  ↳ Positive feedback recorded.[/dim green]"
+                                )
+                    except (IraError, Exception):
+                        logger.debug("Feedback detection failed", exc_info=True)
+
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[bold green]Consulting agents..."),
@@ -371,11 +438,17 @@ def chat(
                     transient=True,
                 ) as progress:
                     progress.add_task("thinking", total=None)
-                    response, _agents = await pipeline.process_request(
+                    response, agents_used = await pipeline.process_request(
                         raw_input=text,
                         channel="cli",
                         sender_id=user_id,
                     )
+
+                last_exchange = {
+                    "query": text,
+                    "response": response,
+                    "agents_used": agents_used,
+                }
 
                 console.print()
                 console.print(Panel(Markdown(response), title="Ira", border_style="green"))
@@ -399,7 +472,7 @@ def ask(
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline = await _build_pipeline(pantheon, shared_services)
+            pipeline, _feedback = await _build_pipeline(pantheon, shared_services)
 
             with Progress(
                 SpinnerColumn(),
@@ -417,6 +490,111 @@ def ask(
         console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
     _run(_ask())
+
+
+@app.command()
+def feedback(
+    correction: str = typer.Argument(..., help="The correction or feedback to record."),
+    entity: str = typer.Option("", "--entity", "-e", help="Entity being corrected (e.g. company name, price)."),
+    category: str = typer.Option("GENERAL", "--category", "-c", help="PRICING, SPECS, CUSTOMER, COMPETITOR, GENERAL."),
+    severity: str = typer.Option("HIGH", "--severity", "-s", help="CRITICAL, HIGH, MEDIUM, LOW."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Record an explicit correction for Ira to learn from.
+
+    Use this when you notice Ira got something wrong outside of a chat
+    session, or want to proactively teach it a fact.
+
+    Examples::
+
+        ira feedback "Acme Corp is a customer, not a competitor"
+        ira feedback "The MC-500 weighs 2400kg" --entity "MC-500" --category SPECS
+        ira feedback "Al Rajhi quoted at USD 185k" --entity "Al Rajhi" --category PRICING
+    """
+    _configure_logging(verbose)
+
+    async def _feedback() -> None:
+        from ira.brain.correction_store import (
+            CorrectionCategory,
+            CorrectionSeverity,
+            CorrectionStore,
+        )
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.brain.sleep_trainer import SleepTrainer
+
+        try:
+            cat = CorrectionCategory(category.upper())
+        except ValueError:
+            console.print(f"[red]Invalid category: {category}[/red]")
+            console.print(f"Valid: {', '.join(c.value for c in CorrectionCategory)}")
+            raise typer.Exit(1)
+
+        try:
+            sev = CorrectionSeverity(severity.upper())
+        except ValueError:
+            console.print(f"[red]Invalid severity: {severity}[/red]")
+            console.print(f"Valid: {', '.join(s.value for s in CorrectionSeverity)}")
+            raise typer.Exit(1)
+
+        store = CorrectionStore()
+        await store.initialize()
+
+        correction_entity = entity or correction[:100]
+        cid = await store.add_correction(
+            entity=correction_entity,
+            new_value=correction,
+            category=cat,
+            severity=sev,
+            source="cli-feedback",
+        )
+
+        console.print(
+            f"[green]Correction #{cid} recorded:[/green] {correction_entity}"
+        )
+
+        if sev in (CorrectionSeverity.HIGH, CorrectionSeverity.CRITICAL):
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold magenta]Running micro-learning cycle..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("learning", total=None)
+
+                embedding = EmbeddingService()
+                qdrant = QdrantManager(embedding_service=embedding)
+                trainer = SleepTrainer(
+                    correction_store=store,
+                    qdrant_manager=qdrant,
+                    embedding_service=embedding,
+                )
+                stats = await trainer.run_training()
+
+            phases = stats.get("phases", {})
+            phase_summary = []
+            for name, info in phases.items():
+                status = info.get("status", "?")
+                style = "green" if status == "ok" else "yellow" if status == "skipped" else "red"
+                phase_summary.append(f"[{style}]{name}: {status}[/{style}]")
+
+            console.print(
+                Panel(
+                    f"[bold]Corrections processed:[/bold] {stats.get('corrections_count', 0)}\n"
+                    + "\n".join(phase_summary),
+                    title="Micro-Learning Complete",
+                    border_style="magenta",
+                )
+            )
+        else:
+            console.print(
+                "[dim]Correction stored. It will be processed in the next dream cycle "
+                "or run [bold]ira dream[/bold] to process now.[/dim]"
+            )
+
+        await store.close()
+
+    _run(_feedback())
 
 
 @app.command()
@@ -1726,7 +1904,7 @@ def health(
             progress.add_task("health", total=None)
             try:
                 report = await immune.run_startup_validation()
-            except Exception as exc:
+            except (IraError, Exception) as exc:
                 report = getattr(exc, "health_report", {})
 
         table = Table(title="System Health")

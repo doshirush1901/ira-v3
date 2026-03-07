@@ -1,8 +1,9 @@
-"""Real-time feedback processing from Telegram messages.
+"""Real-time feedback processing for all Ira interfaces.
 
 Detects positive, negative, and ambiguous feedback in user messages,
-tracks per-agent success/failure scores, and stores corrections for
-downstream learning via :class:`~ira.brain.correction_learner.CorrectionLearner`.
+tracks per-agent success/failure scores, stores corrections in the
+:class:`~ira.brain.correction_store.CorrectionStore`, and notifies the
+:class:`~ira.systems.learning_hub.LearningHub` to trigger micro-learning.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Any
 import httpx
 
 from ira.config import get_settings
+from ira.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +64,12 @@ class FeedbackHandler:
         learning_hub: Any | None = None,
         correction_store: Any | None = None,
         mem0_client: Any | None = None,
+        procedural_memory: Any | None = None,
     ) -> None:
         self._learning_hub = learning_hub
         self._correction_store = correction_store
         self._mem0_client = mem0_client
+        self._procedural_memory = procedural_memory
         self._agent_scores: dict[str, dict[str, int]] = {}
 
     # ── public API ───────────────────────────────────────────────────────
@@ -128,7 +132,7 @@ class FeedbackHandler:
         *,
         user_id: str = "global",
     ) -> dict[str, Any]:
-        """Full feedback pipeline: detect, score agents, store corrections."""
+        """Full feedback pipeline: detect, score agents, store corrections, trigger learning."""
         result = await self.detect_feedback(message, previous_query, previous_response)
         polarity = result["polarity"]
 
@@ -136,12 +140,20 @@ class FeedbackHandler:
             self._update_agent_score(agent, polarity)
 
         if polarity == "negative" and result.get("extracted_correction"):
+            correction_text = result["extracted_correction"]
+
             if self._correction_store is not None:
                 try:
-                    await self._correction_store.learn_from_correction(
-                        result["extracted_correction"]
+                    from ira.brain.correction_store import CorrectionSeverity
+                    correction_id = await self._correction_store.add_correction(
+                        entity=previous_query[:200],
+                        new_value=correction_text,
+                        severity=CorrectionSeverity.HIGH,
+                        old_value=previous_response[:500],
+                        source=f"feedback:{user_id}",
                     )
-                except Exception:
+                    result["correction_id"] = correction_id
+                except (DatabaseError, Exception):
                     logger.exception("Correction store failed")
 
             if self._mem0_client is not None:
@@ -151,18 +163,38 @@ class FeedbackHandler:
                             {
                                 "role": "user",
                                 "content": (
-                                    f"Correction: {result['extracted_correction']} "
+                                    f"Correction: {correction_text} "
                                     f"(original query: {previous_query})"
                                 ),
                             }
                         ],
                         user_id=user_id or "global",
                     )
-                except Exception:
+                except (DatabaseError, Exception):
                     logger.exception("Mem0 correction storage failed")
 
-            if self._learning_hub is not None and len(message) > 80:
-                result["queued_for_dream"] = True
+            if self._procedural_memory is not None:
+                try:
+                    await self._procedural_memory.record_failure(previous_query)
+                except (DatabaseError, Exception):
+                    logger.exception("ProceduralMemory failure recording failed")
+
+            if self._learning_hub is not None:
+                try:
+                    await self._learning_hub.trigger_micro_learning_cycle()
+                    result["micro_learning_triggered"] = True
+                except (DatabaseError, Exception):
+                    logger.exception("Micro-learning trigger failed")
+
+        elif polarity == "positive":
+            if self._procedural_memory is not None and agents_used:
+                try:
+                    await self._procedural_memory.learn_procedure(
+                        previous_query, agents_used,
+                    )
+                    result["procedure_reinforced"] = True
+                except (DatabaseError, Exception):
+                    logger.exception("ProceduralMemory reinforcement failed")
 
         await self._persist_scores()
         return result
