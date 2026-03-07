@@ -46,7 +46,33 @@ class Sophia(BaseAgent):
         ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
-        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
+        ctx = dict(context or {})
+
+        ep_mem = self._services.get("episodic_memory")
+        if ep_mem is not None:
+            try:
+                episodes = await ep_mem.surface_relevant_episodes(query, "global")
+                if episodes:
+                    ctx["recent_episodes"] = [
+                        e.get("narrative", "")[:300] for e in episodes[:3]
+                    ]
+            except Exception:
+                logger.debug("Sophia: episodic memory lookup failed")
+
+        rel_mem = self._services.get("relationship_memory")
+        if rel_mem is not None:
+            contact_id = (ctx.get("perception") or {}).get("email", "")
+            if contact_id:
+                try:
+                    rel = await rel_mem.get_relationship(contact_id)
+                    ctx["relationship_context"] = {
+                        "warmth": getattr(rel.warmth_level, "value", str(rel.warmth_level)),
+                        "interaction_count": rel.interaction_count,
+                    }
+                except Exception:
+                    logger.debug("Sophia: relationship memory lookup failed")
+
+        return await self.run(query, ctx, system_prompt=_SYSTEM_PROMPT)
 
     async def _tool_get_correction_history(self) -> str:
         pantheon = self._services.get("pantheon")
@@ -60,11 +86,16 @@ class Sophia(BaseAgent):
             store = nemesis._correction_store
             if store is None:
                 return "Correction store not available."
-            corrections = await store.get_recent(limit=20)
+            corrections = await store.get_pending_corrections(limit=20)
             if not corrections:
                 return "No recent corrections found."
             return json.dumps(
-                [{"agent": c.agent, "original": c.original[:200], "corrected": c.corrected[:200]}
+                [{"entity": c.get("entity", "?"),
+                  "category": c.get("category", "?"),
+                  "old_value": str(c.get("old_value", ""))[:200],
+                  "new_value": str(c.get("new_value", ""))[:200],
+                  "severity": c.get("severity", "?"),
+                  "status": c.get("status", "?")}
                  for c in corrections],
                 default=str,
             )

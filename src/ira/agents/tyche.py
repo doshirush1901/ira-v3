@@ -49,6 +49,12 @@ class Tyche(BaseAgent):
             handler=self._tool_get_revenue_data,
         ))
         self.register_tool(AgentTool(
+            name="search_forecast_knowledge",
+            description="Search the knowledge base for financial data, tally exports, orders, and sales data useful for forecasting. Use this when CRM skills return sparse data.",
+            parameters={"query": "Search query about revenue, orders, pipeline, finances"},
+            handler=self._tool_search_forecast_knowledge,
+        ))
+        self.register_tool(AgentTool(
             name="ask_prometheus",
             description="Delegate a question to Prometheus, the CRM/sales pipeline agent.",
             parameters={"query": "Question for Prometheus"},
@@ -71,6 +77,12 @@ class Tyche(BaseAgent):
             )
         except Exception as exc:
             return f"Revenue skill error: {exc}"
+
+    async def _tool_search_forecast_knowledge(self, query: str) -> str:
+        results = await self.search_domain_knowledge(query, limit=10)
+        if not results:
+            return "No forecast-relevant data found in knowledge base."
+        return self._format_context(results)
 
     async def _tool_ask_prometheus(self, query: str) -> str:
         pantheon = self._services.get("pantheon")

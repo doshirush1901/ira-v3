@@ -58,13 +58,10 @@ class Themis(BaseAgent):
         return await self.use_skill("lookup_employee", name=name)
 
     async def _tool_search_hr_policies(self, query: str) -> str:
-        results = await self.search_category(query, "company_internal")
+        results = await self.search_domain_knowledge(query, limit=8)
         if not results:
             return "No HR policy results found."
-        return "\n".join(
-            f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
-            for r in results
-        )
+        return self._format_context(results)
 
     async def _tool_generate_org_chart(self, department: str = "") -> str:
         return await self.use_skill("generate_org_chart", department=department)

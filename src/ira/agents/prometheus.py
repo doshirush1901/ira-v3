@@ -184,7 +184,9 @@ class Prometheus(BaseAgent):
         return json.dumps(analytics, default=str)
 
     async def _tool_ask_quotebuilder(self, query: str) -> str:
-        pantheon = self._services["pantheon"]
+        pantheon = self._services.get("pantheon")
+        if not pantheon:
+            return "Pantheon service unavailable."
         agent = pantheon.get_agent("quotebuilder")
         if agent is None:
             return "Quotebuilder agent not available."

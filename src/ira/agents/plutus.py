@@ -128,7 +128,9 @@ class Plutus(BaseAgent):
         )
 
     async def _tool_ask_prometheus(self, query: str) -> str:
-        pantheon = self._services["pantheon"]
+        pantheon = self._services.get("pantheon")
+        if not pantheon:
+            return "Pantheon service unavailable."
         agent = pantheon.get_agent("prometheus")
         if agent is None:
             return "Prometheus agent not available."
