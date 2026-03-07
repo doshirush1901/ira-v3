@@ -24,8 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger("agentic_board")
 
 KEY_AGENTS = [
-    "prometheus", "plutus", "hermes", "hephaestus", "themis",
-    "tyche", "hera", "asclepius", "atlas", "alexandros", "clio",
+    "prometheus", "plutus", "hephaestus", "atlas", "clio",
 ]
 
 BOARD_TOPIC = """\
@@ -146,14 +145,37 @@ async def run_board_meeting():
         "pantheon": pantheon,
     })
 
-    # Use gpt-4.1-mini for agent reasoning (higher rate limits) and cap iterations
+    # Cap iterations and disable cross-agent delegation to prevent OOM
     for agent in pantheon.agents.values():
-        agent.max_iterations = 4
-        agent._openai_model = "gpt-4.1-mini"
+        agent.max_iterations = 2
+        agent.tools = [t for t in agent.tools if t.name != "ask_agent"]
 
-    logger.info("Starting board meeting with %d key agents...", len(KEY_AGENTS))
+    logger.info("Starting board meeting with %d key agents (sequential)...", len(KEY_AGENTS))
     async with pantheon:
-        minutes = await pantheon.board_meeting(BOARD_TOPIC, KEY_AGENTS)
+        # Run agents sequentially to avoid OOM from parallel execution
+        from ira.data.models import BoardMeetingMinutes
+        contributions: dict[str, str] = {}
+        for agent_name in KEY_AGENTS:
+            agent = pantheon.get_agent(agent_name)
+            if agent is None:
+                continue
+            logger.info("Agent %s contributing...", agent_name)
+            try:
+                response = await agent.handle(BOARD_TOPIC)
+                contributions[agent_name] = response
+            except Exception:
+                logger.exception("Agent %s failed", agent_name)
+                contributions[agent_name] = f"(Agent {agent_name} encountered an error)"
+
+        synthesis = await pantheon.get_agent("athena").handle(
+            BOARD_TOPIC, {"agent_responses": contributions},
+        )
+        minutes = BoardMeetingMinutes(
+            topic=BOARD_TOPIC,
+            participants=["athena"] + list(contributions.keys()),
+            contributions=contributions,
+            synthesis=synthesis,
+        )
 
     logger.info(
         "Board meeting complete. %d agents contributed.",
