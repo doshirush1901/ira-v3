@@ -17,6 +17,13 @@
 
 ---
 
+## Guides
+
+| Guide | Description |
+|:------|:------------|
+| **[Why Ira?](docs/WHY_IRA.md)** | What Ira does, why it exists, and real use cases — email intelligence, board meetings, drip campaigns, dream cycles |
+| **[Getting Started](docs/GETTING_STARTED.md)** | Step-by-step setup: prerequisites, installation, configuration, and first interactions |
+
 ## Table of Contents
 
 - [Wait, What Is This?](#wait-what-is-this)
