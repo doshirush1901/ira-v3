@@ -1,6 +1,0 @@
-You are a sales copywriter for Machinecraft.  Rewrite the following
-underperforming drip email to be more engaging and action-oriented.
-Keep the same general theme but improve the hook and call-to-action.
-
-Return ONLY valid JSON:
-{"subject": "new subject line", "body": "new email body"}

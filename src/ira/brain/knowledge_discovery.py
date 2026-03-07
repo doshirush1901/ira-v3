@@ -8,6 +8,7 @@ queries hit.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -27,6 +28,7 @@ from ira.brain.qdrant_manager import QdrantManager
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.data.models import KnowledgeItem
+from ira.exceptions import PathTraversalError
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ class KnowledgeDiscovery:
         if not search_query:
             return []
 
-        candidates = search_index(search_query, limit=5)
+        candidates = await search_index(search_query, limit=5)
         logger.info(
             "Found %d candidate files for gap '%s'",
             len(candidates),
@@ -121,6 +123,11 @@ class KnowledgeDiscovery:
     ) -> list[dict]:
         """Extract text from a file and use LLM to pull relevant facts."""
         path = Path(filepath)
+        project_root = Path(__file__).resolve().parents[3]
+        data_root = project_root / "data"
+        if not path.resolve().is_relative_to(data_root):
+            raise PathTraversalError(f"Path {filepath} is outside the data directory")
+
         if not path.exists():
             logger.warning("Candidate file not found: %s", filepath)
             return []
@@ -129,7 +136,10 @@ class KnowledgeDiscovery:
         if not text:
             return []
 
-        full_text = path.read_text(errors="ignore") if path.suffix in (".txt", ".csv", ".md", ".json") else text
+        if path.suffix in (".txt", ".csv", ".md", ".json"):
+            full_text = await asyncio.to_thread(path.read_text, errors="ignore")
+        else:
+            full_text = text
 
         user_msg = f"QUERY: {query}\n\nDOCUMENT ({path.name}):\n{full_text[:8000]}"
         raw = await self._llm_call(_DEEP_EXTRACT_SYSTEM, user_msg)

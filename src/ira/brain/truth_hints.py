@@ -11,6 +11,7 @@ loaded from two JSON files:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -55,11 +56,10 @@ class TruthHintsEngine:
         self._learned_path = base / "learned_truth_hints.json"
         self._manual_hints: list[dict[str, Any]] = []
         self._learned_hints: list[dict[str, Any]] = []
-        self._load()
 
-    def _load(self) -> None:
-        self._manual_hints = self._read_file(self._manual_path)
-        self._learned_hints = self._read_file(self._learned_path)
+    async def _load(self) -> None:
+        self._manual_hints = await self._read_file(self._manual_path)
+        self._learned_hints = await self._read_file(self._learned_path)
         logger.info(
             "TruthHints loaded: %d manual, %d learned",
             len(self._manual_hints),
@@ -67,11 +67,12 @@ class TruthHintsEngine:
         )
 
     @staticmethod
-    def _read_file(path: Path) -> list[dict[str, Any]]:
+    async def _read_file(path: Path) -> list[dict[str, Any]]:
         if not path.exists():
             return []
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            raw = await asyncio.to_thread(path.read_text, "utf-8")
+            data = json.loads(raw)
             return data.get("hints", [])
         except (json.JSONDecodeError, OSError):
             logger.warning("Failed to read truth hints from %s", path)
@@ -105,7 +106,7 @@ class TruthHintsEngine:
         """Public wrapper around the complexity detector."""
         return _is_complex_query(query)
 
-    def add_learned_hint(
+    async def add_learned_hint(
         self,
         patterns: list[str],
         keywords: list[str],
@@ -120,7 +121,7 @@ class TruthHintsEngine:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         self._learned_hints.append(hint)
-        self._persist_learned()
+        await self._persist_learned()
         logger.info("Learned hint added (%d total learned)", len(self._learned_hints))
 
     def get_stats(self) -> dict[str, int]:
@@ -131,9 +132,9 @@ class TruthHintsEngine:
             "total": len(self._manual_hints) + len(self._learned_hints),
         }
 
-    def reload(self) -> None:
+    async def reload(self) -> None:
         """Re-read both hint files from disk."""
-        self._load()
+        await self._load()
 
     # ── internals ─────────────────────────────────────────────────────────
 
@@ -175,7 +176,7 @@ class TruthHintsEngine:
         except (ValueError, TypeError):
             return True
 
-    def _persist_learned(self) -> None:
+    async def _persist_learned(self) -> None:
         self._learned_path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"hints": self._learned_hints}, indent=2, ensure_ascii=False)
-        self._learned_path.write_text(payload, encoding="utf-8")
+        await asyncio.to_thread(self._learned_path.write_text, payload, "utf-8")

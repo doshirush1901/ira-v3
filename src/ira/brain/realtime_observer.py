@@ -10,6 +10,7 @@ Designed to run fire-and-forget so it never blocks the response path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -42,13 +43,13 @@ class RealTimeObserver:
         self._api_key = settings.llm.openai_api_key.get_secret_value()
         self._model = "gpt-4.1-mini"
         self._learnings: dict[str, list[dict[str, Any]]] = {}
-        self._load()
 
-    def _load(self) -> None:
+    async def _load(self) -> None:
         if not _LEARNINGS_PATH.exists():
             return
         try:
-            for line in _LEARNINGS_PATH.read_text().splitlines():
+            raw = await asyncio.to_thread(_LEARNINGS_PATH.read_text)
+            for line in raw.splitlines():
                 if not line.strip():
                     continue
                 entry = json.loads(line)
@@ -57,10 +58,15 @@ class RealTimeObserver:
         except Exception:
             logger.debug("Failed to load realtime learnings")
 
-    def _persist(self, entry: dict[str, Any]) -> None:
+    async def _persist(self, entry: dict[str, Any]) -> None:
         _LEARNINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_LEARNINGS_PATH, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        line = json.dumps(entry) + "\n"
+
+        def _append() -> None:
+            with open(_LEARNINGS_PATH, "a") as f:
+                f.write(line)
+
+        await asyncio.to_thread(_append)
 
     async def observe_turn(
         self,
@@ -115,7 +121,7 @@ class RealTimeObserver:
         if len(self._learnings[contact_id]) > _MAX_LEARNINGS_PER_CONTACT:
             self._learnings[contact_id] = self._learnings[contact_id][-_MAX_LEARNINGS_PER_CONTACT:]
 
-        self._persist(entry)
+        await self._persist(entry)
         logger.info(
             "RealTimeObserver: %d facts, %d corrections, %d preferences for %s",
             len(extracted.get("facts", [])),

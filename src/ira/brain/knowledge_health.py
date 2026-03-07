@@ -7,6 +7,7 @@ claims, and business-rule violations before they reach users.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -55,16 +56,24 @@ class KnowledgeHealthMonitor:
         self._qdrant = qdrant_manager
         self._graph = knowledge_graph
         self._mk_path = Path(machine_knowledge_path)
-        self._machine_knowledge = self._load_machine_knowledge()
+        self._machine_knowledge: dict[str, Any] | None = None
         self._recurring_issues: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
-    def _load_machine_knowledge(self) -> dict[str, Any]:
+    async def _load_machine_knowledge(self) -> dict[str, Any]:
         if self._mk_path.exists():
             try:
-                return json.loads(self._mk_path.read_text(encoding="utf-8"))
+                raw = await asyncio.to_thread(
+                    self._mk_path.read_text, encoding="utf-8",
+                )
+                return json.loads(raw)
             except (json.JSONDecodeError, OSError):
                 logger.warning("Could not load machine knowledge from %s", self._mk_path)
         return {}
+
+    async def _get_machine_knowledge(self) -> dict[str, Any]:
+        if self._machine_knowledge is None:
+            self._machine_knowledge = await self._load_machine_knowledge()
+        return self._machine_knowledge
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -143,7 +152,7 @@ class KnowledgeHealthMonitor:
             logger.warning("Business rule violations: %s", violations)
         return violations
 
-    def detect_hallucinations(self, response: str) -> list[str]:
+    async def detect_hallucinations(self, response: str) -> list[str]:
         """Flag marketing superlatives, fabricated models, and unrealistic prices."""
         flags: list[str] = []
         text_lower = response.lower()
@@ -152,7 +161,8 @@ class KnowledgeHealthMonitor:
             if phrase in text_lower:
                 flags.append(f"Superlative claim: '{phrase}'")
 
-        catalog = self._machine_knowledge.get("machine_catalog", {})
+        mk = await self._get_machine_knowledge()
+        catalog = mk.get("machine_catalog", {})
         model_pattern = re.compile(r"\b([A-Z]{2,4}[-\s]?\d{1,4}[A-Z]?(?:[-\s][A-Z0-9]+)*)\b")
         for m in model_pattern.finditer(response):
             model_str = m.group(1).replace(" ", "-")
@@ -175,10 +185,11 @@ class KnowledgeHealthMonitor:
             logger.warning("Hallucination flags: %s", flags)
         return flags
 
-    def verify_price(self, model: str, stated_price: float) -> dict[str, Any]:
+    async def verify_price(self, model: str, stated_price: float) -> dict[str, Any]:
         """Check *stated_price* against machine_knowledge.json within tolerance."""
-        catalog = self._machine_knowledge.get("machine_catalog", {})
-        hints = self._machine_knowledge.get("truth_hints", {})
+        mk = await self._get_machine_knowledge()
+        catalog = mk.get("machine_catalog", {})
+        hints = mk.get("truth_hints", {})
 
         result: dict[str, Any] = {
             "model": model,

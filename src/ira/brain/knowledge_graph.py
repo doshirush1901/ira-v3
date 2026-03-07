@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -20,7 +21,23 @@ from ira.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
 
+_VALID_LABEL = re.compile(r"^[A-Z][A-Za-z_]{0,30}$")
+_VALID_PROP_KEY = re.compile(r"^[a-z][a-z0-9_]{0,50}$")
+
+_ENTITY_SUFFIXES = re.compile(
+    r",?\s*\b(Inc\.?|LLC|Ltd\.?|Corp\.?|Co\.?|PLC|GmbH|SA|AG|NV|BV)\s*$",
+    re.IGNORECASE,
+)
+
 _EXTRACTION_SYSTEM_PROMPT = load_prompt("extract_entities")
+
+
+def normalize_entity_name(name: str) -> str:
+    """Normalize an entity name for consistent graph storage."""
+    name = name.strip()
+    name = _ENTITY_SUFFIXES.sub("", name).strip()
+    name = re.sub(r"\s+", " ", name)
+    return name
 
 
 class KnowledgeGraph:
@@ -84,6 +101,7 @@ class KnowledgeGraph:
         industry: str = "",
         website: str = "",
     ) -> None:
+        name = normalize_entity_name(name)
         async with self._driver.session() as session:
             await session.execute_write(
                 self._merge_company, name, region, industry, website
@@ -201,6 +219,11 @@ class KnowledgeGraph:
 
     # ── generic relationship creation ────────────────────────────────────
 
+    # SECURITY: _KEY_FIELDS acts as the allowlist for node labels.
+    # Only these four labels may be used in dynamic Cypher queries.
+    # from_type / to_type are validated against this dict before
+    # interpolation — never add entries without reviewing the Cypher
+    # injection implications.
     _KEY_FIELDS: dict[str, str] = {
         "Company": "name",
         "Person": "email",
@@ -244,11 +267,16 @@ class KnowledgeGraph:
             )
             return False
 
+        if not _VALID_LABEL.match(from_type) or not _VALID_LABEL.match(to_type):
+            logger.warning("Invalid node label format: %s, %s", from_type, to_type)
+            return False
+        if not _VALID_LABEL.match(rel_type):
+            logger.warning("Invalid relationship type format: %s", rel_type)
+            return False
+
         props = properties or {}
-        set_clause = ""
-        if props:
-            assignments = ", ".join(f"r.{k} = ${k}" for k in props)
-            set_clause = f"SET {assignments}"
+        props = {k: v for k, v in props.items() if _VALID_PROP_KEY.match(k)}
+        set_clause = "SET r += $props" if props else ""
 
         query = (
             f"MERGE (a:{from_type} {{{from_field}: $from_key}}) "
@@ -256,7 +284,7 @@ class KnowledgeGraph:
             f"MERGE (a)-[r:{rel_type}]->(b) "
             f"{set_clause}"
         )
-        params: dict[str, Any] = {"from_key": from_key, "to_key": to_key, **props}
+        params: dict[str, Any] = {"from_key": from_key, "to_key": to_key, "props": props}
 
         try:
             async with self._driver.session() as session:
@@ -417,9 +445,29 @@ class KnowledgeGraph:
             "relationships": records[0].get("relationships", []),
         }
 
+    _WRITE_KEYWORDS = frozenset({"CREATE", "DELETE", "DETACH", "SET", "REMOVE", "DROP"})
+
     async def run_cypher(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Execute an arbitrary Cypher query and return the result rows."""
+        """Execute a **read-only** Cypher query and return the result rows.
+
+        Write operations (CREATE, DELETE, SET, etc.) are rejected.  For
+        internal write operations use :meth:`_run_cypher_write` instead.
+        """
+        tokens = set(query.upper().split())
+        if tokens & self._WRITE_KEYWORDS:
+            raise ValueError(
+                f"Write operations not allowed via run_cypher: "
+                f"{sorted(tokens & self._WRITE_KEYWORDS)}"
+            )
+        if any(c in query for c in (";", "//", "/*")):
+            raise ValueError("Query contains disallowed characters")
         return await self._read(query, **(params or {}))
+
+    async def _run_cypher_write(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a Cypher write query.  Internal use only."""
+        async with self._driver.session() as session:
+            result = await session.run(query, **(params or {}))
+            return [dict(record) async for record in result]
 
     # ── LLM entity extraction ────────────────────────────────────────────
 
@@ -542,6 +590,40 @@ class KnowledgeGraph:
             "labels": labels,
             "relationship_types": rel_types,
         }
+
+    # ── safe graph-consolidation helpers ─────────────────────────────────
+
+    async def find_active_node_names(self, since_days: int = 30) -> list[str]:
+        """Return names of nodes accessed within the last *since_days*."""
+        rows = await self._read(
+            "MATCH (n) WHERE n.last_accessed IS NOT NULL "
+            "AND n.last_accessed > datetime() - duration({days: $days}) "
+            "RETURN n.name AS name",
+            days=since_days,
+        )
+        return [r["name"] for r in rows if r.get("name")]
+
+    async def mark_nodes_stale(self, names: list[str]) -> int:
+        """Mark the given nodes as stale."""
+        result = await self._run_cypher_write(
+            "UNWIND $names AS name "
+            "MATCH (n) WHERE n.name = name "
+            "SET n._stale = true "
+            "RETURN count(n) AS marked",
+            params={"names": names},
+        )
+        return result[0].get("marked", 0) if result else 0
+
+    async def create_co_relevant_edge(self, name_a: str, name_b: str) -> int:
+        """Create a CO_RELEVANT relationship between two named nodes."""
+        result = await self._run_cypher_write(
+            "MATCH (a) WHERE a.name = $a "
+            "MATCH (b) WHERE b.name = $b "
+            "MERGE (a)-[r:CO_RELEVANT]->(b) "
+            "RETURN count(r) AS created",
+            params={"a": name_a, "b": name_b},
+        )
+        return result[0].get("created", 0) if result else 0
 
     # ── internals ────────────────────────────────────────────────────────
 

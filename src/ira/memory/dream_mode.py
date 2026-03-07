@@ -168,7 +168,7 @@ class DreamMode:
                 mark_deferred_ingested,
             )
 
-            queue = load_deferred_queue()
+            queue = await load_deferred_queue()
             if not queue:
                 logger.debug("Stage 0: no deferred ingestion items")
                 stage_log["stages"]["0_deferred_ingestion"] = {"status": "ok", "files_ingested": 0}
@@ -197,7 +197,7 @@ class DreamMode:
                         }
                         chunks = await ingestor.ingest_file(file_info, force=True)
                         if chunks > 0:
-                            mark_deferred_ingested(filepath)
+                            await mark_deferred_ingested(filepath)
                             ingested += 1
                             logger.info("Deferred ingestion: %s -> %d chunks", entry.get("filename", ""), chunks)
                         ingestor.close()
@@ -627,7 +627,23 @@ class DreamMode:
 
             embedding = EmbeddingService()
             qdrant = QdrantManager(embedding_service=embedding)
-            trainer = SleepTrainer(correction_store=store, qdrant_manager=qdrant, embedding_service=embedding)
+
+            mem0_client = None
+            try:
+                from ira.config import get_settings
+                from mem0 import MemoryClient
+                mem0_key = get_settings().memory.api_key.get_secret_value()
+                if mem0_key:
+                    mem0_client = MemoryClient(api_key=mem0_key)
+            except Exception:
+                logger.debug("Mem0 not available for sleep training")
+
+            trainer = SleepTrainer(
+                correction_store=store,
+                qdrant_manager=qdrant,
+                embedding_service=embedding,
+                mem0_client=mem0_client,
+            )
             stats = await trainer.run_training()
             stage_log["stages"]["0_5_sleep_training"] = {"status": "ok", **stats}
             logger.info("Stage 0.5: sleep training complete — %s", stats)
@@ -646,6 +662,7 @@ class DreamMode:
         try:
             from ira.brain.pricing_learner import PricingLearner
             learner = PricingLearner()
+            learner._index = await learner._load_index()
             await learner.learn_from_quotes()
             conflicts = learner.detect_conflicts()
             if conflicts:

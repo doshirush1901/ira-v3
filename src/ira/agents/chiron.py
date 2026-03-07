@@ -10,6 +10,7 @@ sales guidance, pattern search, and cross-agent delegation to Prometheus.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -23,9 +24,10 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = load_prompt("chiron_system")
 _DATA_PATH = Path("data/brain/sales_training.json")
+_PATTERNS_LOCK = asyncio.Lock()
 
 
-def _load_patterns() -> list[dict[str, Any]]:
+def _load_patterns_sync() -> list[dict[str, Any]]:
     if not _DATA_PATH.exists():
         return []
     try:
@@ -36,12 +38,22 @@ def _load_patterns() -> list[dict[str, Any]]:
         return []
 
 
-def _save_patterns(patterns: list[dict[str, Any]]) -> None:
+async def _load_patterns() -> list[dict[str, Any]]:
+    async with _PATTERNS_LOCK:
+        return await asyncio.to_thread(_load_patterns_sync)
+
+
+def _save_patterns_sync(patterns: list[dict[str, Any]]) -> None:
     _DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     _DATA_PATH.write_text(
         json.dumps({"patterns": patterns}, indent=2, default=str),
         encoding="utf-8",
     )
+
+
+async def _save_patterns(patterns: list[dict[str, Any]]) -> None:
+    async with _PATTERNS_LOCK:
+        await asyncio.to_thread(_save_patterns_sync, patterns)
 
 
 def _next_pattern_id(patterns: list[dict[str, Any]]) -> str:
@@ -126,7 +138,7 @@ class Chiron(BaseAgent):
         return guidance or "No sales training patterns recorded yet."
 
     async def _tool_search_sales_patterns(self, query: str) -> str:
-        patterns = _load_patterns()
+        patterns = await _load_patterns()
         if not patterns:
             return "No sales training patterns recorded yet."
 
@@ -169,7 +181,7 @@ class Chiron(BaseAgent):
         right: str,
         category: str,
     ) -> str:
-        patterns = _load_patterns()
+        patterns = await _load_patterns()
         pattern_id = _next_pattern_id(patterns)
         patterns.append({
             "id": pattern_id,
@@ -179,12 +191,12 @@ class Chiron(BaseAgent):
             "category": category,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
-        _save_patterns(patterns)
+        await _save_patterns(patterns)
         logger.info("Sales training pattern %s logged (category: %s)", pattern_id, category)
         return f"Training pattern {pattern_id} recorded under '{category}'."
 
     async def get_coaching_notes(self, context: str) -> str:
-        patterns = _load_patterns()
+        patterns = await _load_patterns()
         if not patterns:
             return "No training patterns recorded yet."
 
@@ -202,7 +214,7 @@ class Chiron(BaseAgent):
         return await self.call_llm(_SYSTEM_PROMPT, prompt)
 
     async def get_sales_guidance(self) -> str:
-        patterns = _load_patterns()
+        patterns = await _load_patterns()
         if not patterns:
             return ""
 
@@ -224,7 +236,7 @@ class Chiron(BaseAgent):
     # ── BaseAgent interface ───────────────────────────────────────────────
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
-        ctx = context or {}
+        ctx = dict(context or {})
 
         if ctx.get("task") == "log_pattern":
             return await self.log_pattern(
@@ -236,4 +248,22 @@ class Chiron(BaseAgent):
         if ctx.get("task") == "coaching":
             return await self.get_coaching_notes(query)
 
-        return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
+        conv_mem = self._services.get("conversation_memory")
+        if conv_mem is not None:
+            contact_id = (ctx.get("perception") or {}).get("email", "")
+            if contact_id:
+                try:
+                    recent = await conv_mem.get_history(contact_id, "CLI", limit=10)
+                    sales_msgs = [
+                        m for m in recent
+                        if any(kw in (m.get("content") or "").lower()
+                               for kw in ("price", "quote", "deal", "order", "lead", "proposal"))
+                    ]
+                    if sales_msgs:
+                        ctx["recent_sales_context"] = [
+                            m.get("content", "")[:200] for m in sales_msgs[:5]
+                        ]
+                except Exception:
+                    logger.debug("Chiron: conversation memory lookup failed")
+
+        return await self.run(query, ctx, system_prompt=_SYSTEM_PROMPT)

@@ -12,6 +12,7 @@ to Plutus.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -25,24 +26,26 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = load_prompt("quotebuilder_system")
 _SEQUENCE_FILE = Path("data/brain/quote_sequence.txt")
+_SEQUENCE_LOCK = asyncio.Lock()
 
 
-def _next_quote_id() -> str:
-    _SEQUENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+async def _next_quote_id() -> str:
+    async with _SEQUENCE_LOCK:
+        await asyncio.to_thread(_SEQUENCE_FILE.parent.mkdir, parents=True, exist_ok=True)
+        today = datetime.now(timezone.utc).strftime("%Y%m%d")
 
-    seq = 1
-    if _SEQUENCE_FILE.exists():
-        try:
-            stored = _SEQUENCE_FILE.read_text(encoding="utf-8").strip()
-            stored_date, stored_seq = stored.split(":", 1)
-            if stored_date == today:
-                seq = int(stored_seq) + 1
-        except (ValueError, OSError):
-            pass
+        seq = 1
+        if _SEQUENCE_FILE.exists():
+            try:
+                stored = (await asyncio.to_thread(_SEQUENCE_FILE.read_text, encoding="utf-8")).strip()
+                stored_date, stored_seq = stored.split(":", 1)
+                if stored_date == today:
+                    seq = int(stored_seq) + 1
+            except (ValueError, OSError):
+                pass
 
-    _SEQUENCE_FILE.write_text(f"{today}:{seq}", encoding="utf-8")
-    return f"MT{today}{seq:02d}"
+        await asyncio.to_thread(_SEQUENCE_FILE.write_text, f"{today}:{seq}", encoding="utf-8")
+        return f"MT{today}{seq:02d}"
 
 
 class Quotebuilder(BaseAgent):
@@ -148,7 +151,7 @@ class Quotebuilder(BaseAgent):
         machine_model: str,
         context: dict,
     ) -> str:
-        quote_id = _next_quote_id()
+        quote_id = await _next_quote_id()
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         kb_results = await self.search_knowledge(machine_model, limit=10)
@@ -204,7 +207,7 @@ class Quotebuilder(BaseAgent):
         machines: list[str],
         context: dict,
     ) -> str:
-        quote_id = _next_quote_id()
+        quote_id = await _next_quote_id()
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         validity_days = context.get("validity_days", 30)
 

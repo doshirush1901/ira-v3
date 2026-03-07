@@ -19,6 +19,7 @@ Design choices:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ from ira.brain.imports_metadata_index import (
     search_index,
 )
 from ira.config import get_settings
+from ira.exceptions import PathTraversalError
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +125,10 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 # ── embedding cache ──────────────────────────────────────────────────────
 
 
-def _load_embedding_cache() -> dict[str, list[float]]:
+async def _load_embedding_cache() -> dict[str, list[float]]:
     global _embedding_cache, _embedding_cache_version
 
-    index = load_index()
+    index = await load_index()
     index_version = index.get("built_at", "")
 
     if _embedding_cache is not None and _embedding_cache_version == index_version:
@@ -134,7 +136,8 @@ def _load_embedding_cache() -> dict[str, list[float]]:
 
     if EMBEDDING_CACHE_PATH.exists():
         try:
-            cached = json.loads(EMBEDDING_CACHE_PATH.read_text())
+            raw = await asyncio.to_thread(EMBEDDING_CACHE_PATH.read_text)
+            cached = json.loads(raw)
             if cached.get("version") == index_version:
                 _embedding_cache = cached.get("embeddings", {})
                 _embedding_cache_version = index_version
@@ -184,12 +187,15 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
 
     try:
         EMBEDDING_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        EMBEDDING_CACHE_PATH.write_text(json.dumps({
-            "version": _embedding_cache_version,
-            "count": len(embeddings),
-            "built_at": datetime.now().isoformat(),
-            "embeddings": embeddings,
-        }))
+        await asyncio.to_thread(
+            EMBEDDING_CACHE_PATH.write_text,
+            json.dumps({
+                "version": _embedding_cache_version,
+                "count": len(embeddings),
+                "built_at": datetime.now().isoformat(),
+                "embeddings": embeddings,
+            }),
+        )
         logger.info("Built and cached %d summary embeddings", len(embeddings))
     except Exception as exc:
         logger.warning("Failed to save embedding cache: %s", exc)
@@ -205,8 +211,8 @@ async def _semantic_search(query: str, limit: int = 10) -> list[dict[str, Any]]:
     if not _get_voyage_key():
         return []
 
-    index = load_index()
-    embeddings = _load_embedding_cache()
+    index = await load_index()
+    embeddings = await _load_embedding_cache()
 
     if not embeddings:
         logger.info("Building summary embeddings for semantic fallback search...")
@@ -260,7 +266,7 @@ async def hybrid_search(
     1.5x weight (exact model matching matters more).  Otherwise semantic
     results get 1.5x weight (meaning-based matching is more useful).
     """
-    kw_results = search_index(query, limit=limit * 2, doc_type_filter=doc_type_filter)
+    kw_results = await search_index(query, limit=limit * 2, doc_type_filter=doc_type_filter)
     sem_results = await _semantic_search(query, limit=limit * 2)
 
     if doc_type_filter and sem_results:
@@ -300,20 +306,28 @@ async def hybrid_search(
 # ── text extraction ──────────────────────────────────────────────────────
 
 
-def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_CHARS) -> str:
+async def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_CHARS) -> str:
     """Extract text from a supported file, truncated to *max_chars*."""
     fp = Path(filepath)
+    data_root = _PROJECT_ROOT / "data"
+    if not fp.resolve().is_relative_to(data_root):
+        raise PathTraversalError(f"Path {filepath} is outside the data directory")
+
     reader = _READERS.get(fp.suffix.lower())
     if reader is None:
         if fp.suffix.lower() in (".txt", ".json", ".csv", ".md"):
             try:
-                return fp.read_text(errors="ignore")[:max_chars]
+                raw = await asyncio.to_thread(
+                    lambda: fp.read_text(errors="ignore"),
+                )
+                return raw[:max_chars]
             except Exception:
                 return ""
         return ""
 
     try:
-        return reader(fp)[:max_chars]
+        text = await asyncio.to_thread(reader, fp)
+        return text[:max_chars]
     except Exception as exc:
         logger.warning("Text extraction failed for %s: %s", fp.name, exc)
         return ""
@@ -322,7 +336,7 @@ def extract_file_text(filepath: str | Path, max_chars: int = _MAX_EXTRACT_CHARS)
 # ── deferred ingestion queue ─────────────────────────────────────────────
 
 
-def queue_for_deferred_ingestion(
+async def queue_for_deferred_ingestion(
     filepath: str,
     filename: str,
     query: str,
@@ -332,7 +346,7 @@ def queue_for_deferred_ingestion(
 
     Uses atomic write (temp file + rename) to prevent corruption.
     """
-    try:
+    def _write() -> None:
         DEFERRED_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
         entry = json.dumps({
             "filepath": filepath,
@@ -362,17 +376,20 @@ def queue_for_deferred_ingestion(
             os.unlink(tmp_path)
             raise
 
+    try:
+        await asyncio.to_thread(_write)
         logger.info("Queued %s for deferred ingestion", filename)
     except Exception as exc:
         logger.warning("Failed to queue %s: %s", filename, exc)
 
 
-def load_deferred_queue() -> list[dict[str, Any]]:
+async def load_deferred_queue() -> list[dict[str, Any]]:
     """Load all pending entries from the deferred ingestion queue."""
     if not DEFERRED_QUEUE_PATH.exists():
         return []
+    raw = await asyncio.to_thread(DEFERRED_QUEUE_PATH.read_text)
     entries: list[dict[str, Any]] = []
-    for line in DEFERRED_QUEUE_PATH.read_text().splitlines():
+    for line in raw.splitlines():
         if not line.strip():
             continue
         try:
@@ -384,38 +401,41 @@ def load_deferred_queue() -> list[dict[str, Any]]:
     return entries
 
 
-def mark_deferred_ingested(filepath: str) -> None:
+async def mark_deferred_ingested(filepath: str) -> None:
     """Mark a deferred queue entry as ingested (atomic rewrite)."""
-    if not DEFERRED_QUEUE_PATH.exists():
-        return
-    lines = DEFERRED_QUEUE_PATH.read_text().splitlines()
-    updated: list[str] = []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            entry = json.loads(line)
-            if entry.get("filepath") == filepath and entry.get("status") == "pending":
-                entry["status"] = "ingested"
-                entry["ingested_at"] = datetime.now().isoformat()
-            updated.append(json.dumps(entry))
-        except json.JSONDecodeError:
-            updated.append(line)
+    def _rewrite() -> None:
+        if not DEFERRED_QUEUE_PATH.exists():
+            return
+        lines = DEFERRED_QUEUE_PATH.read_text().splitlines()
+        updated: list[str] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("filepath") == filepath and entry.get("status") == "pending":
+                    entry["status"] = "ingested"
+                    entry["ingested_at"] = datetime.now().isoformat()
+                updated.append(json.dumps(entry))
+            except json.JSONDecodeError:
+                updated.append(line)
 
-    content = "\n".join(updated) + "\n"
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
-    )
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-    except Exception:
+        content = "\n".join(updated) + "\n"
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
+        )
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    await asyncio.to_thread(_rewrite)
 
 
 # ── main entry point ─────────────────────────────────────────────────────
@@ -450,7 +470,7 @@ async def fallback_retrieve(query: str) -> list[dict[str, Any]]:
         if not filepath or not Path(filepath).exists():
             continue
 
-        text = extract_file_text(filepath)
+        text = await extract_file_text(filepath)
         if not text or len(text.strip()) < 30:
             continue
 
@@ -468,7 +488,7 @@ async def fallback_retrieve(query: str) -> list[dict[str, Any]]:
             "doc_type": candidate.get("doc_type", "other"),
         })
 
-        queue_for_deferred_ingestion(
+        await queue_for_deferred_ingestion(
             filepath, filename, query, candidate.get("doc_type", "other"),
         )
 

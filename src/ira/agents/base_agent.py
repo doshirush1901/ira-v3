@@ -255,7 +255,15 @@ class BaseAgent(ABC):
             lines.append(f"- [{ts}] {narrative}")
         return "\n".join(lines)
 
+    _MAX_DELEGATION_DEPTH = 3
+
     async def _tool_ask_agent(self, agent_name: str, question: str) -> str:
+        depth = self._services.get("_delegation_depth", 0)
+        if depth >= self._MAX_DELEGATION_DEPTH:
+            return (
+                f"Cannot delegate to '{agent_name}': maximum delegation "
+                f"depth ({self._MAX_DELEGATION_DEPTH}) reached."
+            )
         pantheon = self._services.get("pantheon")
         if not pantheon:
             return "Pantheon service unavailable."
@@ -263,7 +271,7 @@ class BaseAgent(ABC):
         if agent is None:
             return f"Agent '{agent_name}' not found."
         try:
-            return await agent.handle(question)
+            return await agent.handle(question, {"_delegation_depth": depth + 1})
         except Exception as exc:
             return f"Agent '{agent_name}' error: {exc}"
 
@@ -334,7 +342,7 @@ class BaseAgent(ABC):
         for tool in self.tools:
             if tool.name == name:
                 try:
-                    result = await tool.handler(**{k: str(v) for k, v in inputs.items()})
+                    result = await tool.handler(**inputs)
                     return str(result)[:4000]
                 except ToolExecutionError:
                     raise

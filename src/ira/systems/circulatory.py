@@ -121,7 +121,7 @@ class CirculatorySystem:
 
             contact_type = p.get("contact_type", "")
             if contact_type:
-                await self._graph.run_cypher(
+                await self._graph._run_cypher_write(
                     "MATCH (p:Person {email: $email}) "
                     "SET p.contact_type = $ct, p.lead_score = $score",
                     {"email": email, "ct": contact_type, "score": p.get("lead_score", 0)},
@@ -162,12 +162,12 @@ class CirculatorySystem:
                 await self._graph.add_company(name=company)
 
             if machine:
-                await self._graph.run_cypher(
+                await self._graph._run_cypher_write(
                     "MERGE (m:Machine {model: $model})",
                     {"model": machine},
                 )
                 if company:
-                    await self._graph.run_cypher(
+                    await self._graph._run_cypher_write(
                         "MATCH (c:Company {name: $company}), (m:Machine {model: $model}) "
                         "MERGE (c)-[:INTERESTED_IN]->(m)",
                         {"company": company, "model": machine},

@@ -14,13 +14,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+
+import httpx
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from ira.middleware.auth import require_api_key
+from ira.middleware.request_context import RequestContextMiddleware, RequestIdFilter
 
 from ira.config import get_settings
 
@@ -65,7 +70,7 @@ def _svc(name: str) -> Any:
     """Retrieve a service by name; raise 503 if not yet initialised."""
     svc = _services.get(name)
     if svc is None:
-        raise RuntimeError(f"Service '{name}' not available")
+        raise HTTPException(status_code=503, detail=f"Service '{name}' not available")
     return svc
 
 
@@ -79,9 +84,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     logging.basicConfig(
         level=getattr(logging, settings.app.log_level, logging.INFO),
-        format="%(asctime)s  %(name)-28s  %(levelname)-8s  %(message)s",
+        format="%(asctime)s  %(name)-28s  %(levelname)-8s  [%(request_id)s]  %(message)s",
         datefmt="%H:%M:%S",
     )
+    for handler in logging.root.handlers:
+        handler.addFilter(RequestIdFilter())
 
     # ── Brain layer ───────────────────────────────────────────────────
     from ira.brain.document_ingestor import DocumentIngestor
@@ -195,7 +202,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         knowledge_graph=graph,
         embedding_service=embedding,
     )
-    sensory = SensorySystem(knowledge_graph=graph)
+    sensory = SensorySystem(knowledge_graph=graph)  # memory wired after init below
     try:
         await asyncio.wait_for(sensory.create_tables(), timeout=30)
     except (asyncio.TimeoutError, Exception):
@@ -286,10 +293,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     inner_voice = InnerVoice()
     await _safe_init("inner_voice", inner_voice.initialize())
 
-    # Wire memory systems into SensorySystem for full perception
-    sensory._emotional_intelligence = emotional_intelligence
-    sensory._conversation_memory = conversation
-    sensory._relationship_memory = relationship_memory
+    sensory.configure_memory(
+        emotional_intelligence=emotional_intelligence,
+        conversation_memory=conversation,
+        relationship_memory=relationship_memory,
+    )
 
     _services["emotional_intelligence"] = emotional_intelligence
     _services["relationship_memory"] = relationship_memory
@@ -457,11 +465,16 @@ app = FastAPI(
     title="Ira — Machinecraft AI Pantheon",
     version="3.0.0",
     lifespan=lifespan,
+    dependencies=[Depends(require_api_key)],
 )
 
+_cors_raw = get_settings().app.cors_origins
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
+
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -552,6 +565,38 @@ async def health_check() -> dict[str, Any]:
     return {"status": "ok", "services": report}
 
 
+@app.get("/api/deep-health")
+async def deep_health_check() -> dict[str, Any]:
+    """Check connectivity to all external services."""
+    checks: dict[str, Any] = {}
+
+    immune = _services.get("immune")
+    if immune is not None:
+        try:
+            checks["core"] = await immune.run_startup_validation()
+        except Exception as exc:
+            checks["core"] = {"status": "error", "detail": str(exc)}
+
+    mem0_key = get_settings().memory.api_key.get_secret_value()
+    if mem0_key:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "https://api.mem0.ai/v2/memories/search/",
+                    json={"query": "health", "user_id": "health_check"},
+                    headers={"Authorization": f"Token {mem0_key}"},
+                )
+                checks["mem0"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}
+        except Exception as exc:
+            checks["mem0"] = {"status": "unhealthy", "detail": str(exc)}
+
+    all_healthy = all(
+        (v.get("status") in ("healthy", "ok") if isinstance(v, dict) else True)
+        for v in checks.values()
+    )
+    return {"status": "ok" if all_healthy else "degraded", "services": checks}
+
+
 @app.get("/api/pipeline")
 async def pipeline_summary() -> dict[str, Any]:
     """Return the CRM sales pipeline summary."""
@@ -575,19 +620,42 @@ async def list_agents() -> dict[str, Any]:
     return {"agents": agents, "count": len(agents)}
 
 
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+_ALLOWED_EXTENSIONS = frozenset({".txt", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".md"})
+
+
 @app.post("/api/ingest")
 async def ingest_file(file: UploadFile) -> dict[str, Any]:
     """Upload a document for ingestion through the DigestiveSystem."""
-    digestive = _svc("digestive")
+    import os
+
+    filename = os.path.basename(file.filename or "upload")
+    if ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext and ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{ext}' not allowed. Accepted: {sorted(_ALLOWED_EXTENSIONS)}",
+        )
+
     content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content)} bytes). Maximum: {_MAX_UPLOAD_BYTES} bytes",
+        )
+
+    digestive = _svc("digestive")
     text = content.decode("utf-8", errors="replace")
     result = await digestive.ingest(
         raw_data=text,
-        source=file.filename or "upload",
+        source=filename,
         source_category="document_upload",
     )
     return {
-        "filename": file.filename,
+        "filename": filename,
         "chunks_created": result.get("chunks_created", 0),
         "entities_found": result.get("entities_found", {}),
     }

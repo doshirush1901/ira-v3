@@ -10,6 +10,7 @@ metadata index, enabling direct comparison.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -29,19 +30,22 @@ def _empty_log() -> dict[str, Any]:
     return {"files": {}, "last_full_scan": None, "total_ingested": 0, "version": 1}
 
 
-def load_log() -> dict[str, Any]:
+async def load_log() -> dict[str, Any]:
     if not LOG_PATH.exists():
         return _empty_log()
     try:
-        return json.loads(LOG_PATH.read_text())
+        raw = await asyncio.to_thread(LOG_PATH.read_text)
+        return json.loads(raw)
     except (json.JSONDecodeError, OSError):
         logger.warning("Corrupted ingestion log, starting fresh")
         return _empty_log()
 
 
-def save_log(log: dict[str, Any]) -> None:
+async def save_log(log: dict[str, Any]) -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.write_text(json.dumps(log, indent=2, default=str))
+    await asyncio.to_thread(
+        LOG_PATH.write_text, json.dumps(log, indent=2, default=str),
+    )
 
 
 def file_fingerprint(filepath: Path) -> str:

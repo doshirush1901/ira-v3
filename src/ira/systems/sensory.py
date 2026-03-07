@@ -77,6 +77,21 @@ class SensorySystem:
 
         self._identity_cache: dict[tuple[str, str], str] = {}
 
+    def configure_memory(
+        self,
+        *,
+        emotional_intelligence: Any | None = None,
+        conversation_memory: Any | None = None,
+        relationship_memory: Any | None = None,
+    ) -> None:
+        """Late-bind memory subsystems after construction."""
+        if emotional_intelligence is not None:
+            self._emotional_intelligence = emotional_intelligence
+        if conversation_memory is not None:
+            self._conversation_memory = conversation_memory
+        if relationship_memory is not None:
+            self._relationship_memory = relationship_memory
+
     async def create_tables(self) -> None:
         """Create the identity_mappings table if it doesn't exist."""
         async with self._engine.begin() as conn:

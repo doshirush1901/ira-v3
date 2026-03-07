@@ -6,6 +6,7 @@ name/price mappings that other agents can query at runtime.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -29,11 +30,11 @@ class CorrectionLearner:
 
     def __init__(self, data_path: Path | None = None) -> None:
         self._path = data_path or _DATA_PATH
-        self._state = self._load()
+        self._state: dict = json.loads(json.dumps(_EMPTY_STATE))
 
     # ── public API ───────────────────────────────────────────────────────
 
-    def learn_from_correction(self, correction_text: str) -> dict:
+    async def learn_from_correction(self, correction_text: str) -> dict:
         """Parse *correction_text* and update internal state.
 
         Returns a summary dict describing what was learned.
@@ -51,7 +52,7 @@ class CorrectionLearner:
         self._detect_price_correction(correction_text, learned)
 
         if any(learned.values()):
-            self._save()
+            await self._save()
             logger.info("Learned from correction: %s", learned)
 
         return learned
@@ -142,10 +143,11 @@ class CorrectionLearner:
         key = name.strip().lower()
         return any(item.lower() == key for item in items)
 
-    def _load(self) -> dict:
+    async def _load(self) -> dict:
         if self._path.exists():
             try:
-                data = json.loads(self._path.read_text())
+                raw = await asyncio.to_thread(self._path.read_text)
+                data = json.loads(raw)
                 for key in _EMPTY_STATE:
                     data.setdefault(key, _EMPTY_STATE[key])
                 return data
@@ -153,9 +155,10 @@ class CorrectionLearner:
                 logger.warning("Could not load corrections; starting fresh")
         return json.loads(json.dumps(_EMPTY_STATE))
 
-    def _save(self) -> None:
+    async def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(self._state, indent=2))
+            payload = json.dumps(self._state, indent=2)
+            await asyncio.to_thread(self._path.write_text, payload)
         except OSError:
             logger.exception("Failed to persist learned corrections")

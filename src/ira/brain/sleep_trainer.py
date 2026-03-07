@@ -13,6 +13,7 @@ them across the knowledge stack:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -188,8 +189,9 @@ class SleepTrainer:
                 if c.get("old_value"):
                     content += f" (previously stated as: {c['old_value']})"
 
-                await self._mem0.store(
-                    content,
+                await asyncio.to_thread(
+                    self._mem0.add,
+                    [{"role": "user", "content": content}],
                     user_id="global",
                     metadata={
                         "type": "correction",
@@ -219,7 +221,10 @@ class SleepTrainer:
             existing: list[dict[str, Any]] = []
             if _GUIDANCE_PATH.exists():
                 try:
-                    existing = json.loads(_GUIDANCE_PATH.read_text(encoding="utf-8"))
+                    raw = await asyncio.to_thread(
+                        _GUIDANCE_PATH.read_text, encoding="utf-8",
+                    )
+                    existing = json.loads(raw)
                     if not isinstance(existing, list):
                         existing = [existing]
                 except (json.JSONDecodeError, OSError):
@@ -230,7 +235,8 @@ class SleepTrainer:
                 existing.append(hint)
 
             _GUIDANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _GUIDANCE_PATH.write_text(
+            await asyncio.to_thread(
+                _GUIDANCE_PATH.write_text,
                 json.dumps(existing, indent=2, default=str) + "\n",
                 encoding="utf-8",
             )
@@ -255,7 +261,10 @@ class SleepTrainer:
             existing: list[dict[str, Any]] = []
             if _LEARNED_PATH.exists():
                 try:
-                    existing = json.loads(_LEARNED_PATH.read_text(encoding="utf-8"))
+                    raw = await asyncio.to_thread(
+                        _LEARNED_PATH.read_text, encoding="utf-8",
+                    )
+                    existing = json.loads(raw)
                     if not isinstance(existing, list):
                         existing = [existing]
                 except (json.JSONDecodeError, OSError):
@@ -266,7 +275,8 @@ class SleepTrainer:
                 existing.append(c)
 
             _LEARNED_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _LEARNED_PATH.write_text(
+            await asyncio.to_thread(
+                _LEARNED_PATH.write_text,
                 json.dumps(existing, indent=2, default=str) + "\n",
                 encoding="utf-8",
             )

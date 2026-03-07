@@ -11,6 +11,7 @@ have already been processed so that re-running ingestion is idempotent.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import io
@@ -25,6 +26,7 @@ import tiktoken
 
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.models import KnowledgeItem
+from ira.exceptions import PathTraversalError
 
 from typing import TYPE_CHECKING
 
@@ -230,6 +232,12 @@ class DocumentIngestor:
 
     def discover_files(self, base_path: str = "data/imports") -> list[dict[str, Any]]:
         """Walk *base_path* and return metadata for every supported file."""
+        base = Path(base_path).resolve()
+        project_root = Path(__file__).resolve().parents[3]
+        data_root = project_root / "data"
+        if not base.is_relative_to(data_root):
+            raise PathTraversalError(f"Path {base_path} is outside the data directory")
+
         root = Path(base_path)
         if not root.exists():
             logger.warning("Import directory does not exist: %s", root)
@@ -278,7 +286,7 @@ class DocumentIngestor:
         category = file_info["category"]
         ext = file_info["extension"]
 
-        current_hash = _file_hash(path)
+        current_hash = await asyncio.to_thread(_file_hash, path)
         if not force and self._already_ingested(str(path), current_hash):
             logger.debug("Skipping already-ingested file: %s", path)
             return 0
@@ -291,7 +299,7 @@ class DocumentIngestor:
             logger.warning("No reader for extension '%s': %s", ext, path)
             return 0
 
-        text = reader(path)
+        text = await asyncio.to_thread(reader, path)
         if not text.strip():
             logger.warning("Empty content after reading: %s", path)
             return 0

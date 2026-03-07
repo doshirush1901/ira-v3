@@ -7,6 +7,7 @@ downstream learning via :class:`~ira.brain.correction_learner.CorrectionLearner`
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -66,7 +67,6 @@ class FeedbackHandler:
         self._correction_store = correction_store
         self._mem0_client = mem0_client
         self._agent_scores: dict[str, dict[str, int]] = {}
-        self._load_scores()
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -115,12 +115,18 @@ class FeedbackHandler:
             "extracted_correction": None,
         }
 
+    async def load_scores(self) -> None:
+        """Public wrapper for loading persisted agent scores."""
+        await self._load_scores()
+
     async def process_feedback(
         self,
         message: str,
         previous_query: str,
         previous_response: str,
         agents_used: list[str],
+        *,
+        user_id: str = "global",
     ) -> dict[str, Any]:
         """Full feedback pipeline: detect, score agents, store corrections."""
         result = await self.detect_feedback(message, previous_query, previous_response)
@@ -132,7 +138,7 @@ class FeedbackHandler:
         if polarity == "negative" and result.get("extracted_correction"):
             if self._correction_store is not None:
                 try:
-                    self._correction_store.learn_from_correction(
+                    await self._correction_store.learn_from_correction(
                         result["extracted_correction"]
                     )
                 except Exception:
@@ -150,7 +156,7 @@ class FeedbackHandler:
                                 ),
                             }
                         ],
-                        user_id="rushabh",
+                        user_id=user_id or "global",
                     )
                 except Exception:
                     logger.exception("Mem0 correction storage failed")
@@ -158,7 +164,7 @@ class FeedbackHandler:
             if self._learning_hub is not None and len(message) > 80:
                 result["queued_for_dream"] = True
 
-        self._persist_scores()
+        await self._persist_scores()
         return result
 
     def get_agent_scores(self) -> dict[str, dict[str, int]]:
@@ -246,17 +252,19 @@ class FeedbackHandler:
 
     # ── persistence ──────────────────────────────────────────────────────
 
-    def _load_scores(self) -> None:
+    async def _load_scores(self) -> None:
         if _SCORES_PATH.exists():
             try:
-                self._agent_scores = json.loads(_SCORES_PATH.read_text())
+                raw = await asyncio.to_thread(_SCORES_PATH.read_text)
+                self._agent_scores = json.loads(raw)
             except (json.JSONDecodeError, OSError):
                 logger.warning("Could not load agent scores; starting fresh")
                 self._agent_scores = {}
 
-    def _persist_scores(self) -> None:
+    async def _persist_scores(self) -> None:
         try:
             _SCORES_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _SCORES_PATH.write_text(json.dumps(self._agent_scores, indent=2))
+            payload = json.dumps(self._agent_scores, indent=2)
+            await asyncio.to_thread(_SCORES_PATH.write_text, payload)
         except OSError:
             logger.exception("Failed to persist agent scores")

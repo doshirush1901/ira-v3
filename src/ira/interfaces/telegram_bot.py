@@ -462,6 +462,7 @@ async def start_bot(
     try:
         from ira.brain.feedback_handler import FeedbackHandler
         _feedback_handler = FeedbackHandler()
+        await _feedback_handler._load_scores()
         logger.info("Feedback handler initialized for Telegram")
     except Exception:
         logger.debug("FeedbackHandler not available — feedback detection disabled")

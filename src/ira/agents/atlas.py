@@ -55,7 +55,9 @@ class Atlas(BaseAgent):
         "business plans",
     ]
 
-    _db_initialised: bool = False
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._db_initialised = False
 
     # ── tool registration ─────────────────────────────────────────────────
 

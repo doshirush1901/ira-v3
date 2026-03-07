@@ -88,8 +88,13 @@ def _configure_logging(verbose: bool = False) -> None:
     )
 
 
-def _build_pantheon() -> Any:
-    """Construct a Pantheon with full service wiring for CLI use."""
+def _build_pantheon() -> tuple[Any, dict[str, Any]]:
+    """Construct a Pantheon with full service wiring for CLI use.
+
+    Returns a ``(pantheon, shared_services)`` tuple so that callers can
+    forward the shared CRM / quotes / pricing / retriever instances to
+    ``_build_pipeline`` instead of creating duplicate connections.
+    """
     from ira.brain.embeddings import EmbeddingService
     from ira.brain.knowledge_graph import KnowledgeGraph
     from ira.brain.pricing_engine import PricingEngine
@@ -143,32 +148,50 @@ def _build_pantheon() -> Any:
         "quotes": quotes,
         "pricing_engine": pricing_engine,
         "retriever": retriever,
+        "data_event_bus": data_event_bus,
     }
     pantheon.inject_services(shared_services)
     bind_skill_services(shared_services)
 
-    return pantheon
+    return pantheon, shared_services
 
 
-async def _build_pipeline(pantheon: Any) -> Any:
-    """Construct a full RequestPipeline for CLI use."""
+async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any:
+    """Construct a full RequestPipeline for CLI use.
+
+    *shared_services* is the dict returned by ``_build_pantheon()`` and
+    contains at least ``crm`` and ``quotes`` so we reuse the same
+    connection pool instead of opening a duplicate.
+    """
+    data_event_bus = shared_services.get("data_event_bus")
+    if data_event_bus is not None:
+        await data_event_bus.start()
+
     from ira.brain.knowledge_graph import KnowledgeGraph
     from ira.context import UnifiedContextManager
-    from ira.data.crm import CRMDatabase
     from ira.memory.conversation import ConversationMemory
+    from ira.memory.emotional_intelligence import EmotionalIntelligence
+    from ira.memory.episodic import EpisodicMemory
     from ira.memory.goal_manager import GoalManager
     from ira.memory.inner_voice import InnerVoice
+    from ira.memory.long_term import LongTermMemory
     from ira.memory.metacognition import Metacognition
     from ira.memory.procedural import ProceduralMemory
     from ira.memory.relationship import RelationshipMemory
     from ira.pipeline import RequestPipeline
     from ira.systems.endocrine import EndocrineSystem
+    from ira.systems.learning_hub import LearningHub
     from ira.systems.sensory import SensorySystem
     from ira.systems.voice import VoiceSystem
 
     graph = KnowledgeGraph()
     sensory = SensorySystem(knowledge_graph=graph)
     await sensory.create_tables()
+
+    long_term = LongTermMemory()
+    episodic = EpisodicMemory(long_term=long_term)
+    await episodic.initialize()
+
     conversation = ConversationMemory()
     await conversation.initialize()
     relationship_memory = RelationshipMemory()
@@ -181,21 +204,40 @@ async def _build_pipeline(pantheon: Any) -> Any:
     await metacognition.initialize()
     inner_voice = InnerVoice()
     await inner_voice.initialize()
+
+    emotional_intelligence = EmotionalIntelligence()
+    await emotional_intelligence.initialize()
+
     voice = VoiceSystem()
     endocrine = EndocrineSystem()
-    crm = CRMDatabase()
+    crm = shared_services["crm"]
     await crm.create_tables()
     unified_context = UnifiedContextManager()
 
-    # Inject memory services into Pantheon agents so they can access
-    # memory, goals, relationships, etc. via self._services.
+    learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
+
+    sensory._emotional_intelligence = emotional_intelligence
+    sensory._conversation_memory = conversation
+    sensory._relationship_memory = relationship_memory
+
     pantheon.inject_services({
+        "long_term_memory": long_term,
+        "episodic_memory": episodic,
         "conversation_memory": conversation,
         "relationship_memory": relationship_memory,
         "goal_manager": goal_manager,
         "procedural_memory": procedural_memory,
+        "emotional_intelligence": emotional_intelligence,
+        "learning_hub": learning_hub,
         "pantheon": pantheon,
+        "data_event_bus": shared_services.get("data_event_bus"),
     })
+
+    nemesis = pantheon.get_agent("nemesis")
+    if nemesis is not None and hasattr(nemesis, "configure"):
+        nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
+
+    logger.info("CLI pipeline ready (degraded mode: no dream, immune, or respiratory systems)")
 
     return RequestPipeline(
         sensory=sensory,
@@ -300,13 +342,13 @@ def chat(
         )
     )
 
-    pantheon = _build_pantheon()
+    pantheon, shared_services = _build_pantheon()
 
     async def _session() -> None:
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline = await _build_pipeline(pantheon)
+            pipeline = await _build_pipeline(pantheon, shared_services)
 
             while True:
                 try:
@@ -349,13 +391,13 @@ def ask(
     """Ask Ira a single question and print the response."""
     _configure_logging(verbose)
 
-    pantheon = _build_pantheon()
+    pantheon, shared_services = _build_pantheon()
 
     async def _ask() -> None:
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline = await _build_pipeline(pantheon)
+            pipeline = await _build_pipeline(pantheon, shared_services)
 
             with Progress(
                 SpinnerColumn(),
@@ -409,7 +451,7 @@ def email_draft(
     """Generate an email draft via Calliope that Rushabh can copy-paste into Gmail."""
     _configure_logging(verbose)
 
-    pantheon = _build_pantheon()
+    pantheon, _shared = _build_pantheon()
 
     async def _draft() -> None:
         async with pantheon:
@@ -451,7 +493,7 @@ def email_learn(
     """Fetch a Gmail thread, digest it, and update CRM + memory systems."""
     _configure_logging(verbose)
 
-    pantheon = _build_pantheon()
+    pantheon, _shared = _build_pantheon()
     digestive, _ingestor, _qdrant = _build_digestive()
     email_proc = _build_email_processor(pantheon, digestive)
 
@@ -547,7 +589,7 @@ def index_imports(
         summary_table.add_row("Errors", str(stats["errors"]))
         console.print(summary_table)
 
-        idx_stats = get_index_stats()
+        idx_stats = await get_index_stats()
         if idx_stats.get("indexed", 0) > 0:
             console.print(f"\n[green]Index now contains {idx_stats['indexed']} files "
                           f"({idx_stats.get('unique_machines', 0)} unique machines).[/green]")
@@ -583,7 +625,7 @@ def ingest(
 
     from ira.brain.ingestion_gatekeeper import scan_for_undigested, run_ingestion_cycle
 
-    queue = scan_for_undigested(force=force)
+    queue = _run(scan_for_undigested(force=force))
 
     if not queue:
         console.print("[green]All files are up-to-date. Nothing to ingest.[/green]")
@@ -768,7 +810,7 @@ def board(
     """Run a Pantheon board meeting on the given topic."""
     _configure_logging(verbose)
 
-    pantheon = _build_pantheon()
+    pantheon, _shared = _build_pantheon()
 
     async def _board() -> None:
         async with pantheon:
@@ -818,7 +860,7 @@ def train(
     """Run a Nemesis training cycle to stress-test agents and log results."""
     _configure_logging(verbose)
 
-    pantheon = _build_pantheon()
+    pantheon, _shared = _build_pantheon()
 
     async def _train() -> None:
         from ira.data.crm import CRMDatabase
@@ -1707,7 +1749,7 @@ def health(
 @app.command("agents")
 def list_agents() -> None:
     """List all Pantheon agents with their roles."""
-    pantheon = _build_pantheon()
+    pantheon, _shared = _build_pantheon()
 
     table = Table(title="Pantheon Agents")
     table.add_column("#", style="dim", width=3)

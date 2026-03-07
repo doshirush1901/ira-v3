@@ -7,6 +7,7 @@ that exceed a configurable variance threshold.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -35,26 +36,29 @@ class PricingLearner:
     ) -> None:
         self._qdrant = qdrant_manager
         self._quotes = quotes_manager
-        self._index = self._load_index()
+        self._index: dict[str, Any] = json.loads(json.dumps(_EMPTY_INDEX))
 
     # ── persistence ───────────────────────────────────────────────────────
 
-    def _load_index(self) -> dict[str, Any]:
+    async def _load_index(self) -> dict[str, Any]:
         if _PRICE_INDEX_PATH.exists():
             try:
-                data = json.loads(_PRICE_INDEX_PATH.read_text(encoding="utf-8"))
+                raw = await asyncio.to_thread(
+                    _PRICE_INDEX_PATH.read_text, "utf-8",
+                )
+                data = json.loads(raw)
                 data.setdefault("models", {})
                 return data
             except (json.JSONDecodeError, OSError):
                 logger.warning("Could not load price index; starting fresh")
         return json.loads(json.dumps(_EMPTY_INDEX))
 
-    def _save_index(self) -> None:
+    async def _save_index(self) -> None:
         try:
             _PRICE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _PRICE_INDEX_PATH.write_text(
-                json.dumps(self._index, indent=2, default=str) + "\n",
-                encoding="utf-8",
+            payload = json.dumps(self._index, indent=2, default=str) + "\n"
+            await asyncio.to_thread(
+                _PRICE_INDEX_PATH.write_text, payload, "utf-8",
             )
         except OSError:
             logger.exception("Failed to persist price index")
@@ -85,7 +89,7 @@ class PricingLearner:
                 learned += 1
 
             self._recalculate_averages()
-            self._save_index()
+            await self._save_index()
             logger.info("Learned %d prices from quotes", learned)
             return {"status": "ok", "prices_learned": learned}
         except Exception:
@@ -119,7 +123,7 @@ class PricingLearner:
                     learned += 1
 
             self._recalculate_averages()
-            self._save_index()
+            await self._save_index()
             logger.info("Learned %d prices from Qdrant", learned)
             return {"status": "ok", "prices_learned": learned}
         except Exception:

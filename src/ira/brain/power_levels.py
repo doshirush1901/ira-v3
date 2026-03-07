@@ -9,6 +9,7 @@ Persistence is via ``data/brain/power_levels.json``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from enum import Enum
@@ -51,24 +52,24 @@ class PowerLevelTracker:
     def __init__(self, data_path: Path | None = None) -> None:
         self._path = data_path or _DATA_PATH
         self._agents: dict[str, dict[str, Any]] = {}
-        self._load()
 
-    def _load(self) -> None:
+    async def _load(self) -> None:
         if not self._path.exists():
             self._agents = {}
             return
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = await asyncio.to_thread(self._path.read_text, "utf-8")
+            data = json.loads(raw)
             self._agents = data.get("agents", {})
         except (json.JSONDecodeError, OSError):
             logger.warning("Failed to read power levels from %s", self._path)
             self._agents = {}
         logger.info("PowerLevels loaded: %d agents", len(self._agents))
 
-    def _save(self) -> None:
+    async def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"agents": self._agents}, indent=2, ensure_ascii=False)
-        self._path.write_text(payload, encoding="utf-8")
+        await asyncio.to_thread(self._path.write_text, payload, "utf-8")
 
     def _ensure_agent(self, agent_name: str) -> dict[str, Any]:
         if agent_name not in self._agents:
@@ -77,21 +78,21 @@ class PowerLevelTracker:
 
     # ── public API ────────────────────────────────────────────────────────
 
-    def record_success(self, agent_name: str, boost: int = 10) -> None:
+    async def record_success(self, agent_name: str, boost: int = 10) -> None:
         """Increase *agent_name*'s score after a successful task."""
         entry = self._ensure_agent(agent_name)
         entry["score"] += boost
         entry["successes"] += 1
-        self._save()
+        await self._save()
 
-    def record_failure(self, agent_name: str, penalty: int = 5) -> None:
+    async def record_failure(self, agent_name: str, penalty: int = 5) -> None:
         """Decrease *agent_name*'s score after a failure (floor at 0)."""
         entry = self._ensure_agent(agent_name)
         entry["score"] = max(0, entry["score"] - penalty)
         entry["failures"] += 1
-        self._save()
+        await self._save()
 
-    def training_boost(self, agent_name: str, training_score: int) -> None:
+    async def training_boost(self, agent_name: str, training_score: int) -> None:
         """Apply a Nemesis-training boost.
 
         *training_score* is clamped to 1-10 and linearly mapped to
@@ -101,7 +102,7 @@ class PowerLevelTracker:
         boost = round(clamped / _TRAINING_MAX_SCORE * _TRAINING_MAX_BOOST)
         entry = self._ensure_agent(agent_name)
         entry["score"] += boost
-        self._save()
+        await self._save()
         logger.info(
             "Training boost: %s +%d (training_score=%d)",
             agent_name, boost, training_score,
@@ -143,6 +144,6 @@ class PowerLevelTracker:
         """Return the tier name for a given score."""
         return _tier_for_score(score).value
 
-    def reload(self) -> None:
+    async def reload(self) -> None:
         """Re-read the data file from disk."""
-        self._load()
+        await self._load()

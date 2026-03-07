@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONCURRENCY = 5
 
 
-def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
+async def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
     """Compare the metadata index against the ingestion log.
 
     Returns a list of file dicts needing ingestion, each with keys
     ``rel_path``, ``path``, ``hash``, ``reason``, ``category``,
     ``extension``, ``name``.
     """
-    index = load_index()
-    log = load_log()
+    index = await load_index()
+    log = await load_log()
     queue: list[dict[str, Any]] = []
 
     for rel_path, meta in index.get("files", {}).items():
@@ -118,7 +118,7 @@ async def run_ingestion_cycle(
     from ira.config import get_settings
     from ira.systems.digestive import DigestiveSystem
 
-    queue = scan_for_undigested(force=force)
+    queue = await scan_for_undigested(force=force)
     if not queue:
         logger.info("Gatekeeper: nothing to ingest")
         return {"files_processed": 0, "files_skipped": 0, "reason": "up_to_date"}
@@ -144,7 +144,7 @@ async def run_ingestion_cycle(
 
     settings = get_settings()
     collection = settings.qdrant.collection
-    log = load_log()
+    log = await load_log()
 
     # Shared counters protected by a lock (concurrent writes from parallel tasks)
     lock = asyncio.Lock()
@@ -192,7 +192,7 @@ async def run_ingestion_cycle(
                 done_count += 1
                 if chunks > 0:
                     record_ingestion(log, rel_path, file_info["hash"], result, collection)
-                    save_log(log)
+                    await save_log(log)
                     processed += 1
                     total_chunks += chunks
                     for k in total_entities:
@@ -218,13 +218,21 @@ async def run_ingestion_cycle(
         async with sem:
             await _process_one(file_info)
 
-    await asyncio.gather(*[_guarded(f) for f in batch])
+    try:
+        await asyncio.gather(*[_guarded(f) for f in batch])
 
-    log["last_full_scan"] = datetime.now(timezone.utc).isoformat()
-    save_log(log)
-
-    await qdrant.close()
-    ingestor.close()
+        log["last_full_scan"] = datetime.now(timezone.utc).isoformat()
+        await save_log(log)
+    finally:
+        for closeable in [qdrant, graph]:
+            try:
+                await closeable.close()
+            except Exception:
+                logger.debug("Failed to close %s", type(closeable).__name__, exc_info=True)
+        try:
+            ingestor.close()
+        except Exception:
+            logger.debug("Failed to close ingestor", exc_info=True)
 
     summary = {
         "files_processed": processed,

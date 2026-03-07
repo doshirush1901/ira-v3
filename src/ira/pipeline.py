@@ -71,6 +71,8 @@ class RequestPipeline:
         self._unified_ctx = unified_context
 
         self._router = pantheon._router
+        self._pending_clarifications: dict[str, dict[str, Any]] = {}
+        self._recent_messages: dict[str, tuple[str, float]] = {}
 
     # ── Public entry point ────────────────────────────────────────────────
 
@@ -85,6 +87,44 @@ class RequestPipeline:
         t0 = time.monotonic()
         meta = metadata or {}
         trace: dict[str, Any] = {"channel": channel, "sender_id": sender_id}
+
+        # ── 0. CLARIFICATION RESUME ───────────────────────────────────
+        pending = self._pending_clarifications.pop(sender_id, None)
+        if pending is not None:
+            pass  # handled below
+
+        # ── 0.5 DEDUPLICATION ─────────────────────────────────────────
+        import hashlib
+
+        _now = time.monotonic()
+        _fingerprint = hashlib.sha256(f"{sender_id}:{raw_input}".encode()).hexdigest()[:16]
+        self._recent_messages = {
+            k: v for k, v in self._recent_messages.items()
+            if _now - v[1] < 300
+        }
+        if pending is None and _fingerprint in self._recent_messages:
+            logger.info("DEDUP | returning cached response for %s", sender_id)
+            return self._recent_messages[_fingerprint][0]
+
+        if pending is not None:
+            agent = self._pantheon.get_agent(pending["agent_name"])
+            if agent is not None:
+                followup_ctx = {
+                    "original_query": pending["original_query"],
+                    "clarification_answer": raw_input,
+                    "channel": channel,
+                }
+                try:
+                    raw_response = await agent.handle(
+                        pending["original_query"], followup_ctx,
+                    )
+                    logger.info("CLARIFY-RESUME | agent=%s", pending["agent_name"])
+                    shaped = await self._voice.shape_response(
+                        raw_response, channel,
+                    )
+                    return shaped
+                except Exception:
+                    logger.exception("Clarification resume failed")
 
         # ── 1. PERCEIVE ───────────────────────────────────────────────
         from ira.systems.sensory import PerceptionEvent
@@ -160,6 +200,7 @@ class RequestPipeline:
             try:
                 from ira.brain.truth_hints import TruthHintsEngine
                 engine = TruthHintsEngine()
+                await engine._load()
                 if not engine.is_complex_query(resolved_input):
                     hint = engine.match(resolved_input)
                     if hint is not None:
@@ -198,7 +239,8 @@ class RequestPipeline:
         try:
             from ira.brain.adaptive_style import AdaptiveStyleTracker
             style_tracker = AdaptiveStyleTracker()
-            style_tracker.update_profile(contact_email, raw_input)
+            await style_tracker._load()
+            await style_tracker.update_profile(contact_email, raw_input)
             style_prompt = style_tracker.get_style_prompt(contact_email)
             if style_prompt:
                 enrichment_parts.append(style_prompt)
@@ -208,6 +250,7 @@ class RequestPipeline:
         try:
             from ira.brain.realtime_observer import RealTimeObserver
             observer = RealTimeObserver()
+            await observer._load()
             learnings_prompt = observer.format_for_prompt(contact_email)
             if learnings_prompt:
                 enrichment_parts.append(learnings_prompt)
@@ -227,6 +270,7 @@ class RequestPipeline:
         try:
             from ira.brain.power_levels import PowerLevelTracker
             tracker = PowerLevelTracker()
+            await tracker._load()
             top = tracker.get_leaderboard()[:3]
             if top:
                 enrichment_parts.append(
@@ -283,6 +327,19 @@ class RequestPipeline:
         trace["route"] = route_method
         trace["agents"] = agents_used
         logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
+
+        # ── 6.5 CLARIFICATION CHECK ──────────────────────────────────
+        _CLARIFY_PREFIX = "[CLARIFY]"
+        if raw_response.startswith(_CLARIFY_PREFIX):
+            clarification_q = raw_response[len(_CLARIFY_PREFIX):].strip()
+            self._pending_clarifications[sender_id] = {
+                "agent_name": agents_used[0] if agents_used else "athena",
+                "original_query": resolved_input,
+                "clarification_question": clarification_q,
+            }
+            logger.info("CLARIFY | stored pending for %s (sender=%s)", contact_email, sender_id)
+            shaped = await self._voice.shape_response(clarification_q, channel)
+            return shaped
 
         # ── 7. ASSESS ────────────────────────────────────────────────
         confidence_prefix = ""
@@ -369,6 +426,7 @@ class RequestPipeline:
         )
 
         # ── 11. RETURN ───────────────────────────────────────────────
+        self._recent_messages[_fingerprint] = (shaped, _now)
         return shaped
 
     # ── Execution helpers ─────────────────────────────────────────────────
@@ -512,17 +570,22 @@ class RequestPipeline:
                     {"response": raw_response[:300], "route": route_method},
                 )
             except Exception:
-                logger.debug("Sophia reflection failed (non-critical)")
+                logger.warning("Sophia reflection failed", exc_info=True)
 
-        # RealTimeObserver: extract learnings for next turn (fire-and-forget)
         try:
             from ira.brain.realtime_observer import RealTimeObserver
             observer = RealTimeObserver()
-            asyncio.create_task(
+            await observer._load()
+            _task = asyncio.create_task(
                 observer.observe_turn(raw_input, raw_response, contact_email)
             )
+            _task.add_done_callback(
+                lambda t: t.exception() and logger.warning(
+                    "RealTimeObserver task failed: %s", t.exception()
+                )
+            )
         except Exception:
-            logger.debug("RealTimeObserver not available")
+            logger.warning("RealTimeObserver not available", exc_info=True)
 
         # Endocrine feedback
         if self._endocrine is not None:
@@ -531,7 +594,7 @@ class RequestPipeline:
                 if route_method == "deterministic":
                     self._endocrine.boost("confidence", 0.01)
             except Exception:
-                logger.debug("Endocrine update failed (non-critical)")
+                logger.warning("Endocrine update failed", exc_info=True)
 
         if self._unified_ctx is not None:
             try:

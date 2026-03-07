@@ -11,11 +11,11 @@ only re-indexed when they change.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -187,24 +187,27 @@ def _generate_metadata_local(filename: str, text_preview: str) -> dict[str, Any]
 # ── index persistence ────────────────────────────────────────────────────
 
 
-def load_index() -> dict[str, Any]:
+async def load_index() -> dict[str, Any]:
     """Load the metadata index from disk."""
     if INDEX_PATH.exists():
         try:
-            return json.loads(INDEX_PATH.read_text())
+            raw = await asyncio.to_thread(INDEX_PATH.read_text)
+            return json.loads(raw)
         except (json.JSONDecodeError, IOError):
             logger.error("Corrupt metadata index at %s", INDEX_PATH)
     return {"files": {}, "built_at": None, "total_files": 0, "version": 2}
 
 
-def _save_index(index: dict[str, Any]) -> None:
+async def _save_index(index: dict[str, Any]) -> None:
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(json.dumps(index, indent=2, ensure_ascii=False))
+    await asyncio.to_thread(
+        INDEX_PATH.write_text, json.dumps(index, indent=2, ensure_ascii=False),
+    )
 
 
-def _save_progress(done: int, total: int, current_file: str) -> None:
+async def _save_progress(done: int, total: int, current_file: str) -> None:
     INDEX_PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    INDEX_PROGRESS_PATH.write_text(json.dumps({
+    await asyncio.to_thread(INDEX_PROGRESS_PATH.write_text, json.dumps({
         "done": done,
         "total": total,
         "current": current_file,
@@ -226,7 +229,7 @@ async def build_index(
 
     Returns stats: ``{"total", "new", "skipped", "errors"}``.
     """
-    index = load_index() if not force else {"files": {}, "built_at": None, "total_files": 0, "version": 2}
+    index = (await load_index()) if not force else {"files": {}, "built_at": None, "total_files": 0, "version": 2}
 
     all_files = [
         fp for fp in IMPORTS_DIR.rglob("*")
@@ -248,7 +251,7 @@ async def build_index(
 
         if progress_callback:
             progress_callback(i + 1, total, fp.name)
-        _save_progress(i + 1, total, fp.name)
+        await _save_progress(i + 1, total, fp.name)
 
         try:
             preview = _extract_preview(fp)
@@ -271,10 +274,10 @@ async def build_index(
             new_count += 1
 
             if new_count % 20 == 0:
-                _save_index(index)
+                await _save_index(index)
 
             if use_llm and preview and len(preview) > 50:
-                time.sleep(0.3)
+                await asyncio.sleep(0.3)
 
         except Exception as exc:
             logger.warning("Error indexing %s: %s", fp.name, exc)
@@ -282,7 +285,7 @@ async def build_index(
 
     index["built_at"] = datetime.now().isoformat()
     index["total_files"] = len(index["files"])
-    _save_index(index)
+    await _save_index(index)
 
     if INDEX_PROGRESS_PATH.exists():
         INDEX_PROGRESS_PATH.unlink()
@@ -331,7 +334,7 @@ def _stem_words(words: set[str]) -> set[str]:
     return expanded
 
 
-def search_index(
+async def search_index(
     query: str,
     limit: int = 10,
     doc_type_filter: str = "",
@@ -343,7 +346,7 @@ def search_index(
 
     *doc_type_filter*: if set, only return files of this doc_type.
     """
-    index = load_index()
+    index = await load_index()
     if not index.get("files"):
         return []
 
@@ -405,9 +408,9 @@ def search_index(
 # ── stats ────────────────────────────────────────────────────────────────
 
 
-def get_index_stats() -> dict[str, Any]:
+async def get_index_stats() -> dict[str, Any]:
     """Return summary statistics about the current index."""
-    index = load_index()
+    index = await load_index()
     files = index.get("files", {})
     if not files:
         return {"indexed": 0, "built_at": None}

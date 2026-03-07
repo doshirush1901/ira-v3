@@ -100,8 +100,8 @@ class UnifiedRetriever:
         if not merged:
             return await self._imports_fallback(query, limit)
 
-        self._log_retrieval(query, merged)
-        return self._rerank(query, merged, limit)
+        await self._log_retrieval(query, merged)
+        return await self._rerank(query, merged, limit)
 
     # ── query decomposition ──────────────────────────────────────────────
 
@@ -133,7 +133,7 @@ class UnifiedRetriever:
         if not merged:
             return []
 
-        return self._rerank(complex_query, merged, limit)
+        return await self._rerank(complex_query, merged, limit)
 
     # ── category-filtered search ─────────────────────────────────────────
 
@@ -149,7 +149,7 @@ class UnifiedRetriever:
         )
         for r in results:
             r["source_type"] = "qdrant"
-        return self._rerank(query, results, limit)
+        return await self._rerank(query, results, limit)
 
     # ── backend-specific search helpers ──────────────────────────────────
 
@@ -295,15 +295,15 @@ class UnifiedRetriever:
 
     # ── retrieval logging (for graph consolidation) ────────────────────────
 
-    def _log_retrieval(self, query: str, results: list[dict[str, Any]]) -> None:
+    async def _log_retrieval(self, query: str, results: list[dict[str, Any]]) -> None:
         try:
             from ira.brain.graph_consolidation import GraphConsolidation
             gc = GraphConsolidation(knowledge_graph=self._graph)
             chunks = [r.get("content", "")[:100] for r in results[:10]]
             sources = [r.get("source_type", "") for r in results[:10]]
-            gc.log_retrieval(query, chunks, sources)
+            await gc.log_retrieval(query, chunks, sources)
         except Exception:
-            pass
+            logger.debug("Retrieval logging failed", exc_info=True)
 
     # ── imports fallback ───────────────────────────────────────────────────
 
@@ -331,7 +331,7 @@ class UnifiedRetriever:
 
     # ── reranking ────────────────────────────────────────────────────────
 
-    def _rerank(
+    async def _rerank(
         self,
         query: str,
         results: list[dict[str, Any]],
@@ -367,15 +367,16 @@ class UnifiedRetriever:
                 }
             )
 
-        return self._apply_learned_corrections(output)
+        return await self._apply_learned_corrections(output)
 
     # ── learned corrections ────────────────────────────────────────────────
 
-    def _apply_learned_corrections(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def _apply_learned_corrections(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Post-process results with learned entity corrections and competitor tags."""
         try:
             from ira.brain.correction_learner import CorrectionLearner
             learner = CorrectionLearner()
+            await learner._load()
 
             for r in results:
                 content = r.get("content", "")
@@ -388,7 +389,7 @@ class UnifiedRetriever:
                     if entity.lower() in content.lower():
                         r.setdefault("metadata", {})["competitor_mentioned"] = True
         except Exception:
-            pass
+            logger.debug("Learned corrections failed", exc_info=True)
         return results
 
     # ── LLM query decomposition ──────────────────────────────────────────

@@ -275,7 +275,7 @@ def render_table(report: dict[str, dict[str, Any]]) -> None:
     console.print(table)
 
 
-def render_leaderboard() -> None:
+async def render_leaderboard() -> None:
     if not POWER_LEVELS_PATH.exists():
         return
 
@@ -291,6 +291,7 @@ def render_leaderboard() -> None:
     from ira.brain.power_levels import PowerLevelTracker
 
     tracker = PowerLevelTracker()
+    await tracker._load()
     board = tracker.get_leaderboard()
 
     table = Table(title="Agent Power Levels")
@@ -354,7 +355,7 @@ async def main() -> None:
         console.print_json(json.dumps(report, indent=2, default=str))
     else:
         render_table(report)
-        render_leaderboard()
+        await render_leaderboard()
 
     if args.telegram:
         await send_telegram(report)

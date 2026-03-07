@@ -7,6 +7,7 @@ the LLM to match the contact's expectations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -56,22 +57,23 @@ class AdaptiveStyleTracker:
 
     def __init__(self) -> None:
         self._profiles: dict[str, StyleProfile] = {}
-        self._load()
 
-    def _load(self) -> None:
+    async def _load(self) -> None:
         if not _PROFILES_PATH.exists():
             return
         try:
-            data = json.loads(_PROFILES_PATH.read_text())
+            raw = await asyncio.to_thread(_PROFILES_PATH.read_text)
+            data = json.loads(raw)
             for cid, vals in data.items():
                 self._profiles[cid] = StyleProfile(**vals)
         except Exception:
             logger.debug("Failed to load style profiles")
 
-    def _save(self) -> None:
+    async def _save(self) -> None:
         _PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {cid: asdict(p) for cid, p in self._profiles.items()}
-        _PROFILES_PATH.write_text(json.dumps(data, indent=2))
+        payload = json.dumps(data, indent=2)
+        await asyncio.to_thread(_PROFILES_PATH.write_text, payload)
 
     def analyze_message(self, text: str) -> dict[str, float]:
         """Extract style signals from a message. Returns deltas for each dimension."""
@@ -103,7 +105,7 @@ class AdaptiveStyleTracker:
 
         return deltas
 
-    def update_profile(self, contact_id: str, message: str) -> StyleProfile:
+    async def update_profile(self, contact_id: str, message: str) -> StyleProfile:
         """Analyze a message and update the contact's style profile."""
         profile = self._profiles.get(contact_id, StyleProfile())
         deltas = self.analyze_message(message)
@@ -120,7 +122,7 @@ class AdaptiveStyleTracker:
 
         profile.interactions += 1
         self._profiles[contact_id] = profile
-        self._save()
+        await self._save()
         return profile
 
     def get_style_prompt(self, contact_id: str) -> str:

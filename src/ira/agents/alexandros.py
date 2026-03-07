@@ -135,10 +135,10 @@ class Alexandros(BaseAgent):
         return await self.read_file(file_path)
 
     async def _tool_get_archive_stats(self) -> str:
-        return self.stats()
+        return await self.stats()
 
     async def _tool_scan_undigested(self) -> str:
-        results = self.scan_for_undigested_files()
+        results = await self.scan_for_undigested_files()
         if not results:
             return "All files are up to date — nothing to ingest."
         return json.dumps(results[:20], default=str)
@@ -161,7 +161,7 @@ class Alexandros(BaseAgent):
         if action == "read_file":
             return await self.read_file(context.get("filename", query))
         if action == "stats":
-            return self.stats()
+            return await self.stats()
 
         if action == "ask":
             return await self.ask(query, context)
@@ -196,17 +196,17 @@ class Alexandros(BaseAgent):
                 path = c.get("path", "")
                 if not path or not Path(path).exists():
                     continue
-                text = extract_file_text(path).lower()
+                text = (await extract_file_text(path)).lower()
                 if query_terms and any(term in text for term in query_terms):
                     filtered.append(c)
             if filtered:
                 candidates = filtered[:3]
 
         if not candidates:
-            folder = self._match_folder(query)
+            folder = await self._match_folder(query)
             if folder:
                 return await self.browse(folder)
-            index = load_index()
+            index = await load_index()
             total = len(index.get("files", {}))
             return (
                 f"Alexandros: I searched the archive ({total} files) "
@@ -222,7 +222,7 @@ class Alexandros(BaseAgent):
             if not filepath or not Path(filepath).exists():
                 continue
 
-            text = extract_file_text(filepath)
+            text = await extract_file_text(filepath)
             if not text or len(text.strip()) < 30:
                 continue
 
@@ -237,7 +237,7 @@ class Alexandros(BaseAgent):
                 f"{candidate.get('summary', 'N/A')[:150]}"
             )
 
-            queue_for_deferred_ingestion(
+            await queue_for_deferred_ingestion(
                 filepath, filename, query,
                 candidate.get("doc_type", "other"),
             )
@@ -301,10 +301,10 @@ class Alexandros(BaseAgent):
 
     async def browse(self, folder_or_query: str, doc_type: str = "") -> str:
         """List files in a folder with summaries."""
-        index = load_index()
+        index = await load_index()
         files = index.get("files", {})
 
-        folder = self._match_folder(folder_or_query)
+        folder = await self._match_folder(folder_or_query)
         q_lower = folder_or_query.lower()
 
         matching: list[tuple[str, dict[str, Any]]] = []
@@ -365,7 +365,7 @@ class Alexandros(BaseAgent):
 
     async def read_file(self, filename_or_path: str) -> str:
         """Read a specific file from the archive by name or path."""
-        index = load_index()
+        index = await load_index()
         files = index.get("files", {})
 
         target: dict[str, Any] | None = None
@@ -389,11 +389,11 @@ class Alexandros(BaseAgent):
         if not filepath or not Path(filepath).exists():
             return f"Alexandros: File '{target.get('name', '')}' is indexed but missing from disk."
 
-        text = extract_file_text(filepath)
+        text = await extract_file_text(filepath)
         if not text or len(text.strip()) < 10:
             return f"Alexandros: Could not extract text from '{target.get('name', '')}'. It may be an image or corrupted PDF."
 
-        queue_for_deferred_ingestion(
+        await queue_for_deferred_ingestion(
             filepath,
             target.get("name", ""),
             f"file_detail:{filename_or_path}",
@@ -412,9 +412,9 @@ class Alexandros(BaseAgent):
 
     # ── stats ────────────────────────────────────────────────────────────
 
-    def stats(self) -> str:
+    async def stats(self) -> str:
         """Quick stats about the archive."""
-        index = load_index()
+        index = await load_index()
         files = index.get("files", {})
         total = len(files)
 
@@ -452,9 +452,9 @@ class Alexandros(BaseAgent):
 
     # ── Ingestion Gatekeeper (delegates to ingestion_gatekeeper module) ──
 
-    def scan_for_undigested_files(self, *, force: bool = False) -> list[dict[str, Any]]:
+    async def scan_for_undigested_files(self, *, force: bool = False) -> list[dict[str, Any]]:
         """Compare the metadata index against the ingestion log."""
-        return scan_for_undigested(force=force)
+        return await scan_for_undigested(force=force)
 
     async def run_ingestion(
         self, *, force: bool = False, batch_size: int = 50,
@@ -464,10 +464,10 @@ class Alexandros(BaseAgent):
 
     # ── helpers ──────────────────────────────────────────────────────────
 
-    def _match_folder(self, query: str) -> str | None:
+    async def _match_folder(self, query: str) -> str | None:
         """Try to match a query to a folder name in the index."""
         q = query.lower().strip()
-        index = load_index()
+        index = await load_index()
         folders: set[str] = set()
         for rel_path in index.get("files", {}):
             if "/" in rel_path:
