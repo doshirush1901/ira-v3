@@ -146,9 +146,10 @@ async def run_board_meeting():
         "pantheon": pantheon,
     })
 
-    # Lower max_iterations to prevent deep chains from OOM
+    # Use gpt-4.1-mini for agent reasoning (higher rate limits) and cap iterations
     for agent in pantheon.agents.values():
         agent.max_iterations = 4
+        agent._openai_model = "gpt-4.1-mini"
 
     logger.info("Starting board meeting with %d key agents...", len(KEY_AGENTS))
     async with pantheon:
@@ -162,12 +163,16 @@ async def run_board_meeting():
 
 
 async def rewrite_tim_urban(minutes):
-    """Rewrite the board meeting output in Tim Urban's style."""
+    """Rewrite the board meeting output in Tim Urban's style.
+
+    Tries OpenAI first, falls back to Anthropic on any failure.
+    """
     import httpx
     from ira.config import get_settings
 
     settings = get_settings()
-    api_key = settings.llm.openai_api_key.get_secret_value()
+    openai_key = settings.llm.openai_api_key.get_secret_value()
+    anthropic_key = settings.llm.anthropic_api_key.get_secret_value()
 
     contributions_text = "\n\n".join(
         f"--- {agent.upper()} ---\n{response}"
@@ -180,29 +185,59 @@ async def rewrite_tim_urban(minutes):
         synthesis=minutes.synthesis,
     )
 
-    logger.info("Sending to GPT-4.1 for Tim Urban rewrite (%d chars)...", len(prompt))
-    async with httpx.AsyncClient(timeout=180) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            json={
-                "model": "gpt-4.1",
-                "temperature": 0.7,
-                "max_tokens": 8000,
-                "messages": [
-                    {"role": "system", "content": "You are Tim Urban, writer of Wait But Why."},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-        )
-        resp.raise_for_status()
-        result = resp.json()["choices"][0]["message"]["content"]
+    system_msg = "You are Tim Urban, writer of Wait But Why."
 
-    logger.info("Tim Urban rewrite complete (%d chars).", len(result))
-    return result
+    if openai_key:
+        logger.info("Trying OpenAI for Tim Urban rewrite (%d chars)...", len(prompt))
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json={
+                        "model": "gpt-4.1",
+                        "temperature": 0.7,
+                        "max_tokens": 8000,
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt},
+                        ],
+                    },
+                    headers={
+                        "Authorization": f"Bearer {openai_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                result = resp.json()["choices"][0]["message"]["content"]
+                logger.info("Tim Urban rewrite complete via OpenAI (%d chars).", len(result))
+                return result
+        except Exception:
+            logger.warning("OpenAI failed for rewrite — falling back to Anthropic")
+
+    if anthropic_key:
+        logger.info("Using Anthropic for Tim Urban rewrite (%d chars)...", len(prompt))
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json={
+                    "model": settings.llm.anthropic_model,
+                    "max_tokens": 8000,
+                    "system": system_msg,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                },
+                headers={
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            result = resp.json()["content"][0]["text"]
+            logger.info("Tim Urban rewrite complete via Anthropic (%d chars).", len(result))
+            return result
+
+    raise RuntimeError("No LLM provider available for rewrite")
 
 
 def send_gmail(html_body: str, subject: str, to: str):

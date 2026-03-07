@@ -86,6 +86,11 @@ class BaseAgent(ABC):
         Resets the default-tool flag so the next ``run()`` call will
         re-register tools with the newly available services.
         """
+        from ira.service_keys import ALL_SERVICE_KEYS
+
+        for key in services:
+            if key not in ALL_SERVICE_KEYS:
+                logger.warning("Unknown service key injected: %r", key)
         self._services.update(services)
         self._default_tools_registered = False
 
@@ -105,6 +110,8 @@ class BaseAgent(ABC):
         Only registers tools whose backing service is present in
         ``self._services``.  Called lazily at the start of ``run()``.
         """
+        from ira.service_keys import ServiceKey as SK
+
         if self._default_tools_registered:
             return
         self._default_tools_registered = True
@@ -116,7 +123,7 @@ class BaseAgent(ABC):
             handler=self._tool_search_knowledge,
         ))
 
-        if self._services.get("long_term_memory"):
+        if self._services.get(SK.LONG_TERM_MEMORY):
             self.register_tool(AgentTool(
                 name="recall_memory",
                 description="Search long-term semantic memory (Mem0) for past facts and context.",
@@ -130,7 +137,7 @@ class BaseAgent(ABC):
                 handler=self._tool_store_memory,
             ))
 
-        if self._services.get("conversation_memory"):
+        if self._services.get(SK.CONVERSATION_MEMORY):
             self.register_tool(AgentTool(
                 name="get_conversation_history",
                 description="Retrieve recent conversation history for a user.",
@@ -142,7 +149,7 @@ class BaseAgent(ABC):
                 handler=self._tool_get_conversation_history,
             ))
 
-        if self._services.get("relationship_memory"):
+        if self._services.get(SK.RELATIONSHIP_MEMORY):
             self.register_tool(AgentTool(
                 name="check_relationship",
                 description="Look up the relationship profile for a contact (warmth, history, preferences).",
@@ -150,7 +157,7 @@ class BaseAgent(ABC):
                 handler=self._tool_check_relationship,
             ))
 
-        if self._services.get("goal_manager"):
+        if self._services.get(SK.GOAL_MANAGER):
             self.register_tool(AgentTool(
                 name="check_goals",
                 description="Get the active goal for a contact (slot-filling progress, type).",
@@ -158,7 +165,7 @@ class BaseAgent(ABC):
                 handler=self._tool_check_goals,
             ))
 
-        if self._services.get("episodic_memory"):
+        if self._services.get(SK.EPISODIC_MEMORY):
             self.register_tool(AgentTool(
                 name="recall_episodes",
                 description="Search episodic memory for past interaction narratives and key events.",
@@ -166,7 +173,7 @@ class BaseAgent(ABC):
                 handler=self._tool_recall_episodes,
             ))
 
-        if self._services.get("pantheon"):
+        if self._services.get(SK.PANTHEON):
             self.register_tool(AgentTool(
                 name="ask_agent",
                 description="Delegate a question to another specialist agent in the Pantheon.",
@@ -304,7 +311,8 @@ class BaseAgent(ABC):
         if context:
             ctx_text = f"\n\nAdditional context: {json.dumps(context, default=str)[:2000]}"
 
-        user_msg = f"Query: {query}{ctx_text}"
+        delimited_query = f"<<<USER INPUT>>>\n{query}\n<<<END INPUT>>>"
+        user_msg = f"Query: {delimited_query}{ctx_text}"
         if scratchpad_text:
             user_msg += f"\n\nPrevious reasoning steps:\n{scratchpad_text}\n\nContinue reasoning."
 
@@ -321,11 +329,15 @@ class BaseAgent(ABC):
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name."""
+        from ira.exceptions import ToolExecutionError
+
         for tool in self.tools:
             if tool.name == name:
                 try:
                     result = await tool.handler(**{k: str(v) for k, v in inputs.items()})
                     return str(result)[:4000]
+                except ToolExecutionError:
+                    raise
                 except Exception as exc:
                     logger.warning("Tool '%s' failed in %s: %s", name, self.name, exc)
                     return f"Tool error: {exc}"
@@ -454,10 +466,29 @@ class BaseAgent(ABC):
         *,
         temperature: float = 0.3,
     ) -> str:
-        """Call the configured LLM provider and return the response text."""
+        """Call the primary LLM provider; fall back to the other on failure."""
         if self.model_provider == "anthropic" and self._anthropic_key:
+            result = await self._call_anthropic(system_prompt, user_message, temperature)
+            if not result.startswith("("):
+                return result
+            if self._openai_key:
+                logger.info("Falling back to OpenAI after Anthropic failure in %s", self.name)
+                return await self._call_openai(system_prompt, user_message, temperature)
+            return result
+
+        if self._openai_key:
+            result = await self._call_openai(system_prompt, user_message, temperature)
+            if not result.startswith("("):
+                return result
+            if self._anthropic_key:
+                logger.info("Falling back to Anthropic after OpenAI failure in %s", self.name)
+                return await self._call_anthropic(system_prompt, user_message, temperature)
+            return result
+
+        if self._anthropic_key:
             return await self._call_anthropic(system_prompt, user_message, temperature)
-        return await self._call_openai(system_prompt, user_message, temperature)
+
+        return "(No LLM provider available)"
 
     async def _call_openai(self, system: str, user: str, temperature: float) -> str:
         if not self._openai_key:
@@ -471,21 +502,38 @@ class BaseAgent(ABC):
                 {"role": "user", "content": user[:12_000]},
             ],
         }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self._openai_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError):
-            logger.exception("OpenAI call failed in %s", self.name)
-            return "(LLM call failed)"
+        backoff = 2.0
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        json=payload,
+                        headers={
+                            "Authorization": f"Bearer {self._openai_key}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    resp.raise_for_status()
+                    return resp.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429 or status == 402:
+                    logger.warning("OpenAI %d in %s — will fallback", status, self.name)
+                    return "(OpenAI quota/rate limit exceeded)"
+                if status < 500:
+                    logger.warning("OpenAI %d error in %s: %s", status, self.name, exc)
+                    return "(LLM call failed)"
+                logger.warning("OpenAI attempt %d/3 failed in %s: %s", attempt, self.name, exc)
+            except (httpx.TransportError, KeyError, IndexError) as exc:
+                logger.warning("OpenAI attempt %d/3 failed in %s: %s", attempt, self.name, exc)
+            except httpx.HTTPError as exc:
+                logger.warning("OpenAI call failed in %s: %s", self.name, exc)
+                return "(LLM call failed)"
+            if attempt < 3:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+        return "(LLM call failed after 3 retries)"
 
     async def _call_anthropic(self, system: str, user: str, temperature: float) -> str:
         if not self._anthropic_key:
@@ -498,22 +546,39 @@ class BaseAgent(ABC):
             "messages": [{"role": "user", "content": user[:12_000]}],
             "temperature": temperature,
         }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    json=payload,
-                    headers={
-                        "x-api-key": self._anthropic_key,
-                        "anthropic-version": "2023-06-01",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["content"][0]["text"]
-        except (httpx.HTTPError, KeyError, IndexError):
-            logger.exception("Anthropic call failed in %s", self.name)
-            return "(LLM call failed)"
+        backoff = 2.0
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        "https://api.anthropic.com/v1/messages",
+                        json=payload,
+                        headers={
+                            "x-api-key": self._anthropic_key,
+                            "anthropic-version": "2023-06-01",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    resp.raise_for_status()
+                    return resp.json()["content"][0]["text"]
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429 or status == 402:
+                    logger.warning("Anthropic %d in %s — will fallback", status, self.name)
+                    return "(Anthropic quota/rate limit exceeded)"
+                if status < 500:
+                    logger.warning("Anthropic %d error in %s: %s", status, self.name, exc)
+                    return "(LLM call failed)"
+                logger.warning("Anthropic attempt %d/3 failed in %s: %s", attempt, self.name, exc)
+            except (httpx.TransportError, KeyError, IndexError) as exc:
+                logger.warning("Anthropic attempt %d/3 failed in %s: %s", attempt, self.name, exc)
+            except httpx.HTTPError as exc:
+                logger.warning("Anthropic call failed in %s: %s", self.name, exc)
+                return "(LLM call failed)"
+            if attempt < 3:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+        return "(LLM call failed after 3 retries)"
 
     # ── knowledge retrieval ──────────────────────────────────────────────
 
