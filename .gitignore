@@ -20,6 +20,7 @@ data/neo4j/
 data/postgres/
 data/qdrant_locked/
 data/ingested_files.db
+data/machine_knowledge.json
 
 # ──────────────────────────────────────────────
 # Local databases
@@ -32,6 +33,15 @@ data/ingested_files.db
 # Runtime & logs
 # ──────────────────────────────────────────────
 dream_log.json
+uv.lock
+
+# ──────────────────────────────────────────────
+# Internal planning docs (not for public repo)
+# ──────────────────────────────────────────────
+IRA_MASTER_PLAN.md
+OPERATIONS_MANUAL.md
+vision_map.md
+docs_ARCHITECTURE.md
 
 # ──────────────────────────────────────────────
 # Python
