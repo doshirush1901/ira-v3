@@ -80,9 +80,15 @@ class Prometheus(BaseAgent):
             ))
             self.register_tool(AgentTool(
                 name="get_warm_contacts",
-                description="List all WARM and TRUSTED contacts from the CRM — these are high-value relationships.",
+                description="List all WARM and TRUSTED contacts from the CRM — these are high-value existing relationships.",
                 parameters={"limit": "Max contacts to return (default 20)"},
                 handler=self._tool_get_warm_contacts,
+            ))
+            self.register_tool(AgentTool(
+                name="get_active_leads",
+                description="List contacts classified as LEAD_WITH_INTERACTIONS — these are the active sales opportunities that need follow-up (e.g. Minini Plastic Italy, Extalon Germany, RAD Global, Durotherm, etc.). THIS IS YOUR MOST IMPORTANT TOOL. There are 200+ active leads.",
+                parameters={"limit": "Max leads to return (default 50)"},
+                handler=self._tool_get_active_leads,
             ))
 
         if self._quotes:
@@ -149,6 +155,25 @@ class Prometheus(BaseAgent):
             rows = result.fetchall()
         if not rows:
             return "No warm/trusted contacts found."
+        lines = []
+        for r in rows:
+            lines.append(f"- {r[0]} ({r[1]}) | Company: {r[2] or '?'} | Score: {r[3]} | {r[4]} | {r[5]}")
+        return "\n".join(lines)
+
+    async def _tool_get_active_leads(self, limit: str = "50") -> str:
+        """List contacts classified as active leads — these are the sales opportunities."""
+        from sqlalchemy import text
+        async with self._crm.session_factory() as session:
+            result = await session.execute(text(
+                "SELECT c.name, c.email, co.name as company, c.lead_score, "
+                "c.warmth_level, c.contact_type "
+                "FROM contacts c LEFT JOIN companies co ON c.company_id = co.id "
+                "WHERE c.contact_type IN ('LEAD_WITH_INTERACTIONS', 'ACTIVE_LEAD', 'PROSPECT') "
+                "ORDER BY c.lead_score DESC, c.updated_at DESC LIMIT :lim"
+            ), {"lim": int(limit)})
+            rows = result.fetchall()
+        if not rows:
+            return "No active leads found."
         lines = []
         for r in rows:
             lines.append(f"- {r[0]} ({r[1]}) | Company: {r[2] or '?'} | Score: {r[3]} | {r[4]} | {r[5]}")
