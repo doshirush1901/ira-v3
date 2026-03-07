@@ -46,6 +46,13 @@ class Prometheus(BaseAgent):
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
 
+        self.register_tool(AgentTool(
+            name="search_sales_knowledge",
+            description="Search the knowledge base across all sales categories: quotes, orders, leads, contacts, webcall transcripts. This is your RICHEST data source.",
+            parameters={"query": "Search query about leads, deals, companies, contacts"},
+            handler=self._tool_search_sales_knowledge,
+        ))
+
         if self._crm:
             self.register_tool(AgentTool(
                 name="search_contacts",
@@ -89,6 +96,12 @@ class Prometheus(BaseAgent):
             ))
 
     # ── tool handlers ─────────────────────────────────────────────────────
+
+    async def _tool_search_sales_knowledge(self, query: str) -> str:
+        results = await self.search_domain_knowledge(query, limit=10)
+        if not results:
+            return "No results found in sales knowledge base."
+        return self._format_context(results)
 
     async def _tool_search_contacts(self, query: str) -> str:
         results = await self._crm.search_contacts(query)
