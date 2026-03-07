@@ -103,6 +103,8 @@ class AppConfig(BaseSettings):
 
     log_level: str = "INFO"
     environment: str = "development"
+    api_secret_key: SecretStr = SecretStr("")
+    cors_origins: str = ""
 
 
 class Settings(BaseSettings):

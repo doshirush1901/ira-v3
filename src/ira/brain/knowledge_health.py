@@ -23,6 +23,7 @@ from ira.config import get_settings
 logger = logging.getLogger(__name__)
 
 _MACHINE_KNOWLEDGE_PATH = Path("data/machine_knowledge.json")
+_HEALTH_ISSUES_PATH = Path("data/brain/health_issues.json")
 
 _CRITICAL_DOCUMENTS = [
     "price list",
@@ -58,6 +59,27 @@ class KnowledgeHealthMonitor:
         self._mk_path = Path(machine_knowledge_path)
         self._machine_knowledge: dict[str, Any] | None = None
         self._recurring_issues: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._load_recurring_issues()
+
+    def _load_recurring_issues(self) -> None:
+        if _HEALTH_ISSUES_PATH.exists():
+            try:
+                data = json.loads(_HEALTH_ISSUES_PATH.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        self._recurring_issues[k] = v
+            except (json.JSONDecodeError, OSError):
+                logger.warning("Could not load health issues; starting fresh")
+
+    def _persist_issues(self) -> None:
+        try:
+            _HEALTH_ISSUES_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _HEALTH_ISSUES_PATH.write_text(
+                json.dumps(dict(self._recurring_issues), indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("Failed to persist health issues", exc_info=True)
 
     async def _load_machine_knowledge(self) -> dict[str, Any]:
         if self._mk_path.exists():
@@ -233,6 +255,7 @@ class KnowledgeHealthMonitor:
         })
         count = len(self._recurring_issues[issue_type])
         logger.debug("Recurring issue '%s' count: %d", issue_type, count)
+        self._persist_issues()
         return count
 
     def get_chronic_issues(self, threshold: int = 3) -> list[dict[str, Any]]:

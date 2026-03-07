@@ -527,8 +527,10 @@ async def query(req: QueryRequest) -> QueryResponse:
     channel = (req.context or {}).get("channel", "API").upper()
     metadata = req.context or {}
 
+    agents_consulted: list[str] | None = None
+
     if pipeline is not None:
-        response = await pipeline.process_request(
+        response, agents_consulted = await pipeline.process_request(
             raw_input=req.query,
             channel=channel,
             sender_id=sender_id,
@@ -551,7 +553,7 @@ async def query(req: QueryRequest) -> QueryResponse:
                     req.user_id, channel, req.query, response,
                 )
 
-    return QueryResponse(response=response)
+    return QueryResponse(response=response, agents_consulted=agents_consulted)
 
 
 @app.get("/api/health")

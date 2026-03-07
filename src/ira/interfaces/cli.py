@@ -216,9 +216,11 @@ async def _build_pipeline(pantheon: Any, shared_services: dict[str, Any]) -> Any
 
     learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
 
-    sensory._emotional_intelligence = emotional_intelligence
-    sensory._conversation_memory = conversation
-    sensory._relationship_memory = relationship_memory
+    sensory.configure_memory(
+        emotional_intelligence=emotional_intelligence,
+        conversation_memory=conversation,
+        relationship_memory=relationship_memory,
+    )
 
     pantheon.inject_services({
         "long_term_memory": long_term,
@@ -369,7 +371,7 @@ def chat(
                     transient=True,
                 ) as progress:
                     progress.add_task("thinking", total=None)
-                    response = await pipeline.process_request(
+                    response, _agents = await pipeline.process_request(
                         raw_input=text,
                         channel="cli",
                         sender_id=user_id,
@@ -406,7 +408,7 @@ def ask(
                 transient=True,
             ) as progress:
                 progress.add_task("thinking", total=None)
-                response = await pipeline.process_request(
+                response, _agents = await pipeline.process_request(
                     raw_input=query,
                     channel="cli",
                     sender_id=user_id,

@@ -70,7 +70,7 @@ class RequestPipeline:
         self._musculoskeletal = musculoskeletal
         self._unified_ctx = unified_context
 
-        self._router = pantheon._router
+        self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
         self._recent_messages: dict[str, tuple[str, float]] = {}
 
@@ -82,8 +82,8 @@ class RequestPipeline:
         channel: str,
         sender_id: str,
         metadata: dict[str, Any] | None = None,
-    ) -> str:
-        """Run the full 11-step pipeline and return the shaped response."""
+    ) -> tuple[str, list[str]]:
+        """Run the full 11-step pipeline and return ``(shaped_response, agents_used)``."""
         t0 = time.monotonic()
         meta = metadata or {}
         trace: dict[str, Any] = {"channel": channel, "sender_id": sender_id}
@@ -104,7 +104,8 @@ class RequestPipeline:
         }
         if pending is None and _fingerprint in self._recent_messages:
             logger.info("DEDUP | returning cached response for %s", sender_id)
-            return self._recent_messages[_fingerprint][0]
+            cached_resp = self._recent_messages[_fingerprint][0]
+            return cached_resp, []
 
         if pending is not None:
             agent = self._pantheon.get_agent(pending["agent_name"])
@@ -122,7 +123,7 @@ class RequestPipeline:
                     shaped = await self._voice.shape_response(
                         raw_response, channel,
                     )
-                    return shaped
+                    return shaped, [pending["agent_name"]]
                 except Exception:
                     logger.exception("Clarification resume failed")
 
@@ -339,13 +340,13 @@ class RequestPipeline:
             }
             logger.info("CLARIFY | stored pending for %s (sender=%s)", contact_email, sender_id)
             shaped = await self._voice.shape_response(clarification_q, channel)
-            return shaped
+            return shaped, agents_used
 
         # ── 7. ASSESS ────────────────────────────────────────────────
         confidence_prefix = ""
         if self._metacognition is not None:
             try:
-                retriever = self._pantheon._retriever
+                retriever = self._pantheon.retriever
                 kb_results = await retriever.search(resolved_input, limit=5)
                 assessment = await self._metacognition.assess_knowledge(
                     resolved_input, kb_results,
@@ -427,7 +428,7 @@ class RequestPipeline:
 
         # ── 11. RETURN ───────────────────────────────────────────────
         self._recent_messages[_fingerprint] = (shaped, _now)
-        return shaped
+        return shaped, agents_used
 
     # ── Execution helpers ─────────────────────────────────────────────────
 

@@ -292,14 +292,17 @@ async def update_crm_record(**kwargs: Any) -> str:
     if not record_type or not record_id or not updates:
         return "Error: 'type', 'id', and 'updates' arguments required"
 
-    if record_type == "deal":
-        result = await crm.update_deal(record_id, **updates)
-    elif record_type == "contact":
-        result = await crm.update_contact(record_id, **updates)
-    elif record_type == "company":
-        result = await crm.update_company(record_id, **updates)
-    else:
-        return f"Unknown record type: {record_type}"
+    try:
+        if record_type == "deal":
+            result = await crm.update_deal(record_id, **updates)
+        elif record_type == "contact":
+            result = await crm.update_contact(record_id, **updates)
+        elif record_type == "company":
+            result = await crm.update_company(record_id, **updates)
+        else:
+            return f"Unknown record type: {record_type}"
+    except Exception as exc:
+        return f"CRM update failed for {record_type} {record_id}: {exc}"
 
     if result is None:
         return f"{record_type} {record_id} not found"

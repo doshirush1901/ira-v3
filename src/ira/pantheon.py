@@ -84,6 +84,16 @@ class Pantheon:
             sorted(services),
         )
 
+    @property
+    def router(self) -> DeterministicRouter:
+        """Public access to the deterministic router."""
+        return self._router
+
+    @property
+    def retriever(self) -> UnifiedRetriever:
+        """Public access to the unified retriever."""
+        return self._retriever
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     async def start(self) -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -29,7 +29,7 @@ class MessageBus:
     def __init__(self, maxsize: int = 1000) -> None:
         self._queue: asyncio.Queue[AgentMessage] = asyncio.Queue(maxsize=maxsize)
         self._handlers: dict[str, list[MessageHandler]] = defaultdict(list)
-        self._log: list[AgentMessage] = []
+        self._log: deque[AgentMessage] = deque(maxlen=1000)
         self._running = False
         self._task: asyncio.Task[None] | None = None
 

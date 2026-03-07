@@ -812,6 +812,7 @@ class DreamMode:
                 existing = []
 
         existing.append(entry)
+        existing = existing[-500:]
         try:
             self._dream_log_path.parent.mkdir(parents=True, exist_ok=True)
             self._dream_log_path.write_text(

@@ -18,6 +18,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _MAX_HISTORY = 50
+_MAX_USERS = 500
 
 
 @dataclass
@@ -49,8 +50,18 @@ class UnifiedContextManager:
     # ── read / write ─────────────────────────────────────────────────────
 
     def get(self, user_id: str) -> UserContext:
-        """Return the context for *user_id*, creating one if absent."""
+        """Return the context for *user_id*, creating one if absent.
+
+        When the store exceeds ``_MAX_USERS`` entries the least-recently
+        interacted user is evicted to bound memory growth.
+        """
         if user_id not in self._store:
+            if len(self._store) >= _MAX_USERS:
+                oldest_key = min(
+                    self._store,
+                    key=lambda k: self._store[k].last_interaction_at,
+                )
+                del self._store[oldest_key]
             self._store[user_id] = UserContext(user_id=user_id)
         return self._store[user_id]
 

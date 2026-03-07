@@ -234,6 +234,7 @@ class SleepTrainer:
                 hint["added_at"] = datetime.now(timezone.utc).isoformat()
                 existing.append(hint)
 
+            existing = existing[-500:]
             _GUIDANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(
                 _GUIDANCE_PATH.write_text,
@@ -274,6 +275,7 @@ class SleepTrainer:
                 c["learned_at"] = datetime.now(timezone.utc).isoformat()
                 existing.append(c)
 
+            existing = existing[-500:]
             _LEARNED_PATH.parent.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(
                 _LEARNED_PATH.write_text,

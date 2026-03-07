@@ -32,6 +32,9 @@ asyncpg = ">=0.29"
 pypdf = "^6.7.5"
 openpyxl = "^3.1.5"
 python-docx = "^1.2.0"
+python-pptx = "^1.0.2"
+mem0ai = ">=0.1"
+alembic = ">=1.13"
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"

@@ -60,3 +60,13 @@ build/
 # Migration scripts with hardcoded creds
 # ──────────────────────────────────────────────
 scripts/migrate_neo4j.py
+
+# ──────────────────────────────────────────────
+# Board meetings (private business data)
+# ──────────────────────────────────────────────
+data/board_meetings/
+
+# ──────────────────────────────────────────────
+# IDE workspace config
+# ──────────────────────────────────────────────
+.cursor/

@@ -109,8 +109,9 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("Thinking ...")
 
     try:
+        agents_used: list[str] = []
         if _pipeline is not None:
-            response = await _pipeline.process_request(
+            response, agents_used = await _pipeline.process_request(
                 raw_input=query,
                 channel="telegram",
                 sender_id=user_id,
@@ -125,6 +126,7 @@ async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if _unified_context is not None:
                 _unified_context.record_turn(user_id, "telegram", query, response)
 
+        _last_exchange[user_id] = {"query": query, "response": response, "agents_used": agents_used}
         await update.effective_message.reply_text(_truncate(response))
     except Exception:
         logger.exception("Pantheon query failed")
@@ -399,8 +401,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             logger.debug("Feedback detection failed (non-critical)")
 
     try:
+        agents_used: list[str] = []
         if _pipeline is not None:
-            response = await _pipeline.process_request(
+            response, agents_used = await _pipeline.process_request(
                 raw_input=text,
                 channel="telegram",
                 sender_id=user_id,
@@ -415,7 +418,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if _unified_context is not None:
                 _unified_context.record_turn(user_id, "telegram", text, response)
 
-        _last_exchange[user_id] = {"query": text, "response": response, "agents_used": []}
+        _last_exchange[user_id] = {"query": text, "response": response, "agents_used": agents_used}
         await update.effective_message.reply_text(_truncate(response))
     except Exception:
         logger.exception("Pantheon message handling failed")
@@ -460,10 +463,28 @@ async def start_bot(
     _unified_context = unified_context
 
     try:
+        from ira.brain.correction_store import CorrectionStore
         from ira.brain.feedback_handler import FeedbackHandler
-        _feedback_handler = FeedbackHandler()
-        await _feedback_handler._load_scores()
-        logger.info("Feedback handler initialized for Telegram")
+        from ira.config import get_settings as _get_settings
+
+        _corr_store = CorrectionStore()
+        await _corr_store.initialize()
+
+        _mem0 = None
+        _mem0_key = _get_settings().memory.api_key.get_secret_value()
+        if _mem0_key:
+            try:
+                from mem0 import MemoryClient
+                _mem0 = MemoryClient(api_key=_mem0_key)
+            except Exception:
+                logger.debug("Mem0 not available for feedback handler")
+
+        _feedback_handler = FeedbackHandler(
+            correction_store=_corr_store,
+            mem0_client=_mem0,
+        )
+        await _feedback_handler.load_scores()
+        logger.info("Feedback handler initialized for Telegram (with correction store)")
     except Exception:
         logger.debug("FeedbackHandler not available — feedback detection disabled")
 

@@ -95,7 +95,7 @@ class UnifiedRetriever:
                         d["source_type"] = "discovery"
                     merged.extend(discovered)
             except Exception:
-                logger.debug("Knowledge discovery not available", exc_info=True)
+                logger.warning("Knowledge discovery fallback failed", exc_info=True)
 
         if not merged:
             return await self._imports_fallback(query, limit)
@@ -303,7 +303,7 @@ class UnifiedRetriever:
             sources = [r.get("source_type", "") for r in results[:10]]
             await gc.log_retrieval(query, chunks, sources)
         except Exception:
-            logger.debug("Retrieval logging failed", exc_info=True)
+            logger.warning("Retrieval logging failed", exc_info=True)
 
     # ── imports fallback ───────────────────────────────────────────────────
 
