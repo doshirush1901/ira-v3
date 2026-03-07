@@ -103,23 +103,13 @@ class RequestPipeline:
         logger.info("PERCEIVE | %s | %s", channel, contact_email)
 
         # ── 2. REMEMBER ──────────────────────────────────────────────
+        # Fetch minimal history for coreference resolution and the LEARN
+        # step.  Agents query memory dynamically via their injected
+        # services and ReAct tools — we no longer pre-fetch relationship
+        # or goal snapshots for the agent context.
         history = await self._conversation.get_history(
             contact_email, channel, limit=20,
         )
-
-        relationship = None
-        if self._relationship is not None:
-            try:
-                relationship = await self._relationship.get_relationship(contact_email)
-            except Exception:
-                logger.exception("RelationshipMemory lookup failed")
-
-        active_goal = None
-        if self._goals is not None:
-            try:
-                active_goal = await self._goals.get_active_goal(contact_email)
-            except Exception:
-                logger.exception("GoalManager lookup failed")
 
         resolved_input = raw_input
         if history:
@@ -138,6 +128,14 @@ class RequestPipeline:
                 )
             except Exception:
                 logger.exception("UnifiedContextManager lookup failed")
+
+        # Still fetch active_goal for the LEARN step (slot extraction)
+        active_goal = None
+        if self._goals is not None:
+            try:
+                active_goal = await self._goals.get_active_goal(contact_email)
+            except Exception:
+                logger.exception("GoalManager lookup failed")
 
         logger.info(
             "REMEMBER | history=%d msgs | cross_channel=%d | goal=%s",
@@ -250,25 +248,23 @@ class RequestPipeline:
             pass
 
         # ── 6. EXECUTE ───────────────────────────────────────────────
+        # Pass perception and enrichment for prompt context, plus live
+        # service references so agents can query memory dynamically
+        # through their ReAct tools instead of relying on static snapshots.
         context: dict[str, Any] = {
             "perception": perception,
-            "history": history[-5:],
-            "cross_channel_history": cross_channel_history[-5:],
             "channel": channel,
+            "services": {
+                "conversation_memory": self._conversation,
+                "relationship_memory": self._relationship,
+                "goal_manager": self._goals,
+                "procedural_memory": self._procedural,
+                "crm": self._crm,
+                "endocrine": self._endocrine,
+            },
         }
         if enrichment_parts:
             context["enrichment"] = "\n\n".join(enrichment_parts)
-        if active_goal is not None:
-            context["active_goal"] = {
-                "type": active_goal.goal_type.value,
-                "progress": active_goal.progress,
-                "slots": active_goal.required_slots,
-            }
-        if relationship is not None:
-            context["relationship"] = {
-                "warmth": relationship.warmth_level.value,
-                "interaction_count": relationship.interaction_count,
-            }
 
         raw_response: str
         agents_used: list[str]

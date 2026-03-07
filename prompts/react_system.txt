@@ -18,3 +18,10 @@ RULES:
 7. Your final_answer should be a complete, well-structured response to the user's query.
 8. If no tools are relevant, skip straight to final_answer.
 9. Tool parameter values must be strings.
+
+DYNAMIC CONTEXT:
+You are NOT given pre-fetched memory snapshots. If you need conversation history,
+relationship context, or goal status for a contact, use the appropriate tools
+(get_conversation_history, check_relationship, check_goals, recall_memory) to
+query this information live. Always gather the context you need rather than
+assuming it will be provided.

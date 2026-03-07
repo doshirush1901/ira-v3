@@ -158,6 +158,14 @@ class BaseAgent(ABC):
                 handler=self._tool_check_goals,
             ))
 
+        if self._services.get("episodic_memory"):
+            self.register_tool(AgentTool(
+                name="recall_episodes",
+                description="Search episodic memory for past interaction narratives and key events.",
+                parameters={"query": "What to search for", "user_id": "User/contact ID", "limit": "Max results (default 5)"},
+                handler=self._tool_recall_episodes,
+            ))
+
         if self._services.get("pantheon"):
             self.register_tool(AgentTool(
                 name="ask_agent",
@@ -227,6 +235,18 @@ class BaseAgent(ABC):
             "progress": goal.progress,
             "slots": goal.required_slots,
         }, default=str)
+
+    async def _tool_recall_episodes(self, query: str, user_id: str = "global", limit: str = "5") -> str:
+        ep = self._services["episodic_memory"]
+        results = await ep.surface_relevant_episodes(query, user_id)
+        if not results:
+            return "No episodic memories found."
+        lines = []
+        for e in results[:int(limit)]:
+            ts = e.get("created_at", "?")
+            narrative = e.get("narrative", e.get("content", ""))[:400]
+            lines.append(f"- [{ts}] {narrative}")
+        return "\n".join(lines)
 
     async def _tool_ask_agent(self, agent_name: str, question: str) -> str:
         pantheon = self._services["pantheon"]
@@ -346,11 +366,20 @@ class BaseAgent(ABC):
         query:
             The user/caller query.
         context:
-            Optional context dict forwarded from the caller.
+            Optional context dict forwarded from the caller.  May contain
+            a ``"services"`` key with live service references from the
+            pipeline, which are merged into ``self._services`` so that
+            ReAct tools can query memory dynamically.
         system_prompt:
             The agent-specific system prompt to prepend to the ReAct
             protocol.  If empty, a minimal default is used.
         """
+        if context and "services" in context:
+            for key, svc in context["services"].items():
+                if svc is not None and key not in self._services:
+                    self._services[key] = svc
+            self._default_tools_registered = False
+
         self._register_default_tools()
 
         agent_prompt = system_prompt or (
