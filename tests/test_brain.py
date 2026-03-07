@@ -251,11 +251,14 @@ class TestQdrantManager:
         }
         fake_hit.score = 0.95
 
+        fake_result = MagicMock()
+        fake_result.points = [fake_hit]
+
         with patch.object(
             qdrant_manager._embeddings, "embed_query",
             new_callable=AsyncMock, return_value=_fake_vector(),
         ):
-            qdrant_manager._client.search = AsyncMock(return_value=[fake_hit])
+            qdrant_manager._client.query_points = AsyncMock(return_value=fake_result)
             results = await qdrant_manager.search("test query", limit=5)
 
         assert len(results) == 1
@@ -269,16 +272,19 @@ class TestQdrantManager:
         fake_hit.payload = {"content": "filtered", "source": "s", "source_category": "cat", "metadata": {}}
         fake_hit.score = 0.8
 
+        fake_result = MagicMock()
+        fake_result.points = [fake_hit]
+
         with patch.object(
             qdrant_manager._embeddings, "embed_query",
             new_callable=AsyncMock, return_value=_fake_vector(),
         ):
-            qdrant_manager._client.search = AsyncMock(return_value=[fake_hit])
+            qdrant_manager._client.query_points = AsyncMock(return_value=fake_result)
             results = await qdrant_manager.hybrid_search("query", source_category="cat")
 
         assert len(results) == 1
-        qdrant_manager._client.search.assert_awaited_once()
-        call_kwargs = qdrant_manager._client.search.call_args
+        qdrant_manager._client.query_points.assert_awaited_once()
+        call_kwargs = qdrant_manager._client.query_points.call_args
         assert call_kwargs.kwargs.get("query_filter") is not None
 
 
@@ -374,6 +380,7 @@ class TestUnifiedRetriever:
     @pytest.mark.asyncio
     async def test_search_returns_empty_for_no_results(self, retriever):
         retriever._qdrant.hybrid_search = AsyncMock(return_value=[])
+        retriever._ranker.rerank.return_value = []
         results = await retriever.search("nothing", sources=["qdrant"], limit=5)
         assert results == []
 
@@ -406,6 +413,7 @@ class TestUnifiedRetriever:
     @pytest.mark.asyncio
     async def test_search_handles_backend_failure(self, retriever):
         retriever._qdrant.hybrid_search = AsyncMock(side_effect=RuntimeError("boom"))
+        retriever._ranker.rerank.return_value = []
         results = await retriever.search("test", sources=["qdrant"], limit=5)
         assert results == []
 

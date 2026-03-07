@@ -462,7 +462,7 @@ class TestCLI:
         assert "draft" in result.output
         assert "learn" in result.output
 
-    @patch("ira.interfaces.cli._build_pipeline")
+    @patch("ira.interfaces.cli._build_pipeline", new_callable=AsyncMock)
     @patch("ira.interfaces.cli._build_pantheon")
     def test_ask_invokes_pantheon(self, mock_build, mock_build_pipeline, runner, cli_app):
         mock_pantheon = MagicMock()
@@ -471,11 +471,12 @@ class TestCLI:
         mock_pantheon.stop = AsyncMock()
         mock_pantheon.__aenter__ = AsyncMock(return_value=mock_pantheon)
         mock_pantheon.__aexit__ = AsyncMock(return_value=False)
-        mock_build.return_value = mock_pantheon
+        mock_build.return_value = (mock_pantheon, {})
 
         mock_pipeline = MagicMock()
-        mock_pipeline.process_request = AsyncMock(return_value="Test response from Ira")
-        mock_build_pipeline.return_value = mock_pipeline
+        mock_pipeline.process_request = AsyncMock(return_value=("Test response from Ira", ["athena"]))
+        mock_feedback = MagicMock()
+        mock_build_pipeline.return_value = (mock_pipeline, mock_feedback)
 
         result = runner.invoke(cli_app, ["ask", "What machines do we sell?"])
         assert result.exit_code == 0
@@ -490,7 +491,7 @@ class TestCLI:
 
         mock_pantheon = MagicMock()
         mock_pantheon.agents = {"clio": mock_agent}
-        mock_build.return_value = mock_pantheon
+        mock_build.return_value = (mock_pantheon, {})
 
         result = runner.invoke(cli_app, ["agents"])
         assert result.exit_code == 0
@@ -508,7 +509,7 @@ class TestCLI:
         mock_pantheon.stop = AsyncMock()
         mock_pantheon.__aenter__ = AsyncMock(return_value=mock_pantheon)
         mock_pantheon.__aexit__ = AsyncMock(return_value=False)
-        mock_build.return_value = mock_pantheon
+        mock_build.return_value = (mock_pantheon, {})
 
         result = runner.invoke(cli_app, [
             "email", "draft",
@@ -795,7 +796,7 @@ class TestServerEndpoints:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/api/query", json={"query": "hello"})
 
-        assert resp.status_code == 500
+        assert resp.status_code == 503
 
     async def test_query_with_user_id_records_context(self, server_app, mock_pantheon):
         from ira.context import UnifiedContextManager
@@ -830,6 +831,78 @@ class TestServerEndpoints:
 
         assert resp.status_code == 200
         assert uctx.all_users() == []
+
+    async def test_post_feedback_negative(self, server_app):
+        app, services = server_app
+        handler = AsyncMock()
+        handler.process_feedback = AsyncMock(return_value={
+            "polarity": "negative",
+            "confidence": 0.9,
+            "extracted_correction": "The deal is $175k",
+            "correction_id": 42,
+            "micro_learning_triggered": True,
+        })
+        services["feedback_handler"] = handler
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/feedback", json={
+                "correction": "The Acme Corp deal is actually $175k, not $150k.",
+                "previous_query": "What are the top deals?",
+                "previous_response": "Acme Corp ($150k)...",
+                "user_id": "rushabh_doshi",
+                "severity": "HIGH",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "processed"
+        assert data["polarity"] == "negative"
+        assert data["correction_id"] == 42
+        assert data["micro_learning_triggered"] is True
+
+        handler.process_feedback.assert_awaited_once_with(
+            message="The Acme Corp deal is actually $175k, not $150k.",
+            previous_query="What are the top deals?",
+            previous_response="Acme Corp ($150k)...",
+            agents_used=[],
+            user_id="rushabh_doshi",
+        )
+
+    async def test_post_feedback_positive(self, server_app):
+        app, services = server_app
+        handler = AsyncMock()
+        handler.process_feedback = AsyncMock(return_value={
+            "polarity": "positive",
+            "confidence": 0.8,
+            "extracted_correction": None,
+        })
+        services["feedback_handler"] = handler
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/feedback", json={
+                "correction": "Thanks, that's perfect!",
+                "previous_query": "What's the pipeline status?",
+                "previous_response": "Your pipeline has 5 deals...",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "processed"
+        assert data["polarity"] == "positive"
+        assert data["correction_id"] is None
+        assert data["micro_learning_triggered"] is False
+
+    async def test_post_feedback_returns_503_when_handler_missing(self, server_app):
+        app, services = server_app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/feedback", json={
+                "correction": "Wrong answer",
+                "previous_query": "test",
+                "previous_response": "test",
+            })
+
+        assert resp.status_code == 503
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1280,8 +1353,9 @@ class TestRequestPipeline:
         )
 
     async def test_returns_shaped_response(self, pipeline):
-        result = await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
+        result, agents = await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
         assert result == "Shaped response for channel"
+        assert isinstance(agents, list)
 
     async def test_step1_perceive_called(self, pipeline, mock_sensory):
         await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
@@ -1316,10 +1390,10 @@ class TestRequestPipeline:
 
         mock_pantheon.get_agent = MagicMock(side_effect=_get_agent)
 
-        await pipeline.process_request("Show pipeline", "CLI", "user1")
+        result, agents = await pipeline.process_request("Show pipeline", "CLI", "user1")
 
-        mock_pantheon.process.assert_not_awaited()
         prometheus.handle.assert_awaited_once()
+        assert "prometheus" in agents
 
     async def test_step9_shape_uses_channel(self, pipeline, mock_voice):
         await pipeline.process_request("Hello", "EMAIL", "user@test.com")
@@ -1334,10 +1408,11 @@ class TestRequestPipeline:
         assert calls[1].args[2] == "assistant"
 
     async def test_full_pipeline_all_steps_execute(self, full_pipeline):
-        result = await full_pipeline.process_request(
+        result, agents = await full_pipeline.process_request(
             "What is the price of PF1-C?", "TELEGRAM", "alice_tg",
         )
         assert result == "Shaped response for channel"
+        assert isinstance(agents, list)
 
         full_pipeline._sensory.perceive.assert_awaited_once()
         full_pipeline._conversation.get_history.assert_awaited_once()
@@ -1404,5 +1479,6 @@ class TestRequestPipeline:
             pantheon=pantheon,
             voice=voice,
         )
-        result = await pipe.process_request("Hello", "CLI", "bob")
+        result, agents = await pipe.process_request("Hello", "CLI", "bob")
         assert result == "Shaped minimal"
+        assert isinstance(agents, list)

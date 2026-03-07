@@ -489,174 +489,39 @@ class TestQuoteManager:
 # ═════════════════════════════════════════════════════════════════════════════
 # 5. AutonomousDripEngine
 # ═════════════════════════════════════════════════════════════════════════════
+# Full drip engine tests are in tests/test_drip_engine.py.
+# Below are integration-level smoke tests for the CRM ↔ DripEngine wiring.
 
 
 class TestDripEngine:
 
     @pytest.mark.asyncio
-    async def test_create_campaign_selects_matching_contacts(self, crm_db, drip_engine):
-        engine, mock_bus, mock_gmail = drip_engine
-
-        eu_co = await _make_company(crm_db, name="EU-Firm", region="EU")
-        mena_co = await _make_company(crm_db, name="MENA-Firm", region="MENA")
-
-        await _make_contact(crm_db, name="EU-A", company_id=str(eu_co.id))
-        await _make_contact(crm_db, name="EU-B", company_id=str(eu_co.id))
-        await _make_contact(crm_db, name="MENA-A", company_id=str(mena_co.id))
-
-        campaign = await engine.create_campaign(
-            name="EU Test",
-            target_segment={"region": "EU"},
-            steps=[{"step_number": 1, "delay_days": 0}],
-        )
-
-        steps = await crm_db.list_drip_steps(
-            filters={"campaign_id": str(campaign.id)}
-        )
-        contact_ids = {s.contact_id for s in steps}
-        assert len(contact_ids) == 2
-
-    @pytest.mark.asyncio
-    async def test_create_campaign_creates_steps_per_contact(self, crm_db, drip_engine):
+    async def test_evaluate_campaigns_returns_stats(self, crm_db, drip_engine):
         engine, _, _ = drip_engine
 
-        co = await _make_company(crm_db, name="StepCo", region="EU")
-        await _make_contact(crm_db, name="C1", company_id=str(co.id))
-        await _make_contact(crm_db, name="C2", company_id=str(co.id))
-
-        campaign = await engine.create_campaign(
-            name="Multi-step",
-            target_segment={"region": "EU"},
-            steps=[
-                {"step_number": 1, "delay_days": 0},
-                {"step_number": 2, "delay_days": 5},
-                {"step_number": 3, "delay_days": 10},
-            ],
+        await crm_db.create_campaign(
+            name="Test Campaign", target_segment={}, status=CampaignStatus.ACTIVE,
         )
 
-        steps = await crm_db.list_drip_steps(
-            filters={"campaign_id": str(campaign.id)}
-        )
-        assert len(steps) == 6  # 2 contacts x 3 steps
+        result = await engine.evaluate_campaigns()
+        assert result["campaigns"] >= 1
+        assert result["active"] >= 1
 
     @pytest.mark.asyncio
-    async def test_create_campaign_schedules_steps(self, crm_db, drip_engine):
+    async def test_run_cycle_returns_all_sections(self, crm_db, drip_engine):
         engine, _, _ = drip_engine
 
-        co = await _make_company(crm_db, name="SchedCo", region="EU")
-        await _make_contact(crm_db, name="Sched-C", company_id=str(co.id))
-
-        campaign = await engine.create_campaign(
-            name="Scheduled",
-            target_segment={"region": "EU"},
-            steps=[
-                {"step_number": 1, "delay_days": 0},
-                {"step_number": 2, "delay_days": 7},
-            ],
-        )
-
-        steps = await crm_db.list_drip_steps(
-            filters={"campaign_id": str(campaign.id)}
-        )
-        steps_sorted = sorted(steps, key=lambda s: s.step_number)
-
-        assert steps_sorted[0].scheduled_at is not None
-        assert steps_sorted[1].scheduled_at is not None
-
-        delta = steps_sorted[1].scheduled_at - steps_sorted[0].scheduled_at
-        assert abs(delta.days - 7) <= 1
+        result = await engine.run_cycle()
+        assert "evaluation" in result
+        assert "sends" in result
+        assert "replies" in result
 
     @pytest.mark.asyncio
-    async def test_run_campaign_cycle_sends_due_steps(self, crm_db, drip_engine):
-        engine, mock_bus, mock_gmail = drip_engine
+    async def test_send_pending_with_no_campaigns(self, crm_db, drip_engine):
+        engine, _, mock_gmail = drip_engine
 
-        co = await _make_company(crm_db, name="SendCo", region="EU")
-        contact = await _make_contact(
-            crm_db, name="Send-C", email="send@test.com", company_id=str(co.id)
-        )
-
-        campaign = await crm_db.create_campaign(
-            name="Send Test", target_segment={}, status=CampaignStatus.ACTIVE
-        )
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
-        await crm_db.create_drip_step(
-            campaign_id=str(campaign.id),
-            contact_id=str(contact.id),
-            step_number=1,
-            email_subject="Intro",
-            email_body="Hello!",
-            scheduled_at=past,
-        )
-
-        sent_count = await engine.run_campaign_cycle()
-
-        assert sent_count >= 1
-        mock_bus.send.assert_called()
-        msg = mock_bus.send.call_args[0][0]
-        assert msg.to_agent == "hermes"
-
-        mock_gmail.create_draft.assert_called()
-        call_kwargs = mock_gmail.create_draft.call_args
-        assert call_kwargs[1]["to"] == "send@test.com" or call_kwargs[0][0] == "send@test.com"
-
-        interactions = await crm_db.list_interactions(
-            filters={"contact_id": str(contact.id)}
-        )
-        assert len(interactions) >= 1
-
-    @pytest.mark.asyncio
-    async def test_run_campaign_cycle_skips_future_steps(self, crm_db, drip_engine):
-        engine, mock_bus, mock_gmail = drip_engine
-
-        co = await _make_company(crm_db, name="FutureCo", region="EU")
-        contact = await _make_contact(crm_db, name="Future-C", company_id=str(co.id))
-
-        campaign = await crm_db.create_campaign(
-            name="Future Test", target_segment={}, status=CampaignStatus.ACTIVE
-        )
-        future = datetime.now(timezone.utc) + timedelta(days=7)
-        await crm_db.create_drip_step(
-            campaign_id=str(campaign.id),
-            contact_id=str(contact.id),
-            step_number=1,
-            scheduled_at=future,
-        )
-
-        sent_count = await engine.run_campaign_cycle()
-
-        assert sent_count == 0
-        mock_gmail.create_draft.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_run_campaign_cycle_checks_replies(self, crm_db, drip_engine):
-        engine, mock_bus, mock_gmail = drip_engine
-
-        co = await _make_company(crm_db, name="ReplyCo", region="EU")
-        contact = await _make_contact(crm_db, name="Reply-C", company_id=str(co.id))
-
-        campaign = await crm_db.create_campaign(
-            name="Reply Test", target_segment={}, status=CampaignStatus.ACTIVE
-        )
-        past = datetime.now(timezone.utc) - timedelta(days=2)
-        step = await crm_db.create_drip_step(
-            campaign_id=str(campaign.id),
-            contact_id=str(contact.id),
-            step_number=1,
-            email_subject="Hello",
-            sent_at=past,
-            scheduled_at=past,
-        )
-
-        mock_gmail.check_replies = AsyncMock(
-            return_value=[{"body": "Yes, I'm interested!", "from": contact.email}]
-        )
-
-        await engine.run_campaign_cycle()
-
-        updated_step = await crm_db.get_drip_step(step.id)
-        assert updated_step is not None
-        assert updated_step.reply_received is True
-        assert updated_step.reply_content == "Yes, I'm interested!"
+        result = await engine.send_pending_steps()
+        assert result["sent"] == 0
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -344,53 +344,47 @@ class TestEndocrineSystem:
         return EndocrineSystem()
 
     def test_initial_levels_at_baseline(self, endocrine):
-        levels = endocrine.get_levels()
-        assert levels["confidence"] == pytest.approx(0.5)
-        assert levels["energy"] == pytest.approx(0.7)
-        assert levels["growth_signal"] == pytest.approx(0.3)
-        assert levels["stress"] == pytest.approx(0.2)
+        status = endocrine.get_status()
+        assert status["confidence"] == pytest.approx(0.5)
+        assert status["energy"] == pytest.approx(0.5)
+        assert status["growth_signal"] == pytest.approx(0.5)
+        assert status["stress"] == pytest.approx(0.5)
+        assert status["caution"] == pytest.approx(0.5)
 
     def test_boost_increases_level(self, endocrine):
         endocrine.boost("confidence", 0.2)
-        assert endocrine.get_levels()["confidence"] == pytest.approx(0.7)
+        assert endocrine.get_status()["confidence"] == pytest.approx(0.7)
 
     def test_boost_caps_at_one(self, endocrine):
         endocrine.boost("confidence", 0.9)
-        assert endocrine.get_levels()["confidence"] == pytest.approx(1.0)
+        assert endocrine.get_status()["confidence"] == pytest.approx(1.0)
 
-    def test_reduce_floors_at_zero(self, endocrine):
-        endocrine.reduce("stress", 0.5)
-        assert endocrine.get_levels()["stress"] == pytest.approx(0.0)
+    def test_dampen_floors_at_zero(self, endocrine):
+        endocrine.dampen("stress", 0.9)
+        assert endocrine.get_status()["stress"] == pytest.approx(0.0)
 
-    def test_decay_moves_toward_baseline(self, endocrine):
-        endocrine.boost("confidence", 0.5)  # -> 1.0
-        assert endocrine.get_levels()["confidence"] == pytest.approx(1.0)
-
-        endocrine.decay_all(factor=0.5)
-        # Moves 50% toward baseline (0.5): 1.0 + (0.5 - 1.0) * 0.5 = 0.75
-        assert endocrine.get_levels()["confidence"] == pytest.approx(0.75)
-
-        endocrine.decay_all(factor=0.5)
-        # 0.75 + (0.5 - 0.75) * 0.5 = 0.625
-        assert endocrine.get_levels()["confidence"] == pytest.approx(0.625)
+    def test_signal_success_adjusts_levels(self, endocrine):
+        endocrine.signal_success("clio")
+        status = endocrine.get_status()
+        assert status["confidence"] > 0.5
+        assert status["energy"] > 0.5
+        assert status["stress"] < 0.5
 
     def test_behavioral_modifiers_high_confidence(self, endocrine):
         endocrine.boost("confidence", 0.3)  # -> 0.8
-        endocrine.reduce("stress", 0.1)     # -> 0.1
+        endocrine.dampen("stress", 0.1)
         mods = endocrine.get_behavioral_modifiers()
-        assert mods["response_style"] == "assertive"
-        assert mods["verbosity"] == "concise"
+        assert mods["assertiveness"] == "high"
 
     def test_behavioral_modifiers_low_confidence_high_stress(self, endocrine):
-        endocrine.reduce("confidence", 0.3)  # -> 0.2
-        endocrine.boost("stress", 0.6)       # -> 0.8
+        endocrine.dampen("confidence", 0.3)  # -> 0.2
+        endocrine.boost("stress", 0.3)       # -> 0.8
         mods = endocrine.get_behavioral_modifiers()
-        assert mods["response_style"] == "cautious"
-        assert mods["verbosity"] == "detailed"
+        assert mods["assertiveness"] == "low"
 
-    def test_boost_invalid_hormone_raises(self, endocrine):
-        with pytest.raises(ValueError, match="Unknown hormone"):
-            endocrine.boost("invalid_name", 0.1)
+    def test_boost_unknown_hormone_is_noop(self, endocrine):
+        endocrine.boost("invalid_name", 0.1)
+        assert "invalid_name" not in endocrine.get_status()
 
 
 # ═════════════════════════════════════════════════════════════════════════
