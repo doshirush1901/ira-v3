@@ -78,6 +78,12 @@ class Prometheus(BaseAgent):
                 parameters={"days": "Inactivity threshold in days (default 14)"},
                 handler=self._tool_get_stale_leads,
             ))
+            self.register_tool(AgentTool(
+                name="get_warm_contacts",
+                description="List all WARM and TRUSTED contacts from the CRM — these are high-value relationships.",
+                parameters={"limit": "Max contacts to return (default 20)"},
+                handler=self._tool_get_warm_contacts,
+            ))
 
         if self._quotes:
             self.register_tool(AgentTool(
@@ -98,10 +104,21 @@ class Prometheus(BaseAgent):
     # ── tool handlers ─────────────────────────────────────────────────────
 
     async def _tool_search_sales_knowledge(self, query: str) -> str:
-        results = await self.search_domain_knowledge(query, limit=10)
-        if not results:
+        """Search across sales categories AND the full KB for maximum coverage."""
+        domain_results = await self.search_domain_knowledge(query, limit=8)
+        general_results = await self.search_knowledge(query, limit=5)
+
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for r in domain_results + general_results:
+            key = r.get("content", "")[:100]
+            if key not in seen:
+                seen.add(key)
+                merged.append(r)
+
+        if not merged:
             return "No results found in sales knowledge base."
-        return self._format_context(results)
+        return self._format_context(merged[:12])
 
     async def _tool_search_contacts(self, query: str) -> str:
         results = await self._crm.search_contacts(query)
@@ -118,6 +135,24 @@ class Prometheus(BaseAgent):
     async def _tool_get_stale_leads(self, days: str = "14") -> str:
         leads = await self._crm.get_stale_leads(days=int(days))
         return json.dumps(leads, default=str) if leads else "No stale leads found."
+
+    async def _tool_get_warm_contacts(self, limit: str = "20") -> str:
+        from sqlalchemy import text
+        async with self._crm.session_factory() as session:
+            result = await session.execute(text(
+                "SELECT c.name, c.email, co.name as company, c.lead_score, "
+                "c.warmth_level, c.contact_type "
+                "FROM contacts c LEFT JOIN companies co ON c.company_id = co.id "
+                "WHERE c.warmth_level IN ('WARM', 'TRUSTED') "
+                "ORDER BY c.lead_score DESC LIMIT :lim"
+            ), {"lim": int(limit)})
+            rows = result.fetchall()
+        if not rows:
+            return "No warm/trusted contacts found."
+        lines = []
+        for r in rows:
+            lines.append(f"- {r[0]} ({r[1]}) | Company: {r[2] or '?'} | Score: {r[3]} | {r[4]} | {r[5]}")
+        return "\n".join(lines)
 
     async def _tool_get_quote_analytics(self) -> str:
         analytics = await self._quotes.get_quote_analytics()
