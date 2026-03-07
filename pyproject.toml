@@ -35,6 +35,7 @@ python-docx = "^1.2.0"
 python-pptx = "^1.0.2"
 mem0ai = ">=0.1"
 alembic = ">=1.13"
+redis = {version = ">=5.0", extras = ["hiredis"]}
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"

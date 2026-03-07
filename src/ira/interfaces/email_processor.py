@@ -342,6 +342,69 @@ class EmailProcessor:
         except (IraError, Exception):
             logger.exception("Failed to send Telegram draft notification")
 
+    # ── Email search ─────────────────────────────────────────────────────
+
+    async def search_emails(
+        self,
+        *,
+        from_address: str = "",
+        to_address: str = "",
+        subject: str = "",
+        query: str = "",
+        after: str = "",
+        before: str = "",
+        max_results: int = 10,
+    ) -> list[Email]:
+        """Search Gmail using native query syntax and return parsed Email models.
+
+        Parameters build a Gmail ``q`` string.  For example
+        ``from_address="jaap@dutch-tides.com"`` becomes ``from:jaap@dutch-tides.com``.
+        ``query`` is appended verbatim for free-form Gmail search operators.
+        ``after`` / ``before`` accept ``YYYY/MM/DD`` strings.
+        """
+        parts: list[str] = []
+        if from_address:
+            parts.append(f"from:{from_address}")
+        if to_address:
+            parts.append(f"to:{to_address}")
+        if subject:
+            parts.append(f"subject:{subject}")
+        if after:
+            parts.append(f"after:{after}")
+        if before:
+            parts.append(f"before:{before}")
+        if query:
+            parts.append(query)
+
+        q = " ".join(parts).strip()
+        if not q:
+            q = "in:anywhere"
+
+        service = await self._build_gmail_service()
+
+        def _search() -> list[dict[str, Any]]:
+            resp = (
+                service.users()
+                .messages()
+                .list(userId="me", q=q, maxResults=max_results)
+                .execute()
+            )
+            stubs = resp.get("messages", [])
+            results: list[dict[str, Any]] = []
+            for stub in stubs:
+                msg = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=stub["id"], format="full")
+                    .execute()
+                )
+                results.append(msg)
+            return results
+
+        raw_messages = await asyncio.to_thread(_search)
+        logger.info("Gmail search q=%r returned %d results", q, len(raw_messages))
+        return [self._parse_message(m) for m in raw_messages]
+
     # ── Thread retrieval ──────────────────────────────────────────────────
 
     async def get_thread(self, thread_id: str) -> list[Email]:

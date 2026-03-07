@@ -3,7 +3,8 @@
 **No agent should query Qdrant or Neo4j directly.**  Every knowledge lookup
 flows through :class:`UnifiedRetriever`, which fans out across the vector
 store, the knowledge graph, and (optionally) Mem0 conversational memory,
-then merges and reranks the results with FlashRank before returning them.
+then merges and reranks the results with Voyage AI Rerank (with FlashRank
+as a local fallback) before returning them.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 
+_VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+
 
 class UnifiedRetriever:
     """Single entry-point for all knowledge retrieval in Ira."""
@@ -41,11 +44,13 @@ class UnifiedRetriever:
         self._qdrant = qdrant
         self._graph = graph
         self._mem0 = mem0_client
-        self._ranker = Ranker(model_name=reranker_model)
+        self._flashrank = Ranker(model_name=reranker_model)
 
         settings = get_settings()
         self._openai_key = settings.llm.openai_api_key.get_secret_value()
         self._openai_model = settings.llm.openai_model
+        self._voyage_key = settings.embedding.api_key.get_secret_value()
+        self._voyage_rerank_model = settings.embedding.rerank_model
 
     # ── primary search ───────────────────────────────────────────────────
 
@@ -341,13 +346,75 @@ class UnifiedRetriever:
         if not results:
             return []
 
+        if self._voyage_key:
+            try:
+                return await self._voyage_rerank(query, results, limit)
+            except (IraError, Exception):
+                logger.warning(
+                    "Voyage rerank failed — falling back to FlashRank",
+                    exc_info=True,
+                )
+
+        return await self._flashrank_rerank(query, results, limit)
+
+    async def _voyage_rerank(
+        self,
+        query: str,
+        results: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Rerank via the Voyage AI Rerank API."""
+        documents = [r.get("content", "") for r in results]
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                _VOYAGE_RERANK_URL,
+                json={
+                    "query": query,
+                    "documents": documents,
+                    "model": self._voyage_rerank_model,
+                    "top_k": limit,
+                },
+                headers={
+                    "Authorization": f"Bearer {self._voyage_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+
+        data = resp.json()
+        ranked_items = data.get("data", [])
+
+        output: list[dict[str, Any]] = []
+        for item in ranked_items:
+            idx = item["index"]
+            original = results[idx]
+            output.append(
+                {
+                    "content": original.get("content", ""),
+                    "score": item.get("relevance_score", 0.0),
+                    "source": original.get("source", ""),
+                    "source_type": original.get("source_type", ""),
+                    "metadata": original.get("metadata", {}),
+                }
+            )
+
+        return await self._apply_learned_corrections(output)
+
+    async def _flashrank_rerank(
+        self,
+        query: str,
+        results: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Local FlashRank fallback reranker."""
         passages = [
             {"id": i, "text": r.get("content", ""), "meta": r}
             for i, r in enumerate(results)
         ]
 
         try:
-            reranked = self._ranker.rerank(
+            reranked = self._flashrank.rerank(
                 RerankRequest(query=query, passages=passages)
             )
         except (IraError, Exception):

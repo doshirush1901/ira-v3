@@ -76,11 +76,57 @@ def _file_hash(path: Path) -> str:
 # ── file readers ─────────────────────────────────────────────────────────────
 
 
+_MIN_USEFUL_CHARS = 50
+
+
 def read_pdf(path: Path) -> str:
+    text = _read_pdf_pypdf(path)
+    if len(text.strip()) >= _MIN_USEFUL_CHARS:
+        return text
+    ocr_text = _read_pdf_document_ai(path)
+    if ocr_text:
+        return ocr_text
+    return text
+
+
+def _read_pdf_pypdf(path: Path) -> str:
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
     return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _read_pdf_document_ai(path: Path) -> str:
+    """OCR fallback via Document AI for scanned/image-heavy PDFs."""
+    try:
+        from ira.systems.document_ai import DocumentAIService
+        from ira.config import get_settings
+
+        settings = get_settings()
+        if not settings.document_ai.processor_id:
+            return ""
+
+        import asyncio
+
+        svc = DocumentAIService()
+
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        if loop and loop.is_running():
+            return ""
+
+        async def _ocr() -> str:
+            await svc.connect()
+            return await svc.extract_text(path.read_bytes())
+
+        return asyncio.run(_ocr())
+    except Exception:
+        logger.warning("Document AI OCR fallback failed for %s", path, exc_info=True)
+        return ""
 
 
 def read_xlsx(path: Path) -> str:
@@ -302,6 +348,12 @@ class DocumentIngestor:
             return 0
 
         text = await asyncio.to_thread(reader, path)
+
+        if ext == ".pdf" and len(text.strip()) < _MIN_USEFUL_CHARS:
+            ocr_text = await self._ocr_fallback(path)
+            if ocr_text:
+                text = ocr_text
+
         if not text.strip():
             logger.warning("Empty content after reading: %s", path)
             return 0
@@ -375,6 +427,80 @@ class DocumentIngestor:
             "errors": errors,
         }
         logger.info("Ingestion complete: %s", summary)
+        return summary
+
+    # ── Document AI OCR fallback ─────────────────────────────────────────
+
+    async def _ocr_fallback(self, path: Path) -> str:
+        """Try Document AI OCR when pypdf yields insufficient text."""
+        try:
+            from ira.systems.document_ai import DocumentAIService
+
+            svc = DocumentAIService()
+            await svc.connect()
+            if not svc.available:
+                return ""
+            text = await svc.extract_text(path.read_bytes())
+            if text.strip():
+                logger.info("Document AI OCR recovered text for %s (%d chars)", path, len(text))
+            return text
+        except Exception:
+            logger.warning("Document AI OCR fallback failed for %s", path, exc_info=True)
+            return ""
+
+    async def reingest_scanned_pdfs(
+        self,
+        base_path: str = "data/imports",
+        *,
+        min_file_size: int = 5 * 1024 * 1024,
+    ) -> dict[str, Any]:
+        """Re-ingest PDFs that are likely scanned (large files with poor text).
+
+        Finds PDFs over *min_file_size* bytes, checks if pypdf yields little
+        text, and re-ingests them with Document AI OCR.
+        """
+        files = self.discover_files(base_path)
+        candidates = [
+            f for f in files
+            if f["extension"] == ".pdf" and f["size"] >= min_file_size
+        ]
+        logger.info(
+            "Found %d PDF candidates for OCR re-ingestion (>%d bytes)",
+            len(candidates), min_file_size,
+        )
+
+        reingested = 0
+        skipped = 0
+        errors: list[dict[str, str]] = []
+
+        for file_info in candidates:
+            path = Path(file_info["path"])
+            try:
+                pypdf_text = await asyncio.to_thread(_read_pdf_pypdf, path)
+                if len(pypdf_text.strip()) >= _MIN_USEFUL_CHARS:
+                    skipped += 1
+                    continue
+
+                ocr_text = await self._ocr_fallback(path)
+                if not ocr_text.strip():
+                    skipped += 1
+                    continue
+
+                n = await self.ingest_file(file_info, force=True)
+                if n > 0:
+                    reingested += 1
+                    logger.info("Re-ingested scanned PDF: %s -> %d chunks", path, n)
+            except Exception as exc:
+                logger.exception("Failed to re-ingest %s", path)
+                errors.append({"path": str(path), "error": str(exc)})
+
+        summary = {
+            "candidates": len(candidates),
+            "reingested": reingested,
+            "skipped": skipped,
+            "errors": errors,
+        }
+        logger.info("Scanned PDF re-ingestion complete: %s", summary)
         return summary
 
     # ── entity extraction ─────────────────────────────────────────────────

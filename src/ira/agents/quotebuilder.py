@@ -94,6 +94,12 @@ class Quotebuilder(BaseAgent):
             handler=self._tool_search_past_quotes,
         ))
         self.register_tool(AgentTool(
+            name="export_quote_pdf",
+            description="Convert a markdown quote to a professional PDF document.",
+            parameters={"markdown_quote": "The full markdown quote text to convert to PDF"},
+            handler=self._tool_export_quote_pdf,
+        ))
+        self.register_tool(AgentTool(
             name="ask_plutus",
             description="Delegate a financial or pricing question to Plutus, the CFO agent.",
             parameters={"query": "Question for Plutus"},
@@ -132,6 +138,9 @@ class Quotebuilder(BaseAgent):
             f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
             for r in results
         )
+
+    async def _tool_export_quote_pdf(self, markdown_quote: str) -> str:
+        return await self.export_quote_pdf(markdown_quote)
 
     async def _tool_ask_plutus(self, query: str) -> str:
         pantheon = self._services.get(SK.PANTHEON)
@@ -265,6 +274,90 @@ class Quotebuilder(BaseAgent):
             quote_id, customer, len(machines),
         )
         return result
+
+    # ── PDF export ─────────────────────────────────────────────────────────
+
+    async def export_quote_pdf(self, markdown_quote: str) -> str:
+        """Convert a markdown quote to PDF via PDF.co and return a status message."""
+        pdfco = self._services.get(SK.PDFCO)
+        if not pdfco or not pdfco.available:
+            return "PDF export unavailable — PDF.co service not configured."
+
+        html = self._markdown_to_html(markdown_quote)
+
+        try:
+            pdf_bytes = await pdfco.html_to_pdf(
+                html,
+                name="machinecraft_quote.pdf",
+                paper_size="A4",
+                margins="15mm",
+            )
+        except Exception as exc:
+            logger.warning("PDF export failed: %s", exc)
+            return f"PDF export failed: {exc}"
+
+        output_dir = Path("data/quotes")
+        await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
+
+        quote_id = "quote"
+        for line in markdown_quote.split("\n")[:10]:
+            if "MT20" in line:
+                for word in line.split():
+                    if word.startswith("MT20"):
+                        quote_id = word.strip("*#: ")
+                        break
+
+        filename = f"{quote_id}.pdf"
+        output_path = output_dir / filename
+        await asyncio.to_thread(output_path.write_bytes, pdf_bytes)
+
+        logger.info("Quote PDF exported: %s (%d bytes)", output_path, len(pdf_bytes))
+        return f"PDF exported: {output_path} ({len(pdf_bytes):,} bytes)"
+
+    @staticmethod
+    def _markdown_to_html(md: str) -> str:
+        """Convert markdown to styled HTML for PDF generation."""
+        import re as _re
+
+        html = md
+        html = _re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=_re.MULTILINE)
+        html = _re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=_re.MULTILINE)
+        html = _re.sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=_re.MULTILINE)
+        html = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
+        html = _re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
+        html = _re.sub(r'^\- (.+)$', r'<li>\1</li>', html, flags=_re.MULTILINE)
+        html = _re.sub(r'((?:<li>.*</li>\n?)+)', r'<ul>\1</ul>', html)
+
+        paragraphs = []
+        for block in html.split('\n\n'):
+            block = block.strip()
+            if not block:
+                continue
+            if block.startswith('<'):
+                paragraphs.append(block)
+            else:
+                paragraphs.append(f'<p>{block}</p>')
+
+        body = '\n'.join(paragraphs)
+        return (
+            '<!DOCTYPE html><html><head><meta charset="utf-8">'
+            '<style>'
+            'body { font-family: Arial, Helvetica, sans-serif; margin: 40px; '
+            'color: #333; line-height: 1.6; }'
+            'h1 { color: #1a237e; border-bottom: 2px solid #1a237e; padding-bottom: 8px; }'
+            'h2 { color: #283593; margin-top: 24px; }'
+            'h3 { color: #3949ab; }'
+            'table { border-collapse: collapse; width: 100%; margin: 16px 0; }'
+            'th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }'
+            'th { background: #e8eaf6; }'
+            '.footer { margin-top: 40px; font-size: 0.85em; color: #666; '
+            'border-top: 1px solid #ccc; padding-top: 12px; }'
+            '</style></head><body>'
+            f'{body}'
+            '<div class="footer">Machinecraft Technologies Pvt. Ltd. | '
+            'www.machinecraft.in</div>'
+            '</body></html>'
+        )
 
     # ── BaseAgent interface ───────────────────────────────────────────────
 

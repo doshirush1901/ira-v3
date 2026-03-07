@@ -86,7 +86,7 @@ class AutonomousDripEngine:
                     if self._gmail is not None:
                         try:
                             await self._gmail.send_draft(
-                                to=str(step.lead_id),
+                                to=str(step.contact_id),
                                 subject=step.email_subject,
                                 body=step.email_body,
                             )
@@ -122,7 +122,7 @@ class AutonomousDripEngine:
                 for step in sent_unreplied:
                     try:
                         has_reply = await self._gmail.check_reply(
-                            to=str(step.lead_id),
+                            to=str(step.contact_id),
                             subject=step.email_subject,
                         )
                         if has_reply:

@@ -35,6 +35,15 @@ services:
     networks:
       - ira-network
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - ira-network
+
 networks:
   ira-network:
     driver: bridge

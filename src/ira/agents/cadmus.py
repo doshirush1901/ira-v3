@@ -86,6 +86,18 @@ class Cadmus(BaseAgent):
         return await self.draft_linkedin_post(case_study_text)
 
     async def _tool_check_nda_compliance(self, text: str) -> str:
+        dlp_report: dict[str, Any] = {}
+        redacted_text = text
+
+        dlp = self._services.get(SK.DLP)
+        if dlp and dlp.available:
+            try:
+                dlp_report = await dlp.inspect_and_report(text[:10000])
+                if dlp_report.get("has_pii"):
+                    redacted_text = await dlp.deidentify_text(text[:10000])
+            except Exception:
+                logger.warning("DLP check failed, falling back to LLM-only", exc_info=True)
+
         prompt = (
             "Analyse the following text for NDA-sensitive information.\n"
             "Identify:\n"
@@ -93,14 +105,29 @@ class Cadmus(BaseAgent):
             "2. Deal values, contract amounts, or pricing details\n"
             "3. Proprietary technical specifications\n"
             "4. Confidential project timelines or internal processes\n\n"
+        )
+        if dlp_report.get("has_pii"):
+            pii_summary = ", ".join(
+                f"{k} ({v})" for k, v in dlp_report.get("findings_by_type", {}).items()
+            )
+            prompt += (
+                f"NOTE: Automated PII scan found: {pii_summary}. "
+                "A pre-redacted version is provided below. Verify the redaction "
+                "is complete and check for domain-specific NDA issues.\n\n"
+            )
+
+        prompt += (
             "Return a JSON object with keys: 'is_safe' (bool), 'issues' (list of strings), "
-            "'redacted_version' (the text with sensitive items replaced by generic descriptors).\n\n"
-            f"TEXT:\n{text[:6000]}"
+            "'redacted_version' (the text with sensitive items replaced by generic descriptors), "
+            "'pii_detected' (dict of PII types found by automated scan, or empty dict).\n\n"
+            f"TEXT:\n{redacted_text[:6000]}"
         )
         raw = await self.call_llm(_SYSTEM_PROMPT, prompt, temperature=0.1)
         try:
             parsed = self._parse_json_response(raw)
             if isinstance(parsed, dict):
+                if dlp_report:
+                    parsed["pii_detected"] = dlp_report.get("findings_by_type", {})
                 return json.dumps(parsed, default=str)
         except (json.JSONDecodeError, ValueError):
             pass

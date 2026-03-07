@@ -35,6 +35,12 @@ class ServiceKey:
     DREAM_MODE = "dream_mode"
     DRIP_ENGINE = "drip_engine"
     EMAIL_PROCESSOR = "email_processor"
+    MEM0_CLIENT = "mem0_client"
+    REDIS = "redis"
+    GOOGLE_DOCS = "google_docs"
+    DOCUMENT_AI = "document_ai"
+    PDFCO = "pdfco"
+    DLP = "dlp"
 
 
 ALL_SERVICE_KEYS = frozenset(

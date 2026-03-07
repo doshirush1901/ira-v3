@@ -53,6 +53,31 @@ class BoardMeetingRequest(BaseModel):
     participants: list[str] | None = None
 
 
+class FeedbackRequest(BaseModel):
+    correction: str
+    previous_query: str
+    previous_response: str
+    user_id: str | None = None
+    severity: str = "HIGH"
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    polarity: str
+    correction_id: int | None = None
+    micro_learning_triggered: bool = False
+
+
+class EmailSearchRequest(BaseModel):
+    from_address: str = ""
+    to_address: str = ""
+    subject: str = ""
+    query: str = ""
+    after: str = ""
+    before: str = ""
+    max_results: int = 10
+
+
 class EmailDraftRequest(BaseModel):
     to: str
     subject: str
@@ -91,6 +116,49 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     for handler in logging.root.handlers:
         handler.addFilter(RequestIdFilter())
+
+    # ── Redis ─────────────────────────────────────────────────────────
+    from ira.systems.redis_cache import RedisCache
+
+    redis_cache = RedisCache()
+    await redis_cache.connect()
+    _services[SK.REDIS] = redis_cache
+
+    # ── Google Docs / Drive ──────────────────────────────────────────
+    from ira.systems.google_docs import GoogleDocsService
+
+    google_docs = GoogleDocsService()
+    try:
+        await google_docs.connect()
+    except Exception:
+        logger.warning("Google Docs/Drive unavailable — continuing without it")
+    _services[SK.GOOGLE_DOCS] = google_docs
+
+    # ── Google Document AI ────────────────────────────────────────────
+    from ira.systems.document_ai import DocumentAIService
+
+    document_ai = DocumentAIService()
+    try:
+        await document_ai.connect()
+    except Exception:
+        logger.warning("Document AI unavailable — continuing without it")
+    _services[SK.DOCUMENT_AI] = document_ai
+
+    # ── PDF.co ────────────────────────────────────────────────────────
+    from ira.systems.pdfco import PdfCoService
+
+    pdfco = PdfCoService()
+    _services[SK.PDFCO] = pdfco
+
+    # ── Google DLP ────────────────────────────────────────────────────
+    from ira.systems.dlp import DlpService
+
+    dlp = DlpService()
+    try:
+        await dlp.connect()
+    except Exception:
+        logger.warning("DLP unavailable — continuing without it")
+    _services[SK.DLP] = dlp
 
     # ── Brain layer ───────────────────────────────────────────────────
     from ira.brain.document_ingestor import DocumentIngestor
@@ -167,6 +235,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.pantheon import Pantheon
 
     bus = MessageBus()
+    if redis_cache.available:
+        bus.set_redis(redis_cache)
     pantheon = Pantheon(retriever=retriever, bus=bus)
 
     shared_services = {
@@ -273,6 +343,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["procedural_memory"] = procedural_memory
     _services["learning_hub"] = learning_hub
 
+    # ── Feedback handler ─────────────────────────────────────────────
+    from ira.brain.correction_store import CorrectionStore
+    from ira.brain.feedback_handler import FeedbackHandler
+
+    correction_store = CorrectionStore()
+    await _safe_init("correction_store", correction_store.initialize())
+
+    feedback_handler = FeedbackHandler(
+        learning_hub=learning_hub,
+        correction_store=correction_store,
+        mem0_client=mem0_client,
+        procedural_memory=procedural_memory,
+    )
+    await feedback_handler.load_scores()
+
+    _services["feedback_handler"] = feedback_handler
+    _services["correction_store"] = correction_store
+
     nemesis = pantheon.get_agent("nemesis")
     if nemesis is not None:
         nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
@@ -319,6 +407,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         SK.LEARNING_HUB: learning_hub,
         SK.DATA_EVENT_BUS: data_event_bus,
         SK.PANTHEON: pantheon,
+        SK.REDIS: redis_cache,
+        SK.GOOGLE_DOCS: google_docs,
+        SK.DOCUMENT_AI: document_ai,
+        SK.PDFCO: pdfco,
+        SK.DLP: dlp,
     })
 
     # ── Unified context ───────────────────────────────────────────────
@@ -344,6 +437,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         crm=crm,
         musculoskeletal=musculoskeletal,
         unified_context=unified_context,
+        redis_cache=redis_cache,
     )
     _services["pipeline"] = request_pipeline
 
@@ -440,11 +534,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await respiratory.stop()
     await data_event_bus.stop()
     await pantheon.stop()
+    await redis_cache.close()
+    await google_docs.close()
+    await document_ai.close()
+    await dlp.close()
     await sensory.close()
     await musculoskeletal.close()
     await graph.close()
 
     for svc_name in (
+        "correction_store",
         "conversation", "episodic", "dream_mode", "emotional_intelligence",
         "relationship_memory", "goal_manager", "metacognition", "inner_voice",
         "procedural_memory",
@@ -558,6 +657,32 @@ async def query(req: QueryRequest) -> QueryResponse:
     return QueryResponse(response=response, agents_consulted=agents_consulted)
 
 
+@app.post("/api/feedback", response_model=FeedbackResponse)
+async def feedback(req: FeedbackRequest) -> FeedbackResponse:
+    """Process a user correction through the feedback pipeline.
+
+    Detects polarity, stores corrections, updates agent scores, and
+    triggers micro-learning when severity warrants it.
+    """
+    handler = _svc("feedback_handler")
+    user_id = req.user_id or "anonymous"
+
+    result = await handler.process_feedback(
+        message=req.correction,
+        previous_query=req.previous_query,
+        previous_response=req.previous_response,
+        agents_used=[],
+        user_id=user_id,
+    )
+
+    return FeedbackResponse(
+        status="processed",
+        polarity=result.get("polarity", "neutral"),
+        correction_id=result.get("correction_id"),
+        micro_learning_triggered=result.get("micro_learning_triggered", False),
+    )
+
+
 @app.get("/api/health")
 async def health_check() -> dict[str, Any]:
     """Run the immune system health check."""
@@ -580,6 +705,26 @@ async def deep_health_check() -> dict[str, Any]:
             checks["core"] = await immune.run_startup_validation()
         except (IraError, Exception) as exc:
             checks["core"] = {"status": "error", "detail": str(exc)}
+
+    redis_svc = _services.get(SK.REDIS)
+    if redis_svc is not None:
+        checks["redis"] = await redis_svc.health_check()
+
+    gdocs_svc = _services.get(SK.GOOGLE_DOCS)
+    if gdocs_svc is not None:
+        checks["google_docs"] = await gdocs_svc.health_check()
+
+    docai_svc = _services.get(SK.DOCUMENT_AI)
+    if docai_svc is not None:
+        checks["document_ai"] = await docai_svc.health_check()
+
+    pdfco_svc = _services.get(SK.PDFCO)
+    if pdfco_svc is not None:
+        checks["pdfco"] = await pdfco_svc.health_check()
+
+    dlp_svc = _services.get(SK.DLP)
+    if dlp_svc is not None:
+        checks["dlp"] = await dlp_svc.health_check()
 
     mem0_key = get_settings().memory.api_key.get_secret_value()
     if mem0_key:
@@ -665,6 +810,29 @@ async def ingest_file(file: UploadFile) -> dict[str, Any]:
     }
 
 
+class ReingestRequest(BaseModel):
+    min_file_size_mb: int = 5
+    base_path: str = "data/imports"
+
+
+@app.post("/api/reingest-scanned")
+async def reingest_scanned(req: ReingestRequest | None = None) -> dict[str, Any]:
+    """Re-ingest scanned PDFs through Document AI OCR.
+
+    Finds large PDFs where pypdf yielded poor text and re-processes
+    them with Document AI OCR for proper indexing.
+    """
+    ingestor = _svc("ingestor")
+    params = req or ReingestRequest()
+    min_bytes = params.min_file_size_mb * 1024 * 1024
+
+    summary = await ingestor.reingest_scanned_pdfs(
+        base_path=params.base_path,
+        min_file_size=min_bytes,
+    )
+    return summary
+
+
 @app.post("/api/board-meeting")
 async def board_meeting(req: BoardMeetingRequest) -> dict[str, Any]:
     """Run a board meeting and return the minutes."""
@@ -690,6 +858,58 @@ async def dream_report() -> dict[str, Any]:
         "gaps_identified": report.gaps_identified,
         "creative_connections": report.creative_connections,
         "campaign_insights": report.campaign_insights,
+    }
+
+
+@app.post("/api/email/search")
+async def email_search(req: EmailSearchRequest) -> dict[str, Any]:
+    """Search Gmail using native query filters (from, subject, date, etc.)."""
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    emails = await ep.search_emails(
+        from_address=req.from_address,
+        to_address=req.to_address,
+        subject=req.subject,
+        query=req.query,
+        after=req.after,
+        before=req.before,
+        max_results=req.max_results,
+    )
+    return {
+        "count": len(emails),
+        "emails": [
+            {
+                "id": e.id,
+                "thread_id": e.thread_id,
+                "from": e.from_address,
+                "to": e.to_address,
+                "subject": e.subject,
+                "date": e.received_at.isoformat(),
+                "body": e.body[:2000],
+            }
+            for e in emails
+        ],
+    }
+
+
+@app.get("/api/email/thread/{thread_id}")
+async def email_thread(thread_id: str) -> dict[str, Any]:
+    """Fetch a full email thread by its Gmail thread ID."""
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    emails = await ep.get_thread(thread_id)
+    return {
+        "thread_id": thread_id,
+        "message_count": len(emails),
+        "messages": [
+            {
+                "id": e.id,
+                "from": e.from_address,
+                "to": e.to_address,
+                "subject": e.subject,
+                "date": e.received_at.isoformat(),
+                "body": e.body,
+            }
+            for e in emails
+        ],
     }
 
 

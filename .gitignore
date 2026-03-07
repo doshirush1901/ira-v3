@@ -6,6 +6,7 @@ credentials.json
 credentials_rushabh.json
 client_secret_*.json
 token.json
+token_*.json
 Neo4j-*.txt
 *_api_key.txt
 *_api_key*.txt

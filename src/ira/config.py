@@ -32,6 +32,7 @@ class EmbeddingConfig(BaseSettings):
 
     api_key: SecretStr = SecretStr("")
     model: str = "voyage-3"
+    rerank_model: str = "rerank-2.5"
 
 
 class QdrantConfig(BaseSettings):
@@ -98,6 +99,28 @@ class SearchConfig(BaseSettings):
     serper_api_key: SecretStr = SecretStr("")
 
 
+class PdfCoConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="PDFCO_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
+
+
+class DocumentAIConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="DOCUMENT_AI_", **_COMMON)
+
+    project_id: str = Field(default="", validation_alias="GOOGLE_CLOUD_PROJECT_ID")
+    location: str = "us"
+    processor_id: str = ""
+    invoice_processor_id: str = ""
+    form_processor_id: str = ""
+
+
+class RedisConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="REDIS_", **_COMMON)
+
+    url: str = ""
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(**_COMMON)
 
@@ -120,6 +143,9 @@ class Settings(BaseSettings):
     neo4j: Neo4jConfig = Neo4jConfig()
     database: DatabaseConfig = DatabaseConfig()
     memory: MemoryConfig = MemoryConfig()
+    pdfco: PdfCoConfig = PdfCoConfig()
+    document_ai: DocumentAIConfig = DocumentAIConfig()
+    redis: RedisConfig = RedisConfig()
     telegram: TelegramConfig = TelegramConfig()
     google: GoogleConfig = GoogleConfig()
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()

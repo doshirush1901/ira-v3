@@ -59,6 +59,7 @@ class RequestPipeline:
         adaptive_style: Any | None = None,
         realtime_observer: Any | None = None,
         power_level_tracker: Any | None = None,
+        redis_cache: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -76,6 +77,7 @@ class RequestPipeline:
         self._adaptive_style = adaptive_style
         self._realtime_observer = realtime_observer
         self._power_level_tracker = power_level_tracker
+        self._redis = redis_cache
 
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
@@ -105,6 +107,13 @@ class RequestPipeline:
 
         _now = time.monotonic()
         _fingerprint = hashlib.sha256(f"{sender_id}:{raw_input}".encode()).hexdigest()[:16]
+
+        if pending is None and self._redis is not None and self._redis.available:
+            _redis_hit = await self._redis.dedup_check(_fingerprint)
+            if _redis_hit is not None:
+                logger.info("DEDUP | Redis cache hit for %s", sender_id)
+                return _redis_hit, []
+
         self._recent_messages = {
             k: v for k, v in self._recent_messages.items()
             if _now - v[1] < 300
@@ -443,6 +452,8 @@ class RequestPipeline:
 
         # ── 11. RETURN ───────────────────────────────────────────────
         self._recent_messages[_fingerprint] = (shaped, _now)
+        if self._redis is not None and self._redis.available:
+            await self._redis.dedup_store(_fingerprint, shaped, ttl_seconds=300)
         return shaped, agents_used
 
     # ── Execution helpers ─────────────────────────────────────────────────

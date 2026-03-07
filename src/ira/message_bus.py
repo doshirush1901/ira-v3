@@ -4,11 +4,16 @@ Every agent publishes and receives :class:`~ira.data.models.AgentMessage`
 objects through the bus.  Messages can be directed (to a specific agent)
 or broadcast (to all subscribers).  A full message log is kept for
 debugging and auditing.
+
+When a :class:`~ira.systems.redis_cache.RedisCache` instance is attached
+via :meth:`set_redis`, every published message is also persisted to a
+Redis Stream (``ira:bus:messages``) for durability and cross-process replay.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -22,10 +27,15 @@ logger = logging.getLogger(__name__)
 MessageHandler = Callable[[AgentMessage], Awaitable[None]]
 
 _BROADCAST = "__broadcast__"
+_REDIS_STREAM = "ira:bus:messages"
+_STREAM_MAXLEN = 5000
 
 
 class MessageBus:
-    """Async message bus using :class:`asyncio.Queue`."""
+    """Async message bus using :class:`asyncio.Queue`.
+
+    Optionally backed by a Redis Stream for message persistence.
+    """
 
     def __init__(self, maxsize: int = 1000) -> None:
         self._queue: asyncio.Queue[AgentMessage] = asyncio.Queue(maxsize=maxsize)
@@ -33,6 +43,12 @@ class MessageBus:
         self._log: deque[AgentMessage] = deque(maxlen=1000)
         self._running = False
         self._task: asyncio.Task[None] | None = None
+        self._redis: Any | None = None
+
+    def set_redis(self, redis_cache: Any) -> None:
+        """Attach a RedisCache for message persistence."""
+        self._redis = redis_cache
+        logger.info("MessageBus: Redis persistence enabled")
 
     # ── subscription ─────────────────────────────────────────────────────
 
@@ -48,13 +64,33 @@ class MessageBus:
     # ── publishing ───────────────────────────────────────────────────────
 
     async def publish(self, message: AgentMessage) -> None:
-        """Enqueue a message for delivery."""
+        """Enqueue a message for delivery and persist to Redis if available."""
         await self._queue.put(message)
         logger.debug(
             "Published message from '%s' to '%s'",
             message.from_agent,
             message.to_agent,
         )
+        await self._persist_to_redis(message)
+
+    async def _persist_to_redis(self, message: AgentMessage) -> None:
+        if self._redis is None or not self._redis.available:
+            return
+        try:
+            entry = {
+                "from": message.from_agent,
+                "to": message.to_agent,
+                "query": message.query[:2000],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            await self._redis._client.xadd(
+                _REDIS_STREAM,
+                entry,
+                maxlen=_STREAM_MAXLEN,
+                approximate=True,
+            )
+        except Exception:
+            logger.debug("Redis stream persist failed", exc_info=True)
 
     async def send(
         self,
