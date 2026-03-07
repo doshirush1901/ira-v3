@@ -5,6 +5,7 @@
 - Python 3.11+
 - Poetry (`pip install poetry`)
 - Docker & Docker Compose (for local infrastructure)
+- (Optional) [pre-commit](https://pre-commit.com/) for automated linting
 
 ## Setup
 
@@ -12,7 +13,7 @@
 # Install dependencies
 poetry install
 
-# Start infrastructure (Qdrant, Neo4j, PostgreSQL)
+# Start infrastructure (Qdrant, Neo4j, PostgreSQL, Redis)
 docker compose -f docker-compose.local.yml up -d
 
 # Run database migrations
@@ -20,6 +21,9 @@ alembic upgrade head
 
 # Copy environment template and fill in API keys
 cp .env.example .env
+
+# Install pre-commit hooks (recommended)
+pre-commit install
 ```
 
 ## Running
@@ -33,6 +37,15 @@ poetry run uvicorn ira.interfaces.server:app --reload
 
 # Run tests
 poetry run pytest
+
+# Run tests with coverage
+poetry run pytest --cov=ira
+
+# Lint
+poetry run ruff check src/ tests/
+
+# Format
+poetry run ruff format src/ tests/
 ```
 
 ## Project Structure
@@ -67,14 +80,18 @@ alembic/        # Database migrations
 - Use `from __future__ import annotations` in every module.
 - Use stdlib `logging`, not structlog.
 - Type-hint all public functions.
-- LLM calls go through raw `httpx` -- do not import `openai` or `anthropic` SDKs.
-- See `.cursor/rules/ira-conventions.mdc` for full conventions.
+- LLM calls go through raw `httpx` — do not import `openai` or `anthropic` SDKs.
+- **Linting and formatting** are enforced by [Ruff](https://github.com/astral-sh/ruff). Run `poetry run ruff check --fix src/ tests/` to auto-fix.
+- **Pre-commit hooks** run ruff automatically on every commit if installed.
+- See `AGENTS.md` for full conventions.
 
 ## Testing
 
 - Run the full suite: `poetry run pytest`
+- Run with coverage: `poetry run pytest --cov=ira`
 - Run a specific file: `poetry run pytest tests/test_agents.py`
 - Tests use `pytest-asyncio` with `asyncio_mode = "auto"`.
+- Shared fixtures live in `tests/conftest.py` (`mock_settings`, `sample_contact`, `sample_email`, etc.).
 - Mock all external services (LLM APIs, Qdrant, Neo4j, Mem0) in tests.
 
 ## Database Migrations

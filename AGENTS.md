@@ -16,7 +16,7 @@ src/ira/
   brain/        # Retrieval, embeddings, graph, routing, pricing
   memory/       # 9 memory subsystems + dream mode
   systems/      # Body-system metaphor (digestive, immune, voice, redis, document_ai, dlp, etc.)
-  interfaces/   # FastAPI server, CLI, Telegram, email processor
+  interfaces/   # FastAPI server, CLI, Telegram, email processor, dashboard
   data/         # CRM models, quote models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers

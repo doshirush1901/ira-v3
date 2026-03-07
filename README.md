@@ -1,14 +1,123 @@
-# Ira v3
+<p align="center">
+  <img src="docs/assets/ira-logo.png" alt="Ira" width="200">
+</p>
 
-**The AI that runs a manufacturing company. No, seriously.**
+<h1 align="center">Ira v3</h1>
+
+<p align="center">
+  <strong>The AI that runs a manufacturing company. No, seriously.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/doshirush1901/ira-v3/actions/workflows/ci.yml"><img src="https://github.com/doshirush1901/ira-v3/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" alt="Code style: ruff"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-proprietary-red.svg" alt="License: Proprietary"></a>
+</p>
 
 ---
 
-Most AI assistants answer questions. Ira runs a business.
+## Table of Contents
 
-Ira is a multi-agent AI system built for [Machinecraft](https://machinecraft.org) — an industrial machinery company that designs and manufactures thermoforming, panel forming, and packaging machines. Instead of one monolithic chatbot that tries to do everything and does nothing well, Ira delegates work to a **pantheon of 24 specialist AI agents**, each an expert in their domain — sales, production, finance, marketing, HR, quality, research, and more.
+- [Wait, What Is This?](#wait-what-is-this)
+- [The 5-Minute Setup (Cursor + Gmail = Email Intelligence)](#the-5-minute-setup-cursor--gmail--email-intelligence)
+- [How It Actually Works](#how-it-actually-works)
+- [The Pantheon](#the-pantheon)
+- [The Brain](#the-brain)
+- [Memory Architecture](#memory-architecture)
+- [The Body Systems](#the-body-systems)
+- [Shared Identity](#shared-identity)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [API Endpoints](#api-endpoints)
+- [Running Tests](#running-tests)
+- [Contributing](#contributing)
+- [Architecture Deep Dive](#architecture-deep-dive)
+- [Changelog](#changelog)
+
+---
+
+## Wait, What Is This?
+
+Let's start with a problem you already have.
+
+You run a business. Or you work at one. Every day, emails come in. Leads asking about pricing. Vendors confirming delivery dates. A client from six months ago resurfacing with "hey, are you still doing that thing we discussed?" Your inbox is a firehose of context that you're supposed to *just remember*.
+
+Now, most people solve this one of two ways:
+
+**Option A: The Human Way.** You read every email. You mentally file it. You remember that Jaap from Dutch Tides asked about a thermoforming machine in March, that the quote was EUR 180k, that he went quiet in April, and that his colleague Pieter mentioned they're expanding their Rotterdam facility. You remember all of this because you are a superhuman with infinite working memory. (You are not.)
+
+**Option B: The CRM Way.** You buy Salesforce. You hire someone to enter data into Salesforce. Nobody enters data into Salesforce. You now have a very expensive database of nothing.
+
+**Option C: This repo.**
+
+Ira is a multi-agent AI system built for [Machinecraft](https://machinecraft.org) — an industrial machinery company that designs and manufactures thermoforming, panel forming, and packaging machines. But here's the thing that makes it different from every other "AI assistant" repo on GitHub:
+
+**Ira doesn't just answer questions. It reads your email, remembers your relationships, knows your products, tracks your deals, and gets smarter every day.** It has 24 specialist AI agents — each named after a figure from Greek mythology, each with a specific job — and they collaborate through an 11-stage pipeline that mimics how a real organization processes information.
 
 Think of it like this: you don't walk into a company and ask the receptionist to design your machine, draft your quote, check your invoice, *and* write your marketing email. You talk to the right person. Ira figures out who that person is, briefs them, and delivers the result.
+
+The best part? **You can set this up in Cursor in about 5 minutes and turn your IDE into an email intelligence system.**
+
+## The 5-Minute Setup (Cursor + Gmail = Email Intelligence)
+
+Here's the thing nobody tells you about AI coding assistants: they can do a lot more than write code. Cursor has a shell, it can make HTTP requests, and it can follow rules. So we gave it rules.
+
+When you open this repo in Cursor, three things happen automatically:
+
+1. **Cursor learns who Ira is.** The `.cursor/rules/` directory contains rules that teach Cursor how to start Ira, query it, search emails, ingest documents, and shut it down. You don't configure anything. It just works.
+
+2. **You get natural language access to your entire email history.** Say "wake up Ira" in Cursor chat. Then ask things like:
+   - *"@Ira find all emails from Jaap at Dutch Tides"*
+   - *"@Ira what's the latest on the PF1 quote for Sealed Air?"*
+   - *"@Ira draft a follow-up to the vendor who hasn't replied about the servo motors"*
+   - *"@Ira what did we discuss with Tetra Pak last quarter?"*
+
+3. **Every answer is grounded in real data.** Ira doesn't hallucinate your email history. It searches Gmail directly, pulls the actual threads, cross-references them with your knowledge base and CRM, and gives you an answer with receipts.
+
+### Quick Start
+
+```
+Step 1:  Clone this repo and open it in Cursor
+Step 2:  Copy .env.example → .env, add your API keys
+Step 3:  Type "wake up Ira" in Cursor chat
+Step 4:  Wait ~60 seconds for all services to boot
+Step 5:  Ask Ira anything about your business
+```
+
+That's it. Cursor reads the rules in `.cursor/rules/ira-api.mdc`, knows how to start Docker, boot the server, and route your questions. You just talk to it.
+
+### What It Looks Like in Practice
+
+```
+You:     @Ira show me all emails from dutch-tides.com in the last 3 months
+
+Ira:     Found 7 emails from dutch-tides.com:
+         - [2026-01-15] Jaap van der Berg — RE: PF1 Thermoforming Quote
+         - [2026-01-22] Jaap van der Berg — Delivery timeline question
+         - [2026-02-03] Pieter de Vries — Rotterdam facility expansion
+         ...
+
+You:     @Ira what's the status of the Dutch Tides deal?
+
+Ira:     [Prometheus consulted]
+         Dutch Tides (Jaap van der Berg) — NEGOTIATION stage
+         Quote: EUR 180,000 for PF1-C thermoforming machine
+         Last contact: Feb 3 — Pieter mentioned Rotterdam expansion
+         Risk: 45 days since last response from Jaap
+         Suggested action: Follow up referencing the expansion plans
+
+You:     @Ira draft that follow-up
+
+Ira:     [Calliope consulted]
+         Subject: PF1 for Rotterdam — quick check-in
+         ...
+```
+
+Every agent that contributed is named. Every fact traces to a real email or document. If Ira isn't sure, it says so.
+
+> **Note:** Email mode defaults to TRAINING — Ira reads your inbox and creates drafts but never sends anything without your explicit approval. Set `IRA_EMAIL_MODE=OPERATIONAL` in `.env` only when you're ready for live sending.
 
 ## How It Actually Works
 
@@ -18,26 +127,30 @@ Every message — whether it comes from the CLI, Telegram, or the REST API — f
   You say something
        │
        ▼
-┌─────────────────────────────────────────────────────────┐
-│                    REQUEST PIPELINE                      │
-│                                                         │
-│  1. PERCEIVE    → Who are you? What's your mood?        │
-│  2. REMEMBER    → What have we talked about before?     │
-│  3. ROUTE       → Which agent(s) should handle this?    │
-│  4. ENRICH      → Add context, style, learnings         │
-│  5. EXECUTE     → Agent does the work (ReAct loop)      │
-│  6. ASSESS      → How confident are we in this answer?  │
-│  7. REFLECT     → What did we learn from this?          │
-│  8. SHAPE       → Format for your channel & preferences │
-│  9. LEARN       → Store memories, update CRM, goals     │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      REQUEST PIPELINE                         │
+│                                                              │
+│   1. PERCEIVE       → Who are you? What's your mood?         │
+│   2. REMEMBER       → What have we talked about before?      │
+│   3. ROUTE (Fast)   → Keyword match → agent (deterministic)  │
+│      TRUTH HINTS    → Short-circuit with cached fact?        │
+│   4. ROUTE (Proc)   → Match learned response patterns        │
+│   5. ROUTE (LLM)    → Athena picks the right specialist      │
+│      ENRICH         → Adaptive style, learnings, hormones    │
+│   6. EXECUTE        → Agent does the work (ReAct loop)       │
+│   7. ASSESS         → How confident are we in this answer?   │
+│   8. REFLECT        → Post-response self-reflection          │
+│   9. SHAPE          → Format for your channel & preferences  │
+│  10. LEARN          → Store memories, update CRM, goals      │
+│  11. RETURN         → Final shaped response                  │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
        │
        ▼
   You get a response that actually knows what it's talking about
 ```
 
-The routing is a three-tier system: a fast **deterministic router** catches obvious intents (keywords → agent), a **procedural memory** matches learned patterns, and if neither fires, **Athena** (the orchestrator agent) uses LLM reasoning to pick the right specialist.
+Routing is a three-tier cascade: a fast **deterministic router** catches obvious intents (keywords → agent), **procedural memory** matches learned patterns, and if neither fires, **Athena** (the orchestrator agent) uses LLM reasoning to pick the right specialist. A **truth hints** cache can short-circuit the whole pipeline for common factual queries.
 
 ## The Pantheon
 
@@ -99,11 +212,23 @@ Ira doesn't just generate text — it *knows things*. The brain is a multi-backe
     Semantic        Entities &     Long-term
     search over     relationships  conversational
     documents       (companies,    memory
-                    people,
-                    machines)
+          │         people,
+          │         machines)
+          ▼
+    ┌──────────────────────────────────┐
+    │  Reranking                       │
+    │  Voyage Rerank (primary)         │
+    │  FlashRank (local fallback)      │
+    └──────────────────────────────────┘
+          │
+          ▼
+    ┌──────────────────────────────────┐
+    │  Redis Cache                     │
+    │  Response dedup + caching        │
+    └──────────────────────────────────┘
 ```
 
-All three backends are searched **in parallel**, results are **reranked** with FlashRank, and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive.
+All three backends are searched **in parallel**, results are **reranked** with Voyage Rerank (FlashRank as local fallback), and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive. Redis caches responses and deduplicates repeated queries.
 
 ## Memory Architecture
 
@@ -129,21 +254,34 @@ Every night (or on demand), Ira runs an **11-stage dream cycle** — consolidati
 
 The codebase uses a **biological metaphor** for its subsystems:
 
+### Core Body Systems
+
 | System | Metaphor | Purpose |
 |:-------|:---------|:--------|
 | **Sensory** | Eyes & ears | Contact resolution, emotion detection, metadata extraction |
 | **Digestive** | Stomach | Email processing, document summarization, nutrient extraction |
-| **Circulatory** | Bloodstream | Cross-system data synchronization |
-| **Immune** | Immune system | Hallucination detection, fact verification |
-| **Endocrine** | Hormones | System-wide state modifiers (urgency, formality) |
-| **Respiratory** | Lungs | Health monitoring, vital signs |
-| **Musculoskeletal** | Muscles | Task execution framework |
+| **Circulatory** | Bloodstream | Cross-system data synchronization, heartbeat scheduling |
+| **Immune** | Immune system | Hallucination detection, fact verification, safety filters |
+| **Respiratory** | Lungs | Background health checks, system monitoring, vital signs |
 | **Voice** | Vocal cords | Output shaping for channel and recipient |
-| **Redis Cache** | Short-term memory | Response dedup, message stream persistence, fast key-value caching |
-| **Document AI** | Reading glasses | OCR for scanned PDFs, invoice/form parsing via Google Document AI |
-| **DLP** | Privacy filter | PII redaction and sensitive-data scanning via Google Cloud DLP |
-| **Google Docs** | Printing press | Read, write, and export Google Docs (case studies, reports) |
-| **PDF.co** | Bookbinder | HTML-to-PDF generation and text extraction for quotes and exports |
+
+### Extended Systems
+
+| System | Purpose |
+|:-------|:--------|
+| **Redis Cache** | Response dedup, message stream persistence, fast key-value caching |
+| **Document AI** | OCR for scanned PDFs, invoice/form parsing via Google Document AI |
+| **DLP** | PII redaction and sensitive-data scanning via Google Cloud DLP |
+| **Google Docs** | Read, write, and export Google Docs (case studies, reports) |
+| **PDF.co** | HTML-to-PDF generation and text extraction for quotes and exports |
+| **Learning Hub** | Feedback processing, knowledge gap analysis, procedure suggestion |
+| **Board Meeting** | Multi-agent collaborative discussions on a topic |
+| **Drip Engine** | Automated multi-step email campaigns |
+| **Data Event Bus** | Typed event system for cross-store synchronization |
+| **CRM Enricher** | Multi-agent CRM enrichment pipeline |
+| **CRM Populator** | Contact classification and import from Gmail, KB, Neo4j |
+
+Endocrine (behavioral modifiers like urgency and formality) and Musculoskeletal (action recording) are wired into the pipeline as lightweight service-key integrations rather than standalone system files.
 
 ## Shared Identity
 
@@ -170,7 +308,7 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 | API Framework | FastAPI |
 | CLI | Typer + Rich |
 | Messaging | python-telegram-bot |
-| Reranking | FlashRank + Voyage Rerank |
+| Reranking | Voyage Rerank (primary) + FlashRank (local fallback) |
 | Migrations | Alembic |
 | Containerization | Docker |
 
@@ -182,8 +320,8 @@ ira-v3/
 │   ├── agents/              # 24 specialist agents + base_agent.py
 │   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing
 │   ├── memory/              # 9 memory subsystems + dream mode
-│   ├── systems/             # Biological body systems
-│   ├── interfaces/          # CLI, FastAPI server, Telegram bot
+│   ├── systems/             # Body systems + extended systems (17 modules)
+│   ├── interfaces/          # CLI, FastAPI server, Telegram bot, email processor, dashboard
 │   ├── skills/              # Skill matrix + tool handlers
 │   ├── middleware/          # Auth + request context
 │   ├── data/                # CRM models, quote models
@@ -303,8 +441,14 @@ ira pipeline       # Show pipeline stage timings
 ## Running Tests
 
 ```bash
-poetry run pytest
+poetry run pytest                    # full suite
+poetry run pytest --cov=ira          # with coverage
+poetry run pytest -k "test_clio"     # specific test
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup instructions, code style, and how to create new agents.
 
 ## Architecture Deep Dive
 
@@ -312,6 +456,14 @@ For detailed architecture documentation, see [`docs/ARCHITECTURE.md`](docs/ARCHI
 
 For a comprehensive system audit and production readiness assessment, see [`docs/SYSTEM_AUDIT.md`](docs/SYSTEM_AUDIT.md).
 
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for version history.
+
+## Security
+
+To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
+
 ## License
 
-Proprietary. All rights reserved by Machinecraft.
+Proprietary. All rights reserved by Machinecraft. See [`LICENSE`](LICENSE).

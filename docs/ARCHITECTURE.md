@@ -7,26 +7,28 @@ requests through an 11-stage pipeline, delegates work to a pantheon of 24
 specialist agents, and maintains persistent memory across conversations.
 
 ```
-User Input
-    |
-    v
-+-------------------+
-|  RequestPipeline  |  11 linear stages
-+-------------------+
-    |
-    v
-+-------------------+
-|    Pantheon        |  Orchestrator + 24 agents
-+-------------------+
-    |         |
-    v         v
-+--------+ +--------+
-|  Brain | | Memory |
-+--------+ +--------+
-    |         |
-    v         v
- Qdrant    SQLite / Mem0
- Neo4j     PostgreSQL
+User Input (CLI / Telegram / API / Email)
+    │
+    ▼
+┌───────────────────┐
+│  RequestPipeline  │  11 linear stages
+└───────────────────┘
+    │
+    ▼
+┌───────────────────┐
+│    Pantheon        │  Orchestrator + 24 agents (ReAct loops)
+└───────────────────┘
+    │         │         │
+    ▼         ▼         ▼
+┌────────┐ ┌────────┐ ┌────────────┐
+│  Brain │ │ Memory │ │ Body       │
+│        │ │        │ │ Systems    │
+└────────┘ └────────┘ └────────────┘
+    │         │         │
+    ▼         ▼         ▼
+ Qdrant    SQLite     Redis (cache/streams)
+ Neo4j     Mem0       Gmail (email tools)
+           PostgreSQL  Google Docs / Doc AI / DLP / PDF.co
 ```
 
 ## Pipeline (`src/ira/pipeline.py`)
@@ -55,8 +57,11 @@ logged, timed, and tested.
 
 ### BaseAgent
 
-All 24 agents inherit from `BaseAgent` (691 lines), which provides:
+All 24 agents inherit from `BaseAgent` (~920 lines), which provides:
 
+- **Shared identity** -- `SOUL.md` preamble (Identity, Voice, Behavioral
+  Boundaries) is prepended to every agent's system prompt via
+  `prompt_loader.load_soul_preamble()`.
 - **ReAct loop** via `self.run()` -- up to `max_iterations` (default 8)
   iterations of Reason-Act-Observe. Each iteration calls the LLM, parses
   a tool selection from the response, executes the tool, appends the
@@ -65,11 +70,14 @@ All 24 agents inherit from `BaseAgent` (691 lines), which provides:
 - **Default tools** registered lazily based on available services:
   `search_knowledge`, `recall_memory`, `store_memory`,
   `get_conversation_history`, `check_relationship`, `check_goals`,
-  `recall_episodes`, `ask_agent`.
+  `recall_episodes`, `ask_agent`, `search_emails`, `read_email_thread`.
 - **Dual LLM support** -- `_call_openai()` and `_call_anthropic()` via
-  raw `httpx` (no SDK dependencies).
+  raw `httpx` (no SDK dependencies). Automatic Anthropic fallback on
+  OpenAI failure.
 - **Knowledge retriever** -- `self._retriever` (UnifiedRetriever) for
   Qdrant + Neo4j + Mem0 search.
+- **Email tools** -- when the email processor is injected, all agents
+  gain `search_emails` and `read_email_thread` for Gmail access.
 
 ### The Pantheon
 
@@ -129,7 +137,7 @@ ReAct tools that depend on memory, CRM, and other shared services.
 
 | Service | Purpose |
 |:--------|:--------|
-| UnifiedRetriever | Qdrant + Neo4j + Mem0 hybrid search with query decomposition and reranking |
+| UnifiedRetriever | Qdrant + Neo4j + Mem0 hybrid search with query decomposition and reranking (Voyage Rerank primary, FlashRank fallback) |
 | QdrantManager | Vector store management (CRUD, chunking, embedding) |
 | KnowledgeGraph | Neo4j entity/relationship CRUD and graph queries |
 | EmbeddingService | Voyage AI embeddings via raw HTTP |
@@ -137,24 +145,44 @@ ReAct tools that depend on memory, CRM, and other shared services.
 | PricingEngine | Machine price estimation from knowledge base |
 | SalesIntelligence | Lead qualification, customer health, re-engagement |
 | MachineIntelligence | Machine comparison and recommendation |
-| DocumentIngestor | PDF/DOCX/Excel ingestion pipeline |
+| DocumentIngestor | PDF/DOCX/Excel ingestion pipeline; re-OCR via Document AI for scanned PDFs |
 | TruthHints | Cached factual answers for common queries |
 
 ## Body Systems (`src/ira/systems/`)
 
-Ira uses a biological metaphor for its subsystems:
+Ira uses a biological metaphor for its subsystems. Core body systems
+handle the request lifecycle; extended systems provide integrations and
+operational capabilities.
+
+### Core Body Systems
 
 | System | Purpose |
 |:-------|:--------|
+| Sensory | Perception -- contact resolution, emotion detection, channel detection |
 | Digestive | Document ingestion -- breaks documents into knowledge nutrients |
-| Respiratory | Background health checks and system monitoring |
+| Circulatory | Cross-system data synchronization, heartbeat scheduling |
 | Immune | Input validation, hallucination detection, safety filters |
-| Endocrine | Behavioural modifiers (urgency, formality, enthusiasm) |
-| Sensory | Perception -- contact resolution, channel detection |
+| Respiratory | Background health checks and system monitoring |
 | Voice | Response shaping for channel and recipient |
-| Circulatory | Scheduling, heartbeat, data event propagation |
-| Musculoskeletal | Action recording and tracking |
-| LearningHub | Correction ingestion and training coordination |
+
+### Extended Systems
+
+| System | Purpose |
+|:-------|:--------|
+| Redis Cache | Response dedup, message stream persistence, fast key-value caching |
+| Document AI | OCR for scanned PDFs, invoice/form parsing via Google Document AI |
+| DLP | PII redaction and sensitive-data scanning via Google Cloud DLP |
+| Google Docs | Read, write, and export Google Docs (case studies, reports) |
+| PDF.co | HTML-to-PDF generation and text extraction for quotes and exports |
+| Learning Hub | Feedback processing, knowledge gap analysis, procedure suggestion |
+| Board Meeting | Multi-agent collaborative discussions on a topic |
+| Drip Engine | Automated multi-step email campaigns |
+| Data Event Bus | Typed event system for cross-store synchronization |
+| CRM Enricher | Multi-agent CRM enrichment pipeline |
+| CRM Populator | Contact classification and import from Gmail, KB, Neo4j |
+
+Endocrine (behavioral modifiers) and Musculoskeletal (action recording)
+are wired into the pipeline as lightweight service-key integrations.
 
 ## Infrastructure Dependencies
 
@@ -163,12 +191,23 @@ Ira uses a biological metaphor for its subsystems:
 | Qdrant | `qdrant/qdrant:latest` | Vector database for document embeddings |
 | Neo4j | `neo4j:5.15.0-community` | Knowledge graph (entities, relationships) |
 | PostgreSQL | `postgres:16` | CRM relational data (companies, contacts, deals, quotes) |
+| Redis | `redis:7-alpine` | Response dedup, message stream persistence, caching |
 
 Local development: `docker-compose.local.yml`
 Production: `docker-compose.yml` (with health checks, resource limits, restart policies)
 
 Database migrations are managed by Alembic (`alembic/`) targeting the
 PostgreSQL CRM schema.
+
+## Interfaces (`src/ira/interfaces/`)
+
+| Interface | Purpose |
+|:----------|:--------|
+| `server.py` | FastAPI REST API (primary production interface) |
+| `cli.py` | Interactive CLI and single-query mode via Typer + Rich |
+| `telegram_bot.py` | Telegram bot integration |
+| `email_processor.py` | Gmail inbox processing, email search, thread reading, draft sending |
+| `dashboard.py` | Web dashboard (HTML, served at `/dashboard/`) |
 
 ## Data Flow
 
@@ -178,6 +217,8 @@ PostgreSQL CRM schema.
 3. The pipeline runs 11 stages, delegating to the Pantheon at the
    EXECUTE stage.
 4. The Pantheon routes to one or more agents. Each agent runs a ReAct
-   loop, using its custom tools and the default memory/KB tools.
+   loop, using its custom tools and the default memory/KB/email tools.
 5. The pipeline shapes the response for the output channel and records
    the interaction in memory and CRM.
+6. Redis caches the response for dedup; the MessageBus persists events
+   to Redis Streams for cross-system observability.
