@@ -466,6 +466,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         unified_context=unified_context,
     )
     _services["email_processor"] = email_processor
+    pantheon.inject_services({SK.EMAIL_PROCESSOR: email_processor})
 
     # ── Drip engine ────────────────────────────────────────────────────
     from ira.interfaces.email_processor import GmailDraftSender
@@ -815,22 +816,50 @@ class ReingestRequest(BaseModel):
     base_path: str = "data/imports"
 
 
+_reingest_status: dict[str, Any] = {"running": False, "last_result": None}
+
+
 @app.post("/api/reingest-scanned")
 async def reingest_scanned(req: ReingestRequest | None = None) -> dict[str, Any]:
     """Re-ingest scanned PDFs through Document AI OCR.
 
-    Finds large PDFs where pypdf yielded poor text and re-processes
-    them with Document AI OCR for proper indexing.
+    Launches as a background task and returns immediately.
+    Poll ``GET /api/reingest-scanned`` for status.
     """
+    if _reingest_status["running"]:
+        return {"status": "already_running", "message": "Re-ingestion is already in progress."}
+
     ingestor = _svc("ingestor")
     params = req or ReingestRequest()
     min_bytes = params.min_file_size_mb * 1024 * 1024
 
-    summary = await ingestor.reingest_scanned_pdfs(
-        base_path=params.base_path,
-        min_file_size=min_bytes,
-    )
-    return summary
+    async def _run() -> None:
+        _reingest_status["running"] = True
+        _reingest_status["last_result"] = None
+        try:
+            summary = await ingestor.reingest_scanned_pdfs(
+                base_path=params.base_path,
+                min_file_size=min_bytes,
+            )
+            _reingest_status["last_result"] = summary
+            logger.info("Scanned PDF re-ingestion complete: %s", summary)
+        except Exception:
+            logger.exception("Scanned PDF re-ingestion failed")
+            _reingest_status["last_result"] = {"error": "Re-ingestion failed — check server logs."}
+        finally:
+            _reingest_status["running"] = False
+
+    asyncio.create_task(_run())
+    return {"status": "started", "message": "Re-ingestion launched in background. Poll GET /api/reingest-scanned for status."}
+
+
+@app.get("/api/reingest-scanned")
+async def reingest_scanned_status() -> dict[str, Any]:
+    """Check the status of the scanned PDF re-ingestion."""
+    return {
+        "running": _reingest_status["running"],
+        "last_result": _reingest_status["last_result"],
+    }
 
 
 @app.post("/api/board-meeting")

@@ -182,6 +182,34 @@ class BaseAgent(ABC):
                 handler=self._tool_ask_agent,
             ))
 
+        if self._services.get(SK.EMAIL_PROCESSOR):
+            self.register_tool(AgentTool(
+                name="search_emails",
+                description=(
+                    "Search Gmail for emails matching filters. Use this when the user asks "
+                    "to find, show, or pull up emails from a person, company, or about a topic."
+                ),
+                parameters={
+                    "from_address": "Sender email or partial match (e.g. 'jaap@dutch-tides.com' or 'dutch-tides')",
+                    "to_address": "Recipient email (optional)",
+                    "subject": "Subject keyword (optional)",
+                    "query": "Free-form Gmail search query (optional, e.g. 'has:attachment')",
+                    "after": "Date filter YYYY/MM/DD (optional)",
+                    "before": "Date filter YYYY/MM/DD (optional)",
+                    "max_results": "Max emails to return (default 10)",
+                },
+                handler=self._tool_search_emails,
+            ))
+            self.register_tool(AgentTool(
+                name="read_email_thread",
+                description=(
+                    "Fetch the full email thread by thread ID. Use this after search_emails "
+                    "to read the complete conversation history of a thread."
+                ),
+                parameters={"thread_id": "Gmail thread ID from a search result"},
+                handler=self._tool_read_email_thread,
+            ))
+
     # ── default tool handlers ─────────────────────────────────────────────
 
     async def _tool_search_knowledge(self, query: str, limit: str = "10") -> str:
@@ -276,6 +304,60 @@ class BaseAgent(ABC):
         except (ToolExecutionError, Exception) as exc:
             logger.warning("Delegation to '%s' failed in %s: %s", agent_name, self.name, exc)
             return f"Agent '{agent_name}' error: {exc}"
+
+    async def _tool_search_emails(
+        self,
+        from_address: str = "",
+        to_address: str = "",
+        subject: str = "",
+        query: str = "",
+        after: str = "",
+        before: str = "",
+        max_results: str = "10",
+    ) -> str:
+        ep = self._services[SK.EMAIL_PROCESSOR]
+        try:
+            emails = await ep.search_emails(
+                from_address=from_address,
+                to_address=to_address,
+                subject=subject,
+                query=query,
+                after=after,
+                before=before,
+                max_results=int(max_results),
+            )
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("search_emails failed in %s: %s", self.name, exc)
+            return f"Email search error: {exc}"
+        if not emails:
+            return "No emails found matching the search criteria."
+        lines = []
+        for e in emails:
+            lines.append(
+                f"- [{e.received_at.strftime('%Y-%m-%d %H:%M')}] "
+                f"From: {e.from_address} | To: {e.to_address} | "
+                f"Subject: {e.subject} | Thread: {e.thread_id}\n"
+                f"  Body preview: {e.body[:500]}"
+            )
+        return "\n".join(lines)
+
+    async def _tool_read_email_thread(self, thread_id: str) -> str:
+        ep = self._services[SK.EMAIL_PROCESSOR]
+        try:
+            emails = await ep.get_thread(thread_id)
+        except (ToolExecutionError, Exception) as exc:
+            logger.warning("read_email_thread failed in %s: %s", self.name, exc)
+            return f"Thread read error: {exc}"
+        if not emails:
+            return "Thread is empty or not found."
+        lines = []
+        for e in emails:
+            lines.append(
+                f"--- [{e.received_at.strftime('%Y-%m-%d %H:%M')}] "
+                f"From: {e.from_address} → To: {e.to_address} ---\n"
+                f"Subject: {e.subject}\n{e.body}\n"
+            )
+        return "\n".join(lines)
 
     # ── ReAct loop ────────────────────────────────────────────────────────
 

@@ -904,6 +904,83 @@ class TestServerEndpoints:
 
         assert resp.status_code == 503
 
+    async def test_email_search(self, server_app):
+        app, services = server_app
+        ep = AsyncMock()
+        email = SimpleNamespace(
+            id="msg_100",
+            thread_id="thread_50",
+            from_address="jaap@dutch-tides.com",
+            to_address="rushabh@machinecraft.org",
+            subject="FW: last payment",
+            body="Thanks for the mail, but we don't think we can...",
+            received_at=datetime(2026, 3, 4, 17, 17, tzinfo=timezone.utc),
+        )
+        ep.search_emails = AsyncMock(return_value=[email])
+        services["email_processor"] = ep
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/email/search", json={
+                "from_address": "jaap@dutch-tides.com",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+        assert data["emails"][0]["from"] == "jaap@dutch-tides.com"
+        assert data["emails"][0]["subject"] == "FW: last payment"
+        assert data["emails"][0]["thread_id"] == "thread_50"
+
+        ep.search_emails.assert_awaited_once_with(
+            from_address="jaap@dutch-tides.com",
+            to_address="",
+            subject="",
+            query="",
+            after="",
+            before="",
+            max_results=10,
+        )
+
+    async def test_email_thread(self, server_app):
+        app, services = server_app
+        ep = AsyncMock()
+        msg1 = SimpleNamespace(
+            id="msg_1",
+            from_address="rushabh@machinecraft.org",
+            to_address="jaap@dutch-tides.com",
+            subject="Re: last payment",
+            body="Hi Jaap, thanks for your message.",
+            received_at=datetime(2026, 3, 3, 10, 0, tzinfo=timezone.utc),
+        )
+        msg2 = SimpleNamespace(
+            id="msg_2",
+            from_address="jaap@dutch-tides.com",
+            to_address="rushabh@machinecraft.org",
+            subject="Re: last payment",
+            body="Thanks for the mail, but we don't think...",
+            received_at=datetime(2026, 3, 4, 17, 17, tzinfo=timezone.utc),
+        )
+        ep.get_thread = AsyncMock(return_value=[msg1, msg2])
+        services["email_processor"] = ep
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/email/thread/thread_50")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["thread_id"] == "thread_50"
+        assert data["message_count"] == 2
+        assert data["messages"][0]["from"] == "rushabh@machinecraft.org"
+        assert data["messages"][1]["from"] == "jaap@dutch-tides.com"
+
+    async def test_email_search_returns_503_when_processor_missing(self, server_app):
+        app, services = server_app
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/email/search", json={"from_address": "test@test.com"})
+
+        assert resp.status_code == 503
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Dashboard

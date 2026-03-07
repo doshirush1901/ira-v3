@@ -15,7 +15,7 @@ src/ira/
   agents/       # 24 specialist agents + BaseAgent
   brain/        # Retrieval, embeddings, graph, routing, pricing
   memory/       # 9 memory subsystems + dream mode
-  systems/      # Body-system metaphor (digestive, immune, voice, etc.)
+  systems/      # Body-system metaphor (digestive, immune, voice, redis, document_ai, dlp, etc.)
   interfaces/   # FastAPI server, CLI, Telegram, email processor
   data/         # CRM models, quote models
   middleware/   # Auth, request context
@@ -66,7 +66,7 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 # Install
 poetry install
 
-# Infrastructure (Qdrant, Neo4j, PostgreSQL)
+# Infrastructure (Qdrant, Neo4j, PostgreSQL, Redis)
 docker compose -f docker-compose.local.yml up -d
 
 # Database migrations
@@ -116,11 +116,23 @@ poetry run ira health     # vital signs
 - Agent `name` class attribute must be lowercase and match the filename (e.g. `"clio"` → `clio.py`).
 - System prompts live in `prompts/{agent_name}_system.txt`. Use `load_prompt()`, never inline strings.
 
+### Shared identity (SOUL.md)
+
+- `prompt_loader.load_soul_preamble()` extracts Identity, Voice, and Behavioral Boundaries from `SOUL.md`.
+- `BaseAgent.run()` prepends this preamble to every agent's system prompt automatically.
+- Do not duplicate SOUL.md content in individual agent prompts.
+
 ### Memory access
 
 - Agents use ReAct tools: `recall_memory`, `store_memory`, `get_conversation_history`, `check_relationship`, `check_goals`, `recall_episodes`.
 - These are auto-registered by `BaseAgent._register_default_tools()` when the service is available.
 - Direct memory access in `handle()` is reserved for Mnemosyne and Nemesis.
+
+### Email tools
+
+- When the email processor is injected (`SK.EMAIL_PROCESSOR`), all agents automatically get `search_emails` and `read_email_thread` tools.
+- These allow any agent to search Gmail and read full threads as part of their ReAct reasoning.
+- Registered in `BaseAgent._register_default_tools()` — no per-agent setup needed.
 
 ### Prompts
 
@@ -163,6 +175,7 @@ alembic upgrade head
 | Qdrant | `qdrant/qdrant:latest` | 6333 | Vector DB for document embeddings |
 | Neo4j | `neo4j:5.15.0-community` | 7474/7687 | Knowledge graph |
 | PostgreSQL | `postgres:16` | 5432 | CRM relational data |
+| Redis | `redis:7-alpine` | 6379 | Response dedup, message stream persistence, caching |
 
 Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 
@@ -170,16 +183,19 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 
 | Method | Path | Description |
 |:-------|:-----|:------------|
-| GET | `/api/health` | Health check |
-| GET | `/api/deep-health` | Detailed service health |
 | POST | `/api/query` | Send a message to Ira |
 | POST | `/api/feedback` | Submit a correction |
-| POST | `/api/ingest` | Ingest a document |
-| POST | `/api/board-meeting` | Trigger a board meeting |
+| GET | `/api/health` | Quick health check |
+| GET | `/api/deep-health` | Detailed service-by-service health |
 | GET | `/api/pipeline` | Sales pipeline summary |
 | GET | `/api/agents` | List agents and status |
-| GET | `/api/dream-report` | Latest dream cycle report |
-| POST | `/api/email/draft` | Draft an email |
+| POST | `/api/ingest` | Ingest a document |
+| POST | `/api/reingest-scanned` | Re-OCR scanned PDFs via Document AI |
+| POST | `/api/board-meeting` | Trigger a board meeting |
+| GET | `/api/dream-report` | Trigger dream cycle and return report |
+| POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
+| GET | `/api/email/thread/{id}` | Fetch full email thread by Gmail thread ID |
+| POST | `/api/email/draft` | Draft an email via Calliope |
 
 ## Important Rules
 

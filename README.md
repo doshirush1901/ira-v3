@@ -77,7 +77,7 @@ Twenty-four agents. Each with a name from Greek mythology, a specific role, and 
 | **Asclepius** | Quality | Punch lists, installation tracking, quality dashboards |
 | **Hera** | Procurement | Vendor management, component taxonomy, lead times |
 
-Every agent runs a **ReAct loop** (Reason → Act → Observe) with up to 8 iterations, calling tools, reading results, and reasoning about next steps until they have a complete answer.
+Every agent runs a **ReAct loop** (Reason → Act → Observe) with up to 8 iterations, calling tools, reading results, and reasoning about next steps until they have a complete answer. Default tools include knowledge search, memory recall, inter-agent delegation, and — when Gmail is connected — `search_emails` and `read_email_thread` for pulling real email data into any agent's reasoning.
 
 ## The Brain
 
@@ -139,6 +139,17 @@ The codebase uses a **biological metaphor** for its subsystems:
 | **Respiratory** | Lungs | Health monitoring, vital signs |
 | **Musculoskeletal** | Muscles | Task execution framework |
 | **Voice** | Vocal cords | Output shaping for channel and recipient |
+| **Redis Cache** | Short-term memory | Response dedup, message stream persistence, fast key-value caching |
+| **Document AI** | Reading glasses | OCR for scanned PDFs, invoice/form parsing via Google Document AI |
+| **DLP** | Privacy filter | PII redaction and sensitive-data scanning via Google Cloud DLP |
+| **Google Docs** | Printing press | Read, write, and export Google Docs (case studies, reports) |
+| **PDF.co** | Bookbinder | HTML-to-PDF generation and text extraction for quotes and exports |
+
+## Shared Identity
+
+Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 24 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 24 separate prompt files.
+
+Project priorities and architectural guardrails live in [`VISION.md`](VISION.md).
 
 ## Tech Stack
 
@@ -151,11 +162,15 @@ The codebase uses a **biological metaphor** for its subsystems:
 | Vector Database | Qdrant |
 | Knowledge Graph | Neo4j |
 | Relational Database | PostgreSQL (CRM via asyncpg) |
+| Cache | Redis (response dedup, stream persistence) |
 | Memory | Mem0 + SQLite |
+| Document Processing | Google Document AI, PDF.co |
+| Privacy | Google Cloud DLP (PII redaction) |
+| Integrations | Google Docs, Gmail |
 | API Framework | FastAPI |
 | CLI | Typer + Rich |
 | Messaging | python-telegram-bot |
-| Reranking | FlashRank |
+| Reranking | FlashRank + Voyage Rerank |
 | Migrations | Alembic |
 | Containerization | Docker |
 
@@ -182,6 +197,8 @@ ira-v3/
 ├── tests/                   # Test suite
 ├── alembic/                 # Database migrations
 ├── docs/                    # Architecture and audit documentation
+├── SOUL.md                  # Ira's identity, voice, and behavioral boundaries
+├── VISION.md                # Project priorities and architectural guardrails
 ├── docker-compose.yml       # Production stack
 ├── docker-compose.local.yml # Local development stack
 ├── Dockerfile               # Container build
@@ -211,7 +228,7 @@ poetry install
 docker compose -f docker-compose.local.yml up -d
 ```
 
-This starts Qdrant (vector DB), Neo4j (knowledge graph), and PostgreSQL (CRM).
+This starts Qdrant (vector DB), Neo4j (knowledge graph), PostgreSQL (CRM), and Redis (caching).
 
 ### 3. Configure Environment
 
@@ -268,12 +285,20 @@ ira pipeline       # Show pipeline stage timings
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
-| POST | `/query` | Send a message to Ira |
-| GET | `/health` | System health check |
-| POST | `/board` | Trigger a board meeting |
-| POST | `/dream` | Trigger dream mode |
-| POST | `/ingest` | Ingest a document |
-| POST | `/email/draft` | Draft an email |
+| POST | `/api/query` | Send a message to Ira |
+| POST | `/api/feedback` | Submit a correction |
+| GET | `/api/health` | Quick health check |
+| GET | `/api/deep-health` | Detailed service-by-service health |
+| GET | `/api/pipeline` | Sales pipeline summary |
+| GET | `/api/agents` | List all agents and their status |
+| POST | `/api/ingest` | Ingest a document into the knowledge base |
+| POST | `/api/reingest-scanned` | Re-OCR scanned PDFs via Document AI |
+| POST | `/api/board-meeting` | Trigger a board meeting |
+| GET | `/api/dream-report` | Trigger dream cycle and return report |
+| POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
+| GET | `/api/email/thread/{id}` | Fetch a full email thread by Gmail thread ID |
+| POST | `/api/email/draft` | Draft an email via Calliope |
+| GET | `/dashboard/` | Web dashboard (browser) |
 
 ## Running Tests
 
