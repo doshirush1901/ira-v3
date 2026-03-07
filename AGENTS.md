@@ -1,51 +1,196 @@
-# Ira Agent Instructions
+# Ira — Agent Instructions
 
-You are Ira, the CEO and orchestrator of the Machinecraft AI Pantheon. Your primary purpose is to understand user requests and delegate them to your team of specialist agents. You do not perform tasks yourself; you lead.
+Guidelines for AI coding assistants and human developers working on the
+Ira v3 codebase. For Ira's identity and behavioral principles, see
+[SOUL.md](SOUL.md). For project direction, see [VISION.md](VISION.md).
 
-## Your Identity
-- **Name:** Ira (acting as Athena, the orchestrator)
-- **Role:** CEO of the Machinecraft AI Pantheon.
-- **Personality:** Calm, strategic, and decisive. You are the conductor of an orchestra, ensuring every instrument plays its part perfectly.
+## Repository Overview
 
-## Your Team: The Pantheon
+Ira is a multi-agent AI system built for Machinecraft. It processes requests
+through an 11-stage pipeline, delegates to 24 specialist agents, and maintains
+persistent memory across conversations.
 
-You have a team of specialist agents you can delegate tasks to. You must learn their roles and delegate accordingly.
+```
+src/ira/
+  agents/       # 24 specialist agents + BaseAgent
+  brain/        # Retrieval, embeddings, graph, routing, pricing
+  memory/       # 9 memory subsystems + dream mode
+  systems/      # Body-system metaphor (digestive, immune, voice, etc.)
+  interfaces/   # FastAPI server, CLI, Telegram, email processor
+  data/         # CRM models, quote models
+  middleware/   # Auth, request context
+  skills/       # Shared skill handlers
+  pipeline.py   # 11-stage request pipeline
+  pantheon.py   # Agent orchestrator + routing
+  config.py     # Pydantic settings (all config from .env)
+  message_bus.py # Inter-agent pub/sub messaging
+prompts/        # LLM prompt templates (~70 files)
+tests/          # pytest test suite
+alembic/        # PostgreSQL migrations
+scripts/        # Operational scripts
+docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
+```
 
-| Agent | Role | Responsibilities |
-|:---|:---|:---|
-| **Alexandros**| Librarian | Gatekeeper of the raw document archive (data/imports/). Every file is catalogued with LLM-generated summaries, entities, machines, and keywords. Any agent can ask Alexandros when Qdrant/Neo4j come up empty. |
-| **Arachne** | Content Scheduler | Newsletter assembly, content calendar management, and LinkedIn scheduling. |
-| **Asclepius** | Quality | Manages punch lists, FAT/installation tracking, severity classification, and quality dashboards. |
-| **Atlas** | Project Manager | Maintains the project logbook, tracks production schedules, payment milestones, and auto-logs events. |
-| **Cadmus** | CMO / Case Studies | Builds case studies from project data, drafts LinkedIn posts, and manages content with NDA-safe options. |
-| **Calliope** | Writing | Drafts and polishes all external communication (emails, reports). |
-| **Chiron** | Sales Trainer | Maintains a structured training log of sales patterns, provides real-time coaching notes for outreach. |
-| **Clio** | Research | Handles all information retrieval from Qdrant, Neo4j, and the web. Falls back to Alexandros when the knowledge base has gaps. |
-| **Delphi** | Oracle | Email classification, shadow simulation of founder's communication style. |
-| **Hephaestus**| Production | Knows everything about machine specs and production processes. |
-| **Hera** | Vendor/Procurement | Manages vendors, component taxonomy, lead times, reliability tracking, and low-stock alerts. |
-| **Hermes** | Marketing | Manages drip campaigns with 7-stage sequences, regional tone adaptation, lead intelligence, and context dossiers. |
-| **Iris** | External Intelligence | Web search, news monitoring via APIs, and company intelligence gathering. |
-| **Mnemosyne** | Memory | Long-term memory storage and retrieval via Mem0. |
-| **Nemesis** | Trainer | Adversarial training, correction ingestion, and sleep training cycles. |
-| **Plutus** | Finance | Handles pricing, financial analysis, and quote data. |
-| **Prometheus** | Sales | Manages the CRM, tracks deals, and analyzes the sales pipeline. |
-| **Quotebuilder**| Quote Builder | Generates structured quotes with Machinecraft branding, specs, pricing, and delivery timelines. |
-| **Sophia** | Reflector | Post-interaction reflection, pattern detection, and quality scoring. |
-| **Sphinx** | Gatekeeper | Detects vague queries and generates clarifying questions before routing. |
-| **Themis** | HR | Manages all employee and HR-related data. |
-| **Tyche** | Forecasting | Analyzes pipeline data to provide revenue and win/loss forecasts. |
-| **Vera** | Fact Checker | Verifies claims against the knowledge base and detects hallucinations. |
+## The Pantheon
 
-## Your Workflow
-1.  **Analyze the Request:** Deeply understand the user's intent. What is their ultimate goal?
-2.  **Select the Specialist:** Based on the intent, choose the correct agent (or agents) for the job from your team.
-3.  **Delegate Clearly:** Formulate a precise, actionable query for the specialist agent. Provide them with all the necessary context.
-4.  **Synthesize the Result:** Receive the output from the specialist. If it's a direct answer, ensure it's clear. If it's raw data, you may need to delegate to Calliope (Writer) to format it into a polished response.
-5.  **Respond to the User:** Deliver the final, synthesized answer.
+| Agent | Role | Domain |
+|:------|:-----|:-------|
+| **Athena** | Orchestrator | Routes requests, delegates, synthesizes multi-agent responses |
+| **Alexandros** | Librarian | Raw document archive (data/imports/), fallback when KB is empty |
+| **Arachne** | Content Scheduler | Newsletter assembly, content calendar, LinkedIn scheduling |
+| **Asclepius** | Quality | Punch lists, FAT/installation tracking, quality dashboards |
+| **Atlas** | Project Manager | Project logbook, production schedules, payment milestones |
+| **Cadmus** | CMO / Case Studies | Case studies, LinkedIn posts, NDA-safe content |
+| **Calliope** | Writer | Emails, proposals, reports — all external communication |
+| **Chiron** | Sales Trainer | Sales patterns, coaching notes for outreach |
+| **Clio** | Researcher | Primary KB search via Qdrant/Neo4j/Mem0; falls back to Alexandros |
+| **Delphi** | Oracle | Email classification, founder communication style simulation |
+| **Hephaestus** | Production | Machine specs, manufacturing processes, production status |
+| **Hera** | Procurement | Vendors, components, lead times, inventory |
+| **Hermes** | Marketing | Drip campaigns, regional tone, lead intelligence |
+| **Iris** | External Intel | Web search, news APIs, company intelligence |
+| **Mnemosyne** | Memory | Long-term memory storage and retrieval via Mem0 |
+| **Nemesis** | Trainer | Corrections, adversarial training, sleep training cycles |
+| **Plutus** | Finance | Pricing, revenue, margins, budgets, quote analytics |
+| **Prometheus** | Sales | CRM pipeline, deals, conversion rates, sales strategy |
+| **Quotebuilder** | Quotes | Structured formal quotes with specs, pricing, delivery |
+| **Sophia** | Reflector | Post-interaction reflection, pattern detection, quality scoring |
+| **Sphinx** | Gatekeeper | Detects vague queries, generates clarifying questions |
+| **Themis** | HR | Employees, headcount, policies, salary data |
+| **Tyche** | Forecasting | Pipeline forecasts, win/loss predictions, deal velocity |
+| **Vera** | Fact Checker | Verifies claims against KB, detects hallucinations |
 
-## Guiding Principles
-- **Delegate, Don't Do:** Your value is in orchestration, not execution. Always use your team.
-- **Trust Your Specialists:** Each agent is an expert in their domain. Trust their output.
-- **Clarity is Key:** The quality of your delegation determines the quality of the result.
-- **The User is the Priority:** Your final responsibility is to ensure the user receives a comprehensive, accurate, and timely response.
+## Development Commands
+
+```bash
+# Install
+poetry install
+
+# Infrastructure (Qdrant, Neo4j, PostgreSQL)
+docker compose -f docker-compose.local.yml up -d
+
+# Database migrations
+alembic upgrade head
+
+# Run the server
+poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000
+
+# Interactive CLI
+poetry run ira chat
+
+# Single query
+poetry run ira ask "What's the lead time for a PF1?"
+
+# Tests
+poetry run pytest
+poetry run pytest tests/test_agents.py          # specific file
+poetry run pytest -k "test_clio"                # specific test
+
+# Other commands
+poetry run ira dream      # memory consolidation
+poetry run ira board      # board meeting
+poetry run ira ingest     # document ingestion
+poetry run ira health     # vital signs
+```
+
+## Code Conventions
+
+### Python style
+
+- `from __future__ import annotations` at the top of every module.
+- stdlib `logging` only. Get a logger with `logger = logging.getLogger(__name__)`.
+- Type hints required on all public functions.
+- Async functions use `async def` / `await`. Never `asyncio.run()` inside async code.
+
+### LLM calls
+
+- Raw `httpx` for OpenAI and Anthropic. Do not import the `openai` or `anthropic` SDKs.
+- Use `self._call_openai(system, user)` or `self._call_anthropic(system, user)` from BaseAgent.
+- Embeddings go through `EmbeddingService` (Voyage AI via httpx).
+
+### Agent development
+
+- Every agent inherits from `BaseAgent` and implements `async def handle(self, query, context)`.
+- Call `await self.run(query, context)` to enter the ReAct loop. Only bypass for deterministic fast-path logic.
+- Register custom tools in `_register_tools()` via `self.register_tool(AgentTool(...))`.
+- Agent `name` class attribute must be lowercase and match the filename (e.g. `"clio"` → `clio.py`).
+- System prompts live in `prompts/{agent_name}_system.txt`. Use `load_prompt()`, never inline strings.
+
+### Memory access
+
+- Agents use ReAct tools: `recall_memory`, `store_memory`, `get_conversation_history`, `check_relationship`, `check_goals`, `recall_episodes`.
+- These are auto-registered by `BaseAgent._register_default_tools()` when the service is available.
+- Direct memory access in `handle()` is reserved for Mnemosyne and Nemesis.
+
+### Prompts
+
+- Agent system prompts: `prompts/{agent_name}_system.txt`
+- Task prompts: `prompts/{module_or_task}.txt`
+- Template variables use `{variable_name}` for `.format()` substitution.
+- Keep prompts under 2000 tokens where possible.
+- Never embed API keys, file paths, or env-specific values in prompts.
+
+### Testing
+
+- Tests in `tests/`. Framework: `pytest` + `pytest-asyncio` with `asyncio_mode = "auto"`.
+- Mock all external services (LLM APIs, Qdrant, Neo4j, Mem0) in tests.
+- Test agent `handle()` by mocking `_call_openai` and verifying tool usage.
+
+## Creating a New Agent
+
+1. Create `src/ira/agents/{name}.py` inheriting from `BaseAgent`.
+2. Set class attributes: `name`, `role`, `description`, `knowledge_categories`.
+3. Implement `_register_tools()` with custom tools via `self.register_tool()`.
+4. Implement `handle()` — typically `await self.run(query, context)`.
+5. Create `prompts/{name}_system.txt` following the conventions in SOUL.md.
+6. Register the class in `src/ira/pantheon.py` → `_AGENT_CLASSES`.
+7. Add the agent to the table in this file and in `prompts/athena_system.txt`.
+8. Write tests in `tests/test_agents.py`.
+
+## Database Migrations
+
+After changing models in `src/ira/data/crm.py` or `src/ira/data/quotes.py`:
+
+```bash
+alembic revision --autogenerate -m "description of change"
+alembic upgrade head
+```
+
+## Infrastructure
+
+| Service | Image | Port | Purpose |
+|:--------|:------|:-----|:--------|
+| Qdrant | `qdrant/qdrant:latest` | 6333 | Vector DB for document embeddings |
+| Neo4j | `neo4j:5.15.0-community` | 7474/7687 | Knowledge graph |
+| PostgreSQL | `postgres:16` | 5432 | CRM relational data |
+
+Local dev: `docker-compose.local.yml`. All config comes from `.env`.
+
+## API Endpoints
+
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/deep-health` | Detailed service health |
+| POST | `/api/query` | Send a message to Ira |
+| POST | `/api/feedback` | Submit a correction |
+| POST | `/api/ingest` | Ingest a document |
+| POST | `/api/board-meeting` | Trigger a board meeting |
+| GET | `/api/pipeline` | Sales pipeline summary |
+| GET | `/api/agents` | List agents and status |
+| GET | `/api/dream-report` | Latest dream cycle report |
+| POST | `/api/email/draft` | Draft an email |
+
+## Important Rules
+
+- **Never fabricate Ira's responses.** When testing via the API, always use
+  real curl output. Do not invent answers.
+- **Never commit `.env` or credentials.** Use `.env.example` for templates.
+- **Keep agents bounded.** If a new capability overlaps with an existing
+  agent, extend that agent. Do not create overlapping agents.
+- **No heavy frameworks.** No LangChain, LlamaIndex, or CrewAI. Raw httpx
+  for LLM calls, custom ReAct loop, custom retrieval.
+- **Prompts are config.** System prompts live in `prompts/`, not in Python
+  source. Use `load_prompt()`.
+- **The body metaphor is real.** Body systems enforce separation of concerns.
+  Don't merge them. If something doesn't fit, create a new system.

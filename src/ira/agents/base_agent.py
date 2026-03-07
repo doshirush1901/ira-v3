@@ -10,6 +10,7 @@ and an opt-in ReAct (Reason-Act-Observe) loop for agentic tool use.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -23,7 +24,7 @@ from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.exceptions import IraError, ToolExecutionError
 from ira.message_bus import MessageBus
-from ira.prompt_loader import load_prompt
+from ira.prompt_loader import load_prompt, load_soul_preamble
 from ira.skills import SKILL_MATRIX
 from ira.service_keys import ServiceKey as SK
 from ira.skills.handlers import use_skill as _use_skill
@@ -408,6 +409,10 @@ class BaseAgent(ABC):
             f"{self.description}"
         )
 
+        soul = load_soul_preamble()
+        if soul:
+            agent_prompt = f"{soul}\n\n{agent_prompt}"
+
         scratchpad: list[dict[str, str]] = []
         self.state = AgentState.THINKING
 
@@ -466,7 +471,44 @@ class BaseAgent(ABC):
 
     # ── LLM access ───────────────────────────────────────────────────────
 
+    _LLM_CACHE_TTL = 3600
+
+    def _llm_cache_key(self, system_prompt: str, user_message: str, temperature: float) -> str:
+        """Deterministic hash for caching LLM responses."""
+        raw = f"{self.name}:{temperature:.2f}:{system_prompt[:500]}:{user_message[:2000]}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
     async def call_llm(
+        self,
+        system_prompt: str,
+        user_message: str,
+        *,
+        temperature: float = 0.3,
+    ) -> str:
+        """Call the primary LLM provider; fall back to the other on failure."""
+        redis = self._services.get(SK.REDIS)
+        cache_key = self._llm_cache_key(system_prompt, user_message, temperature)
+
+        if redis is not None and temperature <= 0.3:
+            try:
+                cached = await redis.get_llm_cache(cache_key)
+                if cached is not None:
+                    logger.debug("LLM cache hit for %s (key=%s)", self.name, cache_key[:8])
+                    return cached
+            except Exception:
+                pass
+
+        result = await self._call_llm_uncached(system_prompt, user_message, temperature=temperature)
+
+        if redis is not None and temperature <= 0.3 and not result.startswith("("):
+            try:
+                await redis.set_llm_cache(cache_key, result, self._LLM_CACHE_TTL)
+            except Exception:
+                pass
+
+        return result
+
+    async def _call_llm_uncached(
         self,
         system_prompt: str,
         user_message: str,
