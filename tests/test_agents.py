@@ -788,3 +788,113 @@ class TestBoardMeetingSystem:
 
         assert "error" in minutes.contributions["clio"].lower()
         assert minutes.contributions["plutus"] == "plutus: ok"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Quotebuilder auto-deal creation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestQuotebuilderAutoDeal:
+    """Verify that build_quote() and build_multi_machine_quote() create CRM deals."""
+
+    @pytest.fixture(autouse=True)
+    def _patch(self, mock_settings, mock_retriever, bus):
+        self.retriever = mock_retriever
+        self.bus = bus
+
+    def _mock_llm(self, response_text: str = "agent response"):
+        mock_client = _mock_llm_client_with_responses([response_text])
+        return patch("ira.agents.base_agent.get_llm_client", return_value=mock_client)
+
+    async def test_build_quote_creates_deal(self):
+        from ira.agents.quotebuilder import Quotebuilder
+
+        mock_crm = AsyncMock()
+        mock_crm.search_contacts = AsyncMock(return_value=[
+            {"id": "contact-001", "name": "Acme Corp"},
+        ])
+        mock_crm.get_deals_for_contact = AsyncMock(return_value=[])
+        mock_crm.create_deal = AsyncMock()
+
+        with self._mock_llm("Quote MT2025030801 for PF1-C"):
+            agent = Quotebuilder(retriever=self.retriever, bus=self.bus)
+            agent._services["crm"] = mock_crm
+            result = await agent.build_quote("Acme Corp", "PF1-C", {})
+
+        assert isinstance(result, str)
+        mock_crm.create_deal.assert_awaited_once()
+        call_kwargs = mock_crm.create_deal.call_args.kwargs
+        assert call_kwargs["contact_id"] == "contact-001"
+        assert call_kwargs["machine_model"] == "PF1-C"
+        assert "PROPOSAL" in str(call_kwargs["stage"])
+
+    async def test_build_quote_skips_deal_when_no_contact(self):
+        from ira.agents.quotebuilder import Quotebuilder
+
+        mock_crm = AsyncMock()
+        mock_crm.search_contacts = AsyncMock(return_value=[])
+
+        with self._mock_llm("Quote for unknown customer"):
+            agent = Quotebuilder(retriever=self.retriever, bus=self.bus)
+            agent._services["crm"] = mock_crm
+            result = await agent.build_quote("Unknown Co", "PF1-C", {})
+
+        assert isinstance(result, str)
+        mock_crm.create_deal.assert_not_awaited()
+
+    async def test_build_quote_skips_duplicate_deal(self):
+        from ira.agents.quotebuilder import Quotebuilder
+
+        mock_crm = AsyncMock()
+        mock_crm.search_contacts = AsyncMock(return_value=[
+            {"id": "contact-001", "name": "Acme Corp"},
+        ])
+        mock_crm.get_deals_for_contact = AsyncMock(return_value=[
+            {"machine_model": "PF1-C", "stage": "PROPOSAL"},
+        ])
+
+        with self._mock_llm("Quote for existing deal"):
+            agent = Quotebuilder(retriever=self.retriever, bus=self.bus)
+            agent._services["crm"] = mock_crm
+            result = await agent.build_quote("Acme Corp", "PF1-C", {})
+
+        assert isinstance(result, str)
+        mock_crm.create_deal.assert_not_awaited()
+
+    async def test_build_multi_machine_quote_creates_deal(self):
+        from ira.agents.quotebuilder import Quotebuilder
+
+        mock_crm = AsyncMock()
+        mock_crm.search_contacts = AsyncMock(return_value=[
+            {"id": "contact-002", "name": "Beta Inc"},
+        ])
+        mock_crm.get_deals_for_contact = AsyncMock(return_value=[])
+        mock_crm.create_deal = AsyncMock()
+
+        with self._mock_llm("Multi-machine quote"):
+            agent = Quotebuilder(retriever=self.retriever, bus=self.bus)
+            agent._services["crm"] = mock_crm
+            result = await agent.build_multi_machine_quote(
+                "Beta Inc", ["PF1-C", "AM-200"], {},
+            )
+
+        assert isinstance(result, str)
+        mock_crm.create_deal.assert_awaited_once()
+        call_kwargs = mock_crm.create_deal.call_args.kwargs
+        assert call_kwargs["contact_id"] == "contact-002"
+        assert call_kwargs["machine_model"] == "PF1-C"
+
+    async def test_crm_failure_does_not_block_quote(self):
+        from ira.agents.quotebuilder import Quotebuilder
+
+        mock_crm = AsyncMock()
+        mock_crm.search_contacts = AsyncMock(side_effect=RuntimeError("DB down"))
+
+        with self._mock_llm("Quote despite CRM failure"):
+            agent = Quotebuilder(retriever=self.retriever, bus=self.bus)
+            agent._services["crm"] = mock_crm
+            result = await agent.build_quote("Acme Corp", "PF1-C", {})
+
+        assert isinstance(result, str)
+        assert len(result) > 0

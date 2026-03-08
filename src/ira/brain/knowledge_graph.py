@@ -166,6 +166,9 @@ class KnowledgeGraph:
     ) -> None:
         async with self._driver.session() as session:
             await session.execute_write(self._merge_machine, model, category, description)
+        await self._emit("machine", model, {
+            "model": model, "category": category, "description": description,
+        })
 
     @staticmethod
     async def _merge_machine(tx: Any, model: str, category: str, description: str) -> None:

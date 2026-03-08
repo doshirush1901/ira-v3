@@ -982,6 +982,45 @@ class TestServerEndpoints:
 
         assert resp.status_code == 503
 
+    async def test_ingest_saves_to_imports_and_triggers_index(self, server_app, tmp_path):
+        from pathlib import Path as RealPath
+
+        app, services = server_app
+        digestive = AsyncMock()
+        digestive.ingest = AsyncMock(return_value={
+            "chunks_created": 3,
+            "entities_found": {"companies": 1},
+        })
+        services["digestive"] = digestive
+
+        imports_dir = tmp_path / "imports"
+        imports_dir.mkdir()
+
+        original_path = RealPath
+
+        def patched_path(arg):
+            if arg == "data/imports":
+                return imports_dir
+            return original_path(arg)
+
+        with patch("ira.interfaces.server.Path", side_effect=patched_path), \
+             patch("ira.interfaces.server.asyncio.create_task") as mock_create_task:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test",
+            ) as client:
+                resp = await client.post(
+                    "/api/ingest",
+                    files={"file": ("test_doc.txt", b"Hello world content", "text/plain")},
+                )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["filename"] == "test_doc.txt"
+        assert data["chunks_created"] == 3
+        digestive.ingest.assert_awaited_once()
+        assert (imports_dir / "test_doc.txt").exists()
+        mock_create_task.assert_called_once()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Dashboard

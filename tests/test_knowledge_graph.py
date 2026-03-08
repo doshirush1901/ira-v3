@@ -256,6 +256,32 @@ class TestFindRelatedEntities:
 # ── close ─────────────────────────────────────────────────────────────────
 
 
+class TestAddMachineEmitsEvent:
+    """Verify that add_machine() emits an ENTITY_ADDED event via the DataEventBus."""
+
+    async def test_add_machine_emits_entity_added(self, kg, mock_driver):
+        mock_bus = AsyncMock()
+        mock_bus.emit = AsyncMock()
+        kg.set_event_bus(mock_bus)
+
+        await kg.add_machine(model="PF1-C", category="Packaging", description="Compact line")
+
+        mock_bus.emit.assert_awaited_once()
+        event = mock_bus.emit.call_args[0][0]
+        assert event.event_type.value == "entity_added"
+        assert event.entity_type == "machine"
+        assert event.entity_id == "PF1-C"
+        assert event.payload["model"] == "PF1-C"
+        assert event.payload["category"] == "Packaging"
+        assert event.source_store.value == "neo4j"
+
+    async def test_add_machine_works_without_event_bus(self, kg, mock_driver):
+        """add_machine() should succeed even when no event bus is configured."""
+        await kg.add_machine(model="AM-200", category="Assembly")
+        _, session = mock_driver
+        session.execute_write.assert_awaited_once()
+
+
 class TestClose:
     async def test_close_calls_driver_close(self, kg, mock_driver):
         driver, _ = mock_driver

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.data.models import DealStage
 from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 from ira.service_keys import ServiceKey as SK
@@ -211,6 +212,7 @@ class Quotebuilder(BaseAgent):
 
         result = await self.call_llm(_SYSTEM_PROMPT, prompt)
         logger.info("Quote %s generated for %s / %s", quote_id, customer, machine_model)
+        await self._create_deal_from_quote(quote_id, customer, machine_model)
         return result
 
     async def build_multi_machine_quote(
@@ -273,7 +275,56 @@ class Quotebuilder(BaseAgent):
             "Multi-machine quote %s generated for %s (%d machines)",
             quote_id, customer, len(machines),
         )
+        primary_model = machines[0] if machines else ""
+        await self._create_deal_from_quote(quote_id, customer, primary_model)
         return result
+
+    # ── auto-deal creation ──────────────────────────────────────────────────
+
+    async def _create_deal_from_quote(
+        self,
+        quote_id: str,
+        customer: str,
+        machine_model: str,
+    ) -> None:
+        """Create a CRM deal when a quote is generated, if a matching contact exists."""
+        crm = self._services.get(SK.CRM)
+        if crm is None:
+            return
+
+        try:
+            contacts = await crm.search_contacts(customer)
+            if not contacts:
+                logger.info("No CRM contact found for '%s' — skipping deal creation", customer)
+                return
+
+            contact = contacts[0]
+            contact_id = contact["id"]
+
+            existing_deals = await crm.get_deals_for_contact(contact_id)
+            if any(
+                d.get("machine_model", "").lower() == machine_model.lower()
+                and d.get("stage") not in ("WON", "LOST")
+                for d in existing_deals
+                if machine_model
+            ):
+                logger.info("Active deal already exists for %s / %s — skipping", customer, machine_model)
+                return
+
+            from decimal import Decimal
+
+            await crm.create_deal(
+                contact_id=contact_id,
+                title=f"Quote {quote_id} — {machine_model} for {customer}",
+                stage=DealStage.PROPOSAL,
+                machine_model=machine_model or None,
+                value=Decimal("0"),
+                notes=f"Auto-created from Quotebuilder quote {quote_id}",
+            )
+            logger.info("Created deal for quote %s (contact=%s)", quote_id, contact_id)
+
+        except Exception:
+            logger.warning("Auto-deal creation failed for quote %s", quote_id, exc_info=True)
 
     # ── PDF export ─────────────────────────────────────────────────────────
 
