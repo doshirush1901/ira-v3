@@ -187,6 +187,93 @@ class TestFaithfulnessCheck:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# HHEM integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestHHEM:
+    async def test_hhem_faithfulness_returns_dict_when_model_available(self):
+        """If HHEM loads, _hhem_faithfulness returns a proper result dict."""
+        from ira.brain.guardrails import _hhem_faithfulness
+
+        result = await _hhem_faithfulness(
+            "The PF1 machine has a cycle time of 12 seconds.",
+            ["The PF1 machine has a cycle time of 12 seconds and produces 300 cups per minute."],
+        )
+        if result is None:
+            pytest.skip("HHEM model not available in this environment")
+        assert "faithful" in result
+        assert "score" in result
+        assert 0.0 <= result["score"] <= 1.0
+        assert isinstance(result["unsupported_claims"], list)
+
+    async def test_hhem_faithfulness_empty_sentences(self):
+        """Short responses with no real sentences return faithful."""
+        from ira.brain.guardrails import _hhem_faithfulness
+
+        result = await _hhem_faithfulness("OK.", ["Some context here."])
+        if result is None:
+            pytest.skip("HHEM model not available in this environment")
+        assert result["faithful"] is True
+        assert result["score"] == 1.0
+
+    async def test_hhem_fallback_when_model_unavailable(self):
+        """check_faithfulness falls through to LLM/heuristic when HHEM is None."""
+        import ira.brain.guardrails as g
+
+        saved_model = g._hhem_model
+        saved_attempted = g._hhem_load_attempted
+        try:
+            g._hhem_model = None
+            g._hhem_load_attempted = True
+
+            mock_llm = MagicMock()
+            mock_llm.generate_structured = AsyncMock(
+                side_effect=Exception("LLM unavailable"),
+            )
+            with patch("ira.services.llm_client.get_llm_client", return_value=mock_llm):
+                result = await g.check_faithfulness(
+                    "The PF1 machine has a cycle time of 12 seconds.",
+                    ["The PF1 machine has a cycle time of 12 seconds."],
+                )
+            assert "score" in result
+            assert result["score"] >= 0.0
+        finally:
+            g._hhem_model = saved_model
+            g._hhem_load_attempted = saved_attempted
+
+    async def test_hhem_is_primary_scorer(self):
+        """When HHEM is available, it is used instead of LLM."""
+        import ira.brain.guardrails as g
+
+        mock_hhem_result = {
+            "faithful": True,
+            "unsupported_claims": [],
+            "score": 0.95,
+        }
+        with patch.object(g, "_hhem_faithfulness", new_callable=AsyncMock, return_value=mock_hhem_result):
+            result = await g.check_faithfulness(
+                "Some response text here.",
+                ["Some context document."],
+            )
+        assert result["score"] == 0.95
+
+    def test_get_hhem_caches_result(self):
+        """_get_hhem only attempts loading once."""
+        import ira.brain.guardrails as g
+
+        saved_model = g._hhem_model
+        saved_attempted = g._hhem_load_attempted
+        try:
+            g._hhem_model = "sentinel"
+            g._hhem_load_attempted = True
+            assert g._get_hhem() == "sentinel"
+        finally:
+            g._hhem_model = saved_model
+            g._hhem_load_attempted = saved_attempted
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Mnemon corrections
 # ═══════════════════════════════════════════════════════════════════════════════
 
