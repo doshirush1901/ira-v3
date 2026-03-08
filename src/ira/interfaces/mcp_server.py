@@ -20,16 +20,21 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from ira.pipeline_loop import AgentLoop, LoopDecision
+
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "ira",
     instructions=(
         "Ira is the AI that runs Machinecraft, an industrial machinery company. "
-        "Use these tools to search Ira's knowledge base, query the CRM, "
-        "get sales pipeline data, draft emails, and ingest documents."
+        "Use these tools to query Ira's 11-stage pipeline, search the knowledge base, "
+        "manage the CRM, search emails, access memory, explore the knowledge graph, "
+        "search the web, and interact with 24 specialist agents."
     ),
 )
+
+# ── Service globals (populated by _ensure_initialized) ──────────────────
 
 _pantheon: Any = None
 _shared_services: dict[str, Any] = {}
@@ -37,12 +42,23 @@ _pipeline: Any = None
 _retriever: Any = None
 _crm: Any = None
 _ingestor: Any = None
+_long_term_memory: Any = None
+_conversation_memory: Any = None
+_relationship_memory: Any = None
+_goal_manager: Any = None
+_knowledge_graph: Any = None
+_email_processor: Any = None
+_task_orchestrator: Any = None
+_agent_loop: AgentLoop | None = None
 _initialized = False
 
 
 async def _ensure_initialized() -> None:
     """Lazy-init the Ira subsystems on first tool call."""
-    global _pantheon, _shared_services, _pipeline, _retriever, _crm, _ingestor, _initialized
+    global _pantheon, _shared_services, _pipeline, _retriever, _crm, _ingestor  # noqa: PLW0603
+    global _long_term_memory, _conversation_memory, _relationship_memory  # noqa: PLW0603
+    global _goal_manager, _knowledge_graph, _email_processor  # noqa: PLW0603
+    global _task_orchestrator, _agent_loop, _initialized  # noqa: PLW0603
     if _initialized:
         return
 
@@ -55,12 +71,79 @@ async def _ensure_initialized() -> None:
 
     _pipeline, _ = await _build_pipeline(_pantheon, _shared_services)
 
+    # Memory services — pipeline stores these as instance attributes
+    _conversation_memory = getattr(_pipeline, "_conversation", None)
+    _relationship_memory = getattr(_pipeline, "_relationship", None)
+    _goal_manager = getattr(_pipeline, "_goals", None)
+
+    # Long-term memory is injected into agents, not stored on the pipeline
+    mnemosyne = _pantheon.get_agent("mnemosyne") if _pantheon else None
+    if mnemosyne and hasattr(mnemosyne, "_services"):
+        _long_term_memory = mnemosyne._services.get(SK.LONG_TERM_MEMORY)
+
+    # Knowledge graph
+    from ira.brain.knowledge_graph import KnowledgeGraph
+    _knowledge_graph = KnowledgeGraph()
+
+    # Ingestor
     digestive = _shared_services.get(SK.DIGESTIVE)
     if digestive and hasattr(digestive, "_ingestor"):
         _ingestor = digestive._ingestor
 
+    # Email processor (best-effort — requires Google credentials)
+    try:
+        from ira.interfaces.email_processor import EmailProcessor
+        from ira.systems.sensory import SensorySystem
+
+        graph = KnowledgeGraph()
+        sensory = SensorySystem(knowledge_graph=graph)
+        delphi = _pantheon.get_agent("delphi") if _pantheon else None
+        _email_processor = EmailProcessor(
+            delphi=delphi,
+            digestive=digestive,
+            sensory=sensory,
+            crm=_crm,
+            pantheon=_pantheon,
+        )
+    except Exception:
+        logger.info("Email processor not available for MCP — continuing without it")
+
+    # Task orchestrator (requires Redis for state persistence)
+    try:
+        from ira.systems.task_orchestrator import TaskOrchestrator
+
+        redis_cache = _shared_services.get(SK.REDIS_CACHE)
+        voice = _shared_services.get(SK.VOICE)
+        _task_orchestrator = TaskOrchestrator(
+            pantheon=_pantheon,
+            redis_cache=redis_cache,
+            voice=voice,
+        )
+    except Exception:
+        logger.info("Task orchestrator not available for MCP — continuing without it")
+
+    if _pantheon is not None:
+        _agent_loop = AgentLoop(_pantheon)
+
     _initialized = True
-    logger.info("Ira MCP server initialized")
+    logger.info("Ira MCP server initialized (%d tools registered)", len(mcp._tool_manager._tools))
+
+
+def _model_to_dict(obj: Any) -> dict[str, Any]:
+    """Convert a SQLAlchemy model or Pydantic model to a JSON-safe dict."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "__dict__"):
+        return {
+            k: v for k, v in obj.__dict__.items()
+            if not k.startswith("_")
+        }
+    return {"value": str(obj)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EXISTING TOOLS (Pipeline, Knowledge, CRM basics, Email draft, Ingest)
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 @mcp.tool()
@@ -270,6 +353,7 @@ async def ask_agent(agent_name: str, question: str) -> str:
 
     Available agents include: athena, clio, prometheus, hephaestus,
     plutus, calliope, vera, hermes, atlas, quotebuilder, and others.
+    Use get_agent_list to see all available agents.
     """
     await _ensure_initialized()
     if _pantheon is None:
@@ -283,6 +367,615 @@ async def ask_agent(agent_name: str, question: str) -> str:
     except Exception as exc:
         logger.exception("MCP ask_agent failed")
         return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EMAIL TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def search_emails(
+    from_address: str = "",
+    subject: str = "",
+    query: str = "",
+    after: str = "",
+    before: str = "",
+    max_results: int = 10,
+) -> str:
+    """Search Machinecraft's Gmail inbox.
+
+    Filter by sender address, subject keywords, free-form query,
+    and date range (YYYY/MM/DD format). Returns matching emails
+    with id, from, to, subject, date, and thread_id.
+    """
+    await _ensure_initialized()
+    if _email_processor is None:
+        return "Email processor not available."
+
+    try:
+        emails = await _email_processor.search_emails(
+            from_address=from_address,
+            subject=subject,
+            query=query,
+            after=after,
+            before=before,
+            max_results=max_results,
+        )
+        return json.dumps(
+            [e.model_dump() for e in emails],
+            indent=2,
+            default=str,
+        )
+    except Exception as exc:
+        logger.exception("MCP search_emails failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def read_email_thread(thread_id: str) -> str:
+    """Fetch the full email thread by Gmail thread ID.
+
+    Returns all messages in the thread with sender, recipient,
+    subject, body, and timestamps.
+    """
+    await _ensure_initialized()
+    if _email_processor is None:
+        return "Email processor not available."
+
+    try:
+        emails = await _email_processor.get_thread(thread_id)
+        return json.dumps(
+            {
+                "thread_id": thread_id,
+                "message_count": len(emails),
+                "messages": [e.model_dump() for e in emails],
+            },
+            indent=2,
+            default=str,
+        )
+    except Exception as exc:
+        logger.exception("MCP read_email_thread failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MEMORY TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def recall_memory(query: str, user_id: str = "global", limit: int = 5) -> str:
+    """Search Ira's long-term semantic memory (Mem0).
+
+    Returns relevant memories with content, score, and metadata.
+    Use for recalling facts, preferences, and learned information.
+    """
+    await _ensure_initialized()
+    if _long_term_memory is None:
+        return "Long-term memory not available."
+
+    try:
+        results = await _long_term_memory.search(query, user_id=user_id, limit=limit)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP recall_memory failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def store_memory(content: str, user_id: str = "global", metadata: str = "") -> str:
+    """Store a fact or learning in Ira's long-term memory.
+
+    Provide the content to remember and an optional metadata JSON string
+    (e.g. '{"source": "meeting", "topic": "pricing"}').
+    """
+    await _ensure_initialized()
+    if _long_term_memory is None:
+        return "Long-term memory not available."
+
+    try:
+        meta = json.loads(metadata) if metadata else None
+        result = await _long_term_memory.store(content, user_id=user_id, metadata=meta)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP store_memory failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def get_conversation_history(
+    user_id: str,
+    channel: str = "mcp",
+    limit: int = 20,
+) -> str:
+    """Retrieve recent conversation history for a user.
+
+    Returns the last N messages with role, content, and timestamp.
+    """
+    await _ensure_initialized()
+    if _conversation_memory is None:
+        return "Conversation memory not available."
+
+    try:
+        history = await _conversation_memory.get_history(user_id, channel, limit=limit)
+        return json.dumps(history, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP get_conversation_history failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def check_relationship(contact_name: str) -> str:
+    """Look up Ira's relationship profile with a contact.
+
+    Returns warmth level, interaction count, memorable moments,
+    learned preferences, and interaction dates.
+    """
+    await _ensure_initialized()
+    if _relationship_memory is None:
+        return "Relationship memory not available."
+
+    try:
+        rel = await _relationship_memory.get_relationship(contact_name)
+        return json.dumps(_model_to_dict(rel), indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP check_relationship failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def check_goals(contact_name: str) -> str:
+    """Check active goals for a contact (e.g. quote follow-up, onboarding).
+
+    Returns goal type, status, required slots, and progress.
+    """
+    await _ensure_initialized()
+    if _goal_manager is None:
+        return "Goal manager not available."
+
+    try:
+        goal = await _goal_manager.get_active_goal(contact_name)
+        if goal is None:
+            return json.dumps({"contact": contact_name, "active_goal": None})
+        return json.dumps(_model_to_dict(goal), indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP check_goals failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CRM OPERATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def get_deal(deal_id: str) -> str:
+    """Get a specific CRM deal by its ID.
+
+    Returns deal title, value, stage, machine model, contact,
+    expected close date, and notes.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        deal = await _crm.get_deal(deal_id)
+        if deal is None:
+            return f"Deal '{deal_id}' not found."
+        return json.dumps(_model_to_dict(deal), indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP get_deal failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def list_deals(
+    stage: str = "",
+    contact_id: str = "",
+    limit: int = 20,
+) -> str:
+    """List CRM deals with optional filters.
+
+    Filter by stage (e.g. 'new', 'proposal', 'negotiation', 'won', 'lost')
+    and/or contact_id. Returns up to `limit` deals.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        filters: dict[str, Any] = {}
+        if stage:
+            filters["stage"] = stage
+        if contact_id:
+            filters["contact_id"] = contact_id
+        deals = await _crm.list_deals(filters=filters if filters else None)
+        result = [_model_to_dict(d) for d in deals[:limit]]
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP list_deals failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def create_contact(
+    name: str,
+    email: str,
+    company_name: str = "",
+    role: str = "",
+) -> str:
+    """Create a new contact in the Machinecraft CRM.
+
+    Returns the created contact record with its assigned ID.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        kwargs: dict[str, Any] = {"name": name, "email": email}
+        if company_name:
+            kwargs["company_name"] = company_name
+        if role:
+            kwargs["role"] = role
+        contact = await _crm.create_contact(**kwargs)
+        return json.dumps(_model_to_dict(contact), indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP create_contact failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def update_deal(
+    deal_id: str,
+    stage: str = "",
+    value: str = "",
+    notes: str = "",
+) -> str:
+    """Update an existing CRM deal.
+
+    Provide the deal_id and any fields to update: stage, value, or notes.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        kwargs: dict[str, Any] = {}
+        if stage:
+            kwargs["stage"] = stage
+        if value:
+            kwargs["value"] = value
+        if notes:
+            kwargs["notes"] = notes
+        if not kwargs:
+            return "No fields to update. Provide at least one of: stage, value, notes."
+        deal = await _crm.update_deal(deal_id, **kwargs)
+        if deal is None:
+            return f"Deal '{deal_id}' not found."
+        return json.dumps(_model_to_dict(deal), indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP update_deal failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def get_stale_leads(days: int = 14) -> str:
+    """Find CRM leads with no activity in the specified number of days.
+
+    Returns contacts that need follow-up attention.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        leads = await _crm.get_stale_leads(days=days)
+        return json.dumps(leads, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP get_stale_leads failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# KNOWLEDGE GRAPH TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def find_related_entities(name: str, max_hops: int = 2) -> str:
+    """Explore the Neo4j knowledge graph around an entity.
+
+    Returns nodes and relationships within max_hops of the named entity
+    (person, company, machine, quote). Useful for understanding connections.
+    """
+    await _ensure_initialized()
+    if _knowledge_graph is None:
+        return "Knowledge graph not available."
+
+    try:
+        result = await _knowledge_graph.find_related_entities(name, max_hops=max_hops)
+        return json.dumps(result, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP find_related_entities failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def find_company_contacts(company_name: str) -> str:
+    """Find all contacts associated with a company in the knowledge graph.
+
+    Returns names, emails, and roles of people linked to the company.
+    """
+    await _ensure_initialized()
+    if _knowledge_graph is None:
+        return "Knowledge graph not available."
+
+    try:
+        contacts = await _knowledge_graph.find_company_contacts(company_name)
+        return json.dumps(contacts, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP find_company_contacts failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def find_company_quotes(company_name: str) -> str:
+    """Find all quotes associated with a company in the knowledge graph.
+
+    Returns quote IDs, values, dates, statuses, and machine models.
+    """
+    await _ensure_initialized()
+    if _knowledge_graph is None:
+        return "Knowledge graph not available."
+
+    try:
+        quotes = await _knowledge_graph.find_company_quotes(company_name)
+        return json.dumps(quotes, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP find_company_quotes failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WEB TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def web_search(query: str) -> str:
+    """Search the web for real-time information via Ira's Iris agent.
+
+    Returns titles, URLs, and snippets from search results.
+    Uses Tavily, Serper, or SearchAPI (whichever is configured).
+    """
+    await _ensure_initialized()
+    if _pantheon is None:
+        return "Pantheon not available."
+
+    try:
+        iris = _pantheon.get_agent("iris")
+        if iris is None:
+            return "Iris agent not found."
+        results = await iris.web_search(query, max_results=5)
+        return json.dumps(results, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP web_search failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def scrape_url(url: str) -> str:
+    """Fetch a web page and return its content as clean markdown.
+
+    Uses Crawl4AI to extract readable content from the URL.
+    Useful for reading full articles after a web_search.
+    """
+    await _ensure_initialized()
+    if _pantheon is None:
+        return "Pantheon not available."
+
+    try:
+        iris = _pantheon.get_agent("iris")
+        if iris is None:
+            return "Iris agent not found."
+        return await iris.scrape_url(url)
+    except Exception as exc:
+        logger.exception("MCP scrape_url failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROJECT TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def get_project_status(project_name: str) -> str:
+    """Get the status of a Machinecraft project via the Atlas agent.
+
+    Returns project timeline, milestones, and current status.
+    """
+    await _ensure_initialized()
+    if _pantheon is None:
+        return "Pantheon not available."
+
+    try:
+        atlas = _pantheon.get_agent("atlas")
+        if atlas is None:
+            return "Atlas agent not found."
+        return await atlas.handle(f"What is the current status of the {project_name} project?")
+    except Exception as exc:
+        logger.exception("MCP get_project_status failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def get_overdue_milestones() -> str:
+    """List all overdue project milestones via the Atlas agent.
+
+    Returns projects and milestones that are past their due dates.
+    """
+    await _ensure_initialized()
+    if _pantheon is None:
+        return "Pantheon not available."
+
+    try:
+        atlas = _pantheon.get_agent("atlas")
+        if atlas is None:
+            return "Atlas agent not found."
+        return await atlas.handle("List all overdue project milestones.")
+    except Exception as exc:
+        logger.exception("MCP get_overdue_milestones failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AGENT LOOP TOOLS (Plan → Execute → Observe → Compile)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def plan_task(request: str, complexity: str = "auto") -> str:
+    """Analyze a user request and create a structured multi-phase execution plan.
+
+    Breaks down a complex request into phases, each mapped to the
+    appropriate specialist agents. Use this for research, analysis,
+    proposals, and reports that require multiple agents.
+
+    Args:
+        request: The user's natural language request.
+        complexity: One of 'simple', 'moderate', 'complex', or 'auto'.
+    """
+    await _ensure_initialized()
+    if _agent_loop is None:
+        return json.dumps({"error": "Agent loop not available"})
+
+    try:
+        plan = await _agent_loop.plan(request, complexity=complexity)
+        return json.dumps({
+            "plan_id": plan.plan_id,
+            "goal": plan.goal,
+            "complexity": plan.complexity,
+            "phases": [
+                {
+                    "id": p.id,
+                    "title": p.title,
+                    "description": p.description,
+                    "agents": p.agents,
+                    "delegation_type": p.delegation_type,
+                    "expected_output": p.expected_output,
+                    "depends_on": p.depends_on,
+                }
+                for p in plan.phases
+            ],
+            "status": plan.status,
+        }, indent=2)
+    except Exception as exc:
+        logger.exception("plan_task failed")
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def execute_phase(plan_id: str, phase_id: int) -> str:
+    """Execute a specific phase of an existing plan.
+
+    Runs the agents assigned to this phase, collects their responses,
+    and lets Athena decide whether to continue, re-plan, or request
+    clarification.
+
+    Args:
+        plan_id: The ID returned by plan_task.
+        phase_id: The phase number to execute (1-indexed).
+    """
+    await _ensure_initialized()
+    if _agent_loop is None:
+        return json.dumps({"error": "Agent loop not available"})
+
+    plan = _agent_loop._plans.get(plan_id)
+    if plan is None:
+        return json.dumps({"error": f"Plan '{plan_id}' not found. Call plan_task first."})
+
+    phase = next((p for p in plan.phases if p.id == phase_id), None)
+    if phase is None:
+        return json.dumps({"error": f"Phase {phase_id} not found in plan."})
+
+    try:
+        result = await _agent_loop.execute_phase(plan, phase)
+
+        if result.decision == LoopDecision.REPLAN:
+            await _agent_loop.replan(plan, result)
+
+        output = {
+            "plan_id": plan_id,
+            "phase_id": phase_id,
+            "phase_title": phase.title,
+            "agents_consulted": list(result.agent_responses.keys()),
+            "results": result.agent_responses,
+            "decision": result.decision.value,
+            "decision_reason": result.decision_reason,
+            "is_final_phase": plan.is_complete,
+            "status": plan.status,
+        }
+        if result.clarification_question:
+            output["clarification_question"] = result.clarification_question
+
+        return json.dumps(output, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("execute_phase failed")
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def generate_report(
+    plan_id: str,
+    title: str = "Ira Report",
+) -> str:
+    """Compile all phase results from a completed plan into a structured report.
+
+    Uses Calliope (Chief Writer) to synthesize findings from all phases
+    into a professional document. Call this after all phases are executed.
+
+    Args:
+        plan_id: The plan whose results should be compiled.
+        title: Title for the report.
+    """
+    await _ensure_initialized()
+    if _agent_loop is None:
+        return json.dumps({"error": "Agent loop not available"})
+
+    plan = _agent_loop._plans.get(plan_id)
+    if plan is None:
+        return json.dumps({"error": f"Plan '{plan_id}' not found."})
+
+    try:
+        report_content = await _agent_loop.compile(plan, title=title)
+
+        from pathlib import Path
+        from datetime import datetime
+
+        report_dir = Path("reports")
+        report_dir.mkdir(exist_ok=True)
+        slug = title.lower().replace(" ", "_")[:40]
+        md_path = report_dir / f"{slug}_{datetime.now().strftime('%Y%m%d')}.md"
+        md_path.write_text(report_content, encoding="utf-8")
+
+        return json.dumps({
+            "format": "markdown",
+            "path": str(md_path),
+            "content_preview": report_content[:500],
+            "full_content": report_content,
+        }, indent=2)
+    except Exception as exc:
+        logger.exception("generate_report failed")
+        return json.dumps({"error": str(exc)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 def main() -> None:

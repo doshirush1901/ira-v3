@@ -845,6 +845,263 @@ def email_sync(
     _run(_sync())
 
 
+@email_app.command("rescan")
+def email_rescan(
+    after: str = typer.Option("2023/03/08", "--after", help="Start date YYYY/MM/DD (inclusive)."),
+    before: str = typer.Option("2026/03/08", "--before", help="End date YYYY/MM/DD (exclusive)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify but don't write to CRM/Qdrant."),
+    resume: bool = typer.Option(False, "--resume", help="Resume from last checkpoint."),
+    throttle: float = typer.Option(0.1, "--throttle", help="Seconds between message fetches."),
+    skip_crm: bool = typer.Option(False, "--skip-crm-populate", help="Skip the CRM population phase."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Deep-scan historical Gmail and build sales intelligence.
+
+    Scans your entire mailbox within the date range, digests every
+    business-relevant email through the full pipeline (Delphi
+    classification, DigestiveSystem protein extraction, Neo4j entity
+    graph, CRM contact/deal creation), then runs CRM population to
+    classify all discovered contacts.
+
+    Phase 1: Deep email scan (fetch, classify, digest, CRM interactions)
+    Phase 2: CRM population (classify contacts, insert eligible ones)
+    Phase 3: Summary report
+
+    Examples::
+
+        ira email rescan --after 2023/01/01 --before 2026/03/08
+        ira email rescan --dry-run --after 2024/01/01
+        ira email rescan --resume
+    """
+    _configure_logging(verbose)
+
+    pantheon, shared = _build_pantheon()
+    digestive, _ingestor, _qdrant = _build_digestive()
+    email_proc = _build_email_processor(pantheon, digestive, shared)
+
+    async def _rescan() -> None:
+        crm = shared[SK.CRM]
+        await crm.create_tables()
+
+        console.print(Panel(
+            f"[bold]Date range:[/bold]  {after} → {before}\n"
+            f"[bold]Mode:[/bold]        {'[yellow]DRY RUN[/yellow]' if dry_run else '[green]LIVE[/green]'}\n"
+            f"[bold]Resume:[/bold]      {'yes' if resume else 'no'}\n"
+            f"[bold]Throttle:[/bold]    {throttle}s between messages\n"
+            f"[bold]CRM populate:[/bold] {'skip' if skip_crm else 'yes'}",
+            title="Deep Mailbox Rescan",
+            border_style="blue",
+        ))
+
+        # Phase 1: Deep email scan
+        console.print("\n[bold cyan]Phase 1:[/bold cyan] Scanning and digesting emails...")
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=err_console,
+        ) as progress:
+            task = progress.add_task(
+                "[bold green]Scanning mailbox...", total=None,
+            )
+
+            def on_progress(processed: int, total: int, stats: dict) -> None:
+                if progress.tasks[task].total is None and total > 0:
+                    progress.update(task, total=total)
+                progress.update(
+                    task,
+                    completed=processed,
+                    description=(
+                        f"[bold green]{processed}/{total} "
+                        f"| in:{stats.get('inbound_emails', 0)} "
+                        f"out:{stats.get('outbound_emails', 0)} "
+                        f"| contacts:{stats.get('contacts_found', 0)} "
+                        f"deals:{stats.get('deals_created', 0)} "
+                        f"proposals:{stats.get('proposal_signals', 0)} "
+                        f"err:{stats.get('errors', 0)}"
+                    ),
+                )
+
+            scan_stats = await email_proc.deep_scan(
+                after=after,
+                before=before,
+                throttle=throttle,
+                resume=resume,
+                dry_run=dry_run,
+                progress_callback=on_progress,
+            )
+
+        scan_table = Table(title="Phase 1: Email Scan Results")
+        scan_table.add_column("Metric", style="cyan")
+        scan_table.add_column("Count", justify="right", style="green")
+
+        scan_table.add_row("Messages listed", str(scan_stats.get("total_listed", 0)))
+        scan_table.add_row("Fetched", str(scan_stats.get("fetched", 0)))
+        scan_table.add_row("Processed", str(scan_stats.get("processed", 0)))
+        scan_table.add_row("  ↳ Inbound", str(scan_stats.get("inbound_emails", 0)))
+        scan_table.add_row("  ↳ Outbound", str(scan_stats.get("outbound_emails", 0)))
+        scan_table.add_row("  ↳ Proposal signals", str(scan_stats.get("proposal_signals", 0)))
+        scan_table.add_row("Skipped (duplicate)", str(scan_stats.get("skipped_duplicate", 0)))
+        scan_table.add_row("Skipped (non-business)", str(scan_stats.get("skipped_non_business", 0)))
+        scan_table.add_row("Contacts found", str(scan_stats.get("contacts_found", 0)))
+        scan_table.add_row("Deals created", str(scan_stats.get("deals_created", 0)))
+        scan_table.add_row("[yellow]Unanswered inbound threads[/yellow]",
+                           str(scan_stats.get("unanswered_inbound_threads", 0)))
+        scan_table.add_row("Errors", str(scan_stats.get("errors", 0)))
+        console.print(scan_table)
+
+        # Phase 2: CRM population
+        pop_stats: dict[str, Any] = {}
+        if not skip_crm:
+            console.print("\n[bold cyan]Phase 2:[/bold cyan] Classifying and populating CRM contacts...")
+
+            from ira.brain.embeddings import EmbeddingService
+            from ira.brain.knowledge_graph import KnowledgeGraph
+            from ira.brain.qdrant_manager import QdrantManager
+            from ira.brain.retriever import UnifiedRetriever
+            from ira.message_bus import MessageBus
+            from ira.systems.crm_populator import CRMPopulator
+
+            embedding = EmbeddingService()
+            qdrant_mgr = QdrantManager(embedding_service=embedding)
+            graph = KnowledgeGraph()
+            retriever = UnifiedRetriever(qdrant=qdrant_mgr, graph=graph)
+            bus = MessageBus()
+
+            from ira.agents.delphi import Delphi
+            delphi = Delphi(retriever=retriever, bus=bus)
+
+            populator = CRMPopulator(delphi=delphi, crm=crm, dry_run=dry_run)
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold green]Classifying contacts..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("populate", total=None)
+                pop_result = await populator.populate(
+                    sources=["gmail", "kb", "neo4j"],
+                    after=after,
+                    before=before,
+                )
+
+            pop_stats = pop_result["stats"]
+            pop_table = Table(title="Phase 2: CRM Population Results")
+            pop_table.add_column("Metric", style="cyan")
+            pop_table.add_column("Count", justify="right", style="green")
+
+            pop_table.add_row("Total extracted", str(pop_stats["total_extracted"]))
+            pop_table.add_row("Classified", str(pop_stats["classified"]))
+            pop_table.add_row("Inserted into CRM", str(pop_stats["inserted"]))
+            pop_table.add_row("Skipped (duplicate)", str(pop_stats["skipped_duplicate"]))
+            pop_table.add_row("Skipped (rejected)", str(pop_stats["skipped_rejected"]))
+            pop_table.add_row("Errors", str(pop_stats["errors"]))
+            console.print(pop_table)
+
+        # Phase 3: Sales intelligence report (4 categories)
+        if not dry_run:
+            console.print("\n[bold cyan]Phase 3:[/bold cyan] Generating sales intelligence report...")
+
+            unanswered = scan_stats.get("unanswered_inbound_threads", 0)
+            proposals = scan_stats.get("proposal_signals", 0)
+
+            report_queries = [
+                (
+                    "Customer Journey Map",
+                    "Search the CRM and knowledge base for all LIVE_CUSTOMER contacts. "
+                    "For each customer, report: (1) company name and contact person, "
+                    "(2) how the relationship started — first email interaction and what "
+                    "it was about, (3) the conversation timeline — key milestones from "
+                    "first contact to purchase, (4) which Machinecraft machine(s) they "
+                    "bought (model, specs), (5) deal value and currency. "
+                    "Present as a structured list per customer.",
+                ),
+                (
+                    "Delivered Machines & Open Issues",
+                    "Search the CRM and knowledge base for customers whose machines have "
+                    "been delivered or are marked as WON deals. For each, report: "
+                    "(1) company name, (2) machine model and technical specs, "
+                    "(3) delivery date or expected delivery, (4) price/deal value, "
+                    "(5) any open support issues, complaints, or pending punch list items "
+                    "from email threads. Flag any customer with unresolved issues.",
+                ),
+                (
+                    "Hot Sales Leads (Quotes Sent)",
+                    f"We found {proposals} emails with proposal/quote signals during the scan. "
+                    "Search the CRM for all deals at PROPOSAL or NEGOTIATION stage, and "
+                    "all contacts classified as LEAD_WITH_INTERACTIONS. For each, report: "
+                    "(1) company and contact person, (2) which machine model was quoted, "
+                    "(3) price/value from the quote, (4) when the quote/proposal was sent, "
+                    "(5) the last interaction date and what it was about, "
+                    "(6) days since last contact. Sort by most recent interaction first. "
+                    "These are our hottest re-engagement opportunities.",
+                ),
+                (
+                    "Missed Leads (Unanswered Inbound)",
+                    f"The mailbox scan detected {unanswered} inbound email threads that "
+                    "never received an outbound reply from Machinecraft. Search the CRM "
+                    "for contacts classified as LEAD_NO_INTERACTIONS or any contacts with "
+                    "only inbound interactions and no outbound. For each, report: "
+                    "(1) who emailed us and from which company, (2) what they asked about "
+                    "(machine model, inquiry type), (3) when they emailed, "
+                    "(4) why this might be a lost opportunity. "
+                    "These are leads we dropped — prioritise any that mentioned specific "
+                    "machines or pricing.",
+                ),
+            ]
+
+            async with pantheon:
+                pipeline, _fb = await _build_pipeline(pantheon, shared)
+
+                for title, rq in report_queries:
+                    console.print(f"\n  [dim]Generating: {title}...[/dim]")
+
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn(f"[bold green]Consulting agents for {title}..."),
+                        console=err_console,
+                        transient=True,
+                    ) as progress:
+                        progress.add_task("report", total=None)
+                        response, agents_used = await pipeline.process_request(
+                            raw_input=rq,
+                            channel="cli",
+                            sender_id="rescan-report",
+                        )
+
+                    console.print(Panel(
+                        Markdown(response),
+                        title=f"{title} (agents: {', '.join(agents_used)})",
+                        border_style="green",
+                    ))
+
+        # Final summary
+        console.print(Panel(
+            f"[bold]Emails scanned:[/bold]       {scan_stats.get('processed', 0)}\n"
+            f"[bold]Inbound / Outbound:[/bold]   "
+            f"{scan_stats.get('inbound_emails', 0)} / {scan_stats.get('outbound_emails', 0)}\n"
+            f"[bold]Proposal signals:[/bold]     {scan_stats.get('proposal_signals', 0)}\n"
+            f"[bold]Contacts found:[/bold]       {scan_stats.get('contacts_found', 0)}\n"
+            f"[bold]Deals created:[/bold]        {scan_stats.get('deals_created', 0)}\n"
+            f"[bold]Unanswered threads:[/bold]   {scan_stats.get('unanswered_inbound_threads', 0)}\n"
+            + (
+                f"[bold]CRM contacts added:[/bold]   {pop_stats.get('inserted', 0)}\n"
+                if not skip_crm else ""
+            )
+            + "\n[dim]All email protein is now searchable in Qdrant.\n"
+            "Entity relationships are in Neo4j.\n"
+            "Ask Ira about customers, leads, or proposals to query the enriched data.[/dim]",
+            title="Deep Rescan Complete",
+            border_style="green",
+        ))
+
+    _run(_rescan())
+
+
 @email_app.command("drip")
 def email_drip(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),

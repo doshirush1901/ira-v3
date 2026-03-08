@@ -94,6 +94,12 @@ poetry run ira dream      # memory consolidation
 poetry run ira board      # board meeting
 poetry run ira ingest     # document ingestion
 poetry run ira health     # vital signs
+
+# Email commands
+poetry run ira email sync                           # one-time inbox poll
+poetry run ira email learn --thread-id "18f3a..."   # learn from a thread
+poetry run ira email rescan --after 2023/01/01      # deep historical scan
+poetry run ira email rescan --dry-run --resume      # resume a previous scan
 ```
 
 ## Code Conventions
@@ -202,6 +208,8 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 | POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
 | GET | `/api/email/thread/{id}` | Fetch full email thread by Gmail thread ID |
 | POST | `/api/email/draft` | Draft an email via Calliope |
+| POST | `/api/email/rescan` | Deep historical scan with SSE progress streaming |
+| GET | `/api/email/rescan` | Check status of running/last rescan |
 
 ## Important Rules
 

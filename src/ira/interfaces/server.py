@@ -1099,6 +1099,179 @@ async def email_draft(req: EmailDraftRequest) -> dict[str, Any]:
     }
 
 
+# ── Email rescan endpoint ───────────────────────────────────────────────
+
+
+class EmailRescanRequest(BaseModel):
+    after: str = "2023/03/08"
+    before: str = "2026/03/08"
+    dry_run: bool = False
+    resume: bool = False
+    throttle: float = 0.1
+    skip_crm_populate: bool = False
+    user_id: str | None = None
+
+
+_rescan_status: dict[str, Any] = {"running": False, "last_result": None}
+
+
+@app.post("/api/email/rescan")
+async def email_rescan_stream(req: EmailRescanRequest) -> EventSourceResponse:
+    """Deep-scan historical Gmail and stream progress via SSE.
+
+    Runs the full pipeline: paginated Gmail fetch, Delphi classification,
+    DigestiveSystem protein extraction, Neo4j entity graph, CRM
+    contact/deal creation, then CRM population.
+    """
+    if _rescan_status["running"]:
+        raise HTTPException(status_code=409, detail="A rescan is already in progress")
+
+    ep = _svc(SK.EMAIL_PROCESSOR)
+
+    async def _event_generator() -> AsyncIterator[dict[str, Any]]:
+        _rescan_status["running"] = True
+        try:
+            yield {"event": "started", "data": _json.dumps({
+                "after": req.after, "before": req.before,
+                "dry_run": req.dry_run, "resume": req.resume,
+            })}
+
+            last_reported = {"processed": 0}
+
+            def on_progress(processed: int, total: int, stats: dict) -> None:
+                last_reported["processed"] = processed
+                last_reported["total"] = total
+                last_reported["stats"] = stats
+
+            scan_task = asyncio.create_task(ep.deep_scan(
+                after=req.after,
+                before=req.before,
+                throttle=req.throttle,
+                resume=req.resume,
+                dry_run=req.dry_run,
+                progress_callback=on_progress,
+            ))
+
+            while not scan_task.done():
+                await asyncio.sleep(2)
+                yield {"event": "progress", "data": _json.dumps({
+                    "phase": "scan",
+                    "processed": last_reported.get("processed", 0),
+                    "total_estimate": last_reported.get("total", 0),
+                    **last_reported.get("stats", {}),
+                })}
+
+            scan_stats = await scan_task
+
+            yield {"event": "scan_complete", "data": _json.dumps(scan_stats)}
+
+            pop_result: dict[str, Any] | None = None
+            if not req.skip_crm_populate:
+                yield {"event": "progress", "data": _json.dumps({
+                    "phase": "crm_populate", "message": "Classifying contacts...",
+                })}
+
+                from ira.systems.crm_populator import CRMPopulator
+
+                crm = _svc(SK.CRM)
+                pantheon = _svc(SK.PANTHEON)
+                delphi = pantheon.get_agent("delphi")
+
+                populator = CRMPopulator(
+                    delphi=delphi, crm=crm, dry_run=req.dry_run,
+                )
+                pop_result = await populator.populate(
+                    sources=["gmail", "kb", "neo4j"],
+                    after=req.after,
+                    before=req.before,
+                )
+
+                yield {"event": "crm_complete", "data": _json.dumps(pop_result["stats"])}
+
+            # Phase 3: Generate 4-category intelligence report
+            reports: dict[str, str] = {}
+            if not req.dry_run:
+                pipeline = _services.get("pipeline")
+                if pipeline is not None:
+                    unanswered = scan_stats.get("unanswered_inbound_threads", 0)
+                    proposals = scan_stats.get("proposal_signals", 0)
+
+                    report_queries = [
+                        (
+                            "customer_journeys",
+                            "Search the CRM and knowledge base for all LIVE_CUSTOMER contacts. "
+                            "For each customer: company name, contact person, how the relationship "
+                            "started, conversation timeline, which machine(s) they bought (model, "
+                            "specs), and deal value.",
+                        ),
+                        (
+                            "delivered_machines",
+                            "Search for customers with delivered machines or WON deals. For each: "
+                            "company, machine model and specs, delivery date, price, and any open "
+                            "support issues or complaints from email threads.",
+                        ),
+                        (
+                            "hot_leads",
+                            f"We found {proposals} proposal/quote signals. Search for deals at "
+                            "PROPOSAL or NEGOTIATION stage and LEAD_WITH_INTERACTIONS contacts. "
+                            "For each: company, machine quoted, price, when quote was sent, last "
+                            "interaction date and content, days since last contact.",
+                        ),
+                        (
+                            "missed_leads",
+                            f"The scan detected {unanswered} unanswered inbound threads. Search "
+                            "for LEAD_NO_INTERACTIONS contacts or contacts with only inbound "
+                            "interactions. For each: who emailed, what they asked about, when, "
+                            "and why this is a lost opportunity.",
+                        ),
+                    ]
+
+                    for key, rq in report_queries:
+                        yield {"event": "progress", "data": _json.dumps({
+                            "phase": "report",
+                            "report_section": key,
+                            "message": f"Generating {key.replace('_', ' ')} report...",
+                        })}
+                        try:
+                            text, _agents = await pipeline.process_request(
+                                raw_input=rq,
+                                channel="api",
+                                sender_id=req.user_id or "rescan-report",
+                            )
+                            reports[key] = text
+                            yield {"event": "report", "data": _json.dumps({
+                                "section": key,
+                                "report": text,
+                            })}
+                        except (IraError, Exception):
+                            logger.warning("Report section %s failed", key, exc_info=True)
+
+            final = {
+                "scan": scan_stats,
+                "crm": pop_result["stats"] if pop_result else None,
+                "reports": reports or None,
+            }
+            _rescan_status["last_result"] = final
+            yield {"event": "done", "data": _json.dumps(final)}
+
+        except (IraError, Exception) as exc:
+            logger.exception("Email rescan failed")
+            yield {"event": "error", "data": _json.dumps({"error": str(exc)})}
+        finally:
+            _rescan_status["running"] = False
+
+    return EventSourceResponse(_event_generator())
+
+
+@app.get("/api/email/rescan")
+async def email_rescan_status() -> dict[str, Any]:
+    """Check the status of a running or last completed email rescan."""
+    return {
+        "running": _rescan_status["running"],
+        "last_result": _rescan_status["last_result"],
+    }
+
+
 # ── Vendor / Procurement endpoints ──────────────────────────────────────
 
 

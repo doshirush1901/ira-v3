@@ -98,3 +98,5 @@ docs/*.txt
 # ──────────────────────────────────────────────
 .cursor/*
 !.cursor/rules/
+!.cursor/agents/
+!.cursor/skills/

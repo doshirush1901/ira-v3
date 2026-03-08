@@ -190,6 +190,8 @@ curl -s -X POST http://localhost:8000/api/ingest \
 - **Dream report:** `curl -s http://localhost:8000/api/dream-report | python3 -m json.tool`
 - **Re-OCR scanned PDFs:** `curl -s -X POST http://localhost:8000/api/reingest-scanned -H "Content-Type: application/json" -d '{}' | python3 -m json.tool`
 - **Email draft:** `curl -s -X POST http://localhost:8000/api/email/draft -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "context": "<instructions>"}'`
+- **Email rescan (SSE):** `curl -s -N -X POST http://localhost:8000/api/email/rescan -H "Content-Type: application/json" -d '{"after": "2023/01/01", "before": "2026/03/08"}'`
+- **Email rescan status:** `curl -s http://localhost:8000/api/email/rescan | python3 -m json.tool`
 - **Dashboard:** Open http://localhost:8000/dashboard/ in a browser.
 
 ## 7. Stopping Ira ("stop Ira", "shut down Ira")

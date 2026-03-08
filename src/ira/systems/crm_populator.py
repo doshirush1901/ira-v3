@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import re as _re_module
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any
@@ -127,14 +128,29 @@ class CRMPopulator:
     def classifications(self) -> list[dict[str, Any]]:
         return list(self._classifications)
 
-    async def populate(self, sources: list[str] | None = None) -> dict[str, Any]:
-        """Run the full population pipeline."""
+    async def populate(
+        self,
+        sources: list[str] | None = None,
+        *,
+        after: str = "",
+        before: str = "",
+    ) -> dict[str, Any]:
+        """Run the full population pipeline.
+
+        Parameters
+        ----------
+        sources : list[str] | None
+            Data sources to use (``gmail``, ``kb``, ``neo4j``).
+            Defaults to all three.
+        after, before : str
+            Date range for Gmail extraction in ``YYYY/MM/DD`` format.
+        """
         use = set(sources) if sources else {"gmail", "kb", "neo4j"}
 
         contacts: list[dict[str, Any]] = []
 
         if "gmail" in use:
-            contacts.extend(await self._extract_from_gmail())
+            contacts.extend(await self._extract_from_gmail(after=after, before=before))
         if "kb" in use:
             contacts.extend(await self._extract_from_kb())
         if "neo4j" in use:
@@ -375,8 +391,24 @@ class CRMPopulator:
 
     # ── Data extraction: Gmail ───────────────────────────────────────────
 
-    async def _extract_from_gmail(self) -> list[dict[str, Any]]:
-        """Extract unique contacts from Gmail sent and received messages."""
+    async def _extract_from_gmail(
+        self,
+        after: str = "",
+        before: str = "",
+    ) -> list[dict[str, Any]]:
+        """Extract unique contacts from Gmail sent and received messages.
+
+        Paginates through all matching messages (no 500-message cap) and
+        extracts richer metadata including subject lines for better
+        downstream classification.
+
+        Parameters
+        ----------
+        after : str
+            Start date in ``YYYY/MM/DD`` format (inclusive).
+        before : str
+            End date in ``YYYY/MM/DD`` format (exclusive).
+        """
         try:
             from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
@@ -389,6 +421,13 @@ class CRMPopulator:
                 logger.warning("No Gmail token.json — skipping Gmail extraction")
                 return []
 
+            q_parts: list[str] = []
+            if after:
+                q_parts.append(f"after:{after}")
+            if before:
+                q_parts.append(f"before:{before}")
+            q = " ".join(q_parts) if q_parts else None
+
             def _fetch() -> list[dict[str, Any]]:
                 creds = Credentials.from_authorized_user_file(str(token_path), scopes)
                 if creds and creds.expired and creds.refresh_token:
@@ -397,15 +436,30 @@ class CRMPopulator:
 
                 service = build("gmail", "v1", credentials=creds)
 
-                resp = service.users().messages().list(
-                    userId="me", maxResults=500,
-                ).execute()
-                stubs = resp.get("messages", [])
+                all_stubs: list[dict[str, Any]] = []
+                page_token: str | None = None
+                while True:
+                    kwargs: dict[str, Any] = {"userId": "me", "maxResults": 500}
+                    if q:
+                        kwargs["q"] = q
+                    if page_token:
+                        kwargs["pageToken"] = page_token
+
+                    resp = service.users().messages().list(**kwargs).execute()
+                    stubs = resp.get("messages", [])
+                    all_stubs.extend(stubs)
+
+                    page_token = resp.get("nextPageToken")
+                    if not page_token or not stubs:
+                        break
+
+                logger.info("Gmail pagination complete: %d message stubs", len(all_stubs))
 
                 contacts_by_email: dict[str, dict[str, Any]] = {}
                 email_counts: dict[str, int] = {}
+                subjects_by_email: dict[str, list[str]] = {}
 
-                for stub in stubs:
+                for stub in all_stubs:
                     msg = service.users().messages().get(
                         userId="me", id=stub["id"],
                         format="metadata",
@@ -417,6 +471,7 @@ class CRMPopulator:
                     }
                     from_name, from_email = parseaddr(headers.get("from", ""))
                     to_name, to_email = parseaddr(headers.get("to", ""))
+                    subject = headers.get("subject", "")
 
                     for addr_name, addr_email in [(from_name, from_email), (to_name, to_email)]:
                         if not addr_email or "@" not in addr_email:
@@ -428,6 +483,9 @@ class CRMPopulator:
 
                         email_counts[addr_email] = email_counts.get(addr_email, 0) + 1
 
+                        if subject:
+                            subjects_by_email.setdefault(addr_email, []).append(subject)
+
                         if addr_email not in contacts_by_email:
                             company_guess = domain.split(".")[0].title()
                             contacts_by_email[addr_email] = {
@@ -437,9 +495,21 @@ class CRMPopulator:
                                 "source": "gmail",
                             }
 
-                for email, contact in contacts_by_email.items():
-                    contact["email_count"] = email_counts.get(email, 0)
-                    contact["has_interactions"] = email_counts.get(email, 0) > 0
+                _PROPOSAL_RE = _re_module.compile(
+                    r"(?i)(quote|proposal|offer|pricing|PF1|PF2|ATF|AM[-\s]|IMG|FCS|"
+                    r"thermoform|vacuum\s*form|machine\s+inquiry|techno.?commercial)"
+                )
+
+                for email_addr, contact in contacts_by_email.items():
+                    count = email_counts.get(email_addr, 0)
+                    contact["email_count"] = count
+                    contact["has_interactions"] = count > 0
+
+                    subs = subjects_by_email.get(email_addr, [])
+                    contact["subjects_sample"] = subs[:5]
+                    contact["has_proposal_signal"] = any(
+                        _PROPOSAL_RE.search(s) for s in subs
+                    )
 
                 return list(contacts_by_email.values())
 

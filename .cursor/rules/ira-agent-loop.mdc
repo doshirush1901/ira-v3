@@ -1,0 +1,92 @@
+---
+description: Manus-style agent loop for complex Ira tasks — research, analysis, proposals, reports. Activates when the user asks Ira to perform multi-step work via MCP tools.
+globs: 
+alwaysApply: false
+---
+
+# Ira Agent Loop (Clarify → Plan → Execute → Observe → Compile)
+
+When the user asks Ira to perform a complex, multi-step task — research, analysis, proposals, deal reviews, quarterly reports — follow this strict loop using the MCP tools. Do NOT fire off a single `query_ira` call for complex work.
+
+## When to Use This Loop
+
+Use the agent loop when the request implies **multiple agents, a deliverable, or cross-functional analysis**:
+- "Prepare a quarterly business review covering sales, production, and finance"
+- "Do a full analysis of the Acme deal and draft a proposal"
+- "Research our PF1 lead times and write a report"
+- "Investigate the quality issues on Project X and recommend fixes"
+- "Prepare a board briefing on Q1 pipeline"
+
+Do **NOT** use the agent loop for simple questions — use `query_ira` or direct tools instead:
+- "What's the lead time for a PF1?"
+- "Show me the sales pipeline"
+- "Who is our contact at Acme?"
+
+## Phase 1: Plan
+
+Call `plan_task(request)` with the user's request. This returns a structured plan with ordered phases, each assigned to specialist agents.
+
+1. Present the plan to the user in a clear format:
+   - Phase number, title, assigned agents, and what it will do
+2. Ask for approval before proceeding.
+3. If the user wants changes, adjust the request and call `plan_task` again.
+
+Store the `plan_id` from the response — you need it for all subsequent calls.
+
+## Phase 2: Execute
+
+Once approved, execute each phase by its ID (1-indexed):
+
+```
+for each phase in plan.phases:
+    result = execute_phase(plan_id, phase.id)
+    show user: "Phase {id}: {title} ({agents}) — done"
+    show a brief summary of the result
+    check result.decision
+```
+
+Key rules:
+- Execute phases **in order** (1, 2, 3, ...). Later phases receive context from earlier ones.
+- Show progress after each phase completes.
+- **Check the `decision` field** after each phase:
+
+### Handling decisions
+
+- **`continue`** — Proceed to the next phase normally.
+- **`replan`** — Athena has revised the remaining phases based on new findings. Inform the user of the change and continue with the updated plan.
+- **`clarify`** — The `clarification_question` field contains a question for the user. Present it, wait for their answer, then continue.
+- **`complete`** — All necessary information has been gathered. Skip remaining phases and go to Compile.
+- **`abort`** — Unrecoverable error. Report it to the user.
+
+## Phase 3: Compile
+
+After all phases complete (or a `complete` decision is reached):
+
+1. Call `generate_report(plan_id, title)` to compile results into a professional document.
+2. The report is saved as a Markdown file in `reports/`.
+3. Present the report content to the user as formatted Markdown.
+4. Mention the file path so they can find it later.
+
+## Tool Reference
+
+| Tool | Phase | Description |
+|------|-------|-------------|
+| `plan_task(request, complexity)` | Plan | Analyzes request, creates multi-phase execution plan |
+| `execute_phase(plan_id, phase_id)` | Execute | Runs one phase through assigned agents, returns result + decision |
+| `generate_report(plan_id, title)` | Compile | Compiles all phase results into a professional Markdown report |
+
+## Relationship to Other Endpoints
+
+- **This rule** (MCP tools): Used when Cursor is the orchestrator. Gives phase-by-phase control with observe/replan capability.
+- **ira-task-loop.mdc** (HTTP/SSE): Used by CLI/Telegram. The server streams the entire loop as SSE events via `/api/task/stream`.
+
+The MCP tools use the `AgentLoop` backend (in-memory, with observe/replan). The HTTP endpoints use the `TaskOrchestrator` backend (Redis-backed, linear execution).
+
+## Important Rules
+
+- Never fabricate task results. Always execute the tools and return real output.
+- Always show the plan to the user before executing.
+- If any phase returns an error, report it — do not silently skip.
+- For pricing, specs, and delivery timelines, the agents will verify against the knowledge base.
+- Store the `plan_id` from `plan_task` — you need it for all subsequent calls.
+- When relaying Ira's responses, maintain Ira's voice: decisive, concise, grounded.

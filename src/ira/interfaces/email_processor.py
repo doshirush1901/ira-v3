@@ -61,6 +61,31 @@ _DEAL_SUBJECT_PATTERNS = re.compile(
     r"techno.?commercial)",
 )
 
+_NON_BUSINESS_DOMAINS = frozenset({
+    "instagram.com", "facebook.com", "twitter.com", "linkedin.com",
+    "netflix.com", "spotify.com", "amazon.com", "google.com",
+    "apple.com", "microsoft.com", "github.com", "openai.com",
+    "moneycontrol.com", "squarespace.com", "medium.com",
+    "substack.com", "mailchimp.com", "hubspot.com",
+})
+
+_NON_BUSINESS_PREFIXES = frozenset({
+    "noreply", "no-reply", "donotreply", "do-not-reply",
+    "notifications", "notify", "mailer", "newsletter",
+    "marketing", "promo", "alerts", "billing",
+})
+
+
+def _is_non_business_sender(email_addr: str) -> bool:
+    """Fast pre-filter to skip consumer newsletters and automated senders."""
+    local, _, domain = email_addr.lower().partition("@")
+    if not domain:
+        return False
+    parent = ".".join(domain.split(".")[-2:])
+    if domain in _NON_BUSINESS_DOMAINS or parent in _NON_BUSINESS_DOMAINS:
+        return True
+    return any(local.startswith(p) for p in _NON_BUSINESS_PREFIXES)
+
 
 class EmailProcessor:
     """Gmail inbox observer with a full classification/ingestion pipeline."""
@@ -453,6 +478,215 @@ class EmailProcessor:
                 except Exception:
                     continue
         return Decimal("0")
+
+    # ── Deep historical scan ─────────────────────────────────────────────
+
+    async def deep_scan(
+        self,
+        after: str = "",
+        before: str = "",
+        batch_size: int = 100,
+        throttle: float = 0.1,
+        resume: bool = False,
+        dry_run: bool = False,
+        progress_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        """Scan historical Gmail messages through the full analysis pipeline.
+
+        Pages through all messages matching the date range, deduplicates
+        against already-processed message IDs (via a checkpoint file), and
+        runs each email through Delphi classification + DigestiveSystem
+        ingestion + CRM interaction logging.
+
+        Parameters
+        ----------
+        after : str
+            Start date in ``YYYY/MM/DD`` format (inclusive).
+        before : str
+            End date in ``YYYY/MM/DD`` format (exclusive).
+        batch_size : int
+            Gmail API page size (max 500).
+        throttle : float
+            Seconds to sleep between individual message fetches.
+        resume : bool
+            If True, skip message IDs already recorded in the checkpoint.
+        dry_run : bool
+            If True, fetch and classify but do not write to CRM/Qdrant.
+        progress_callback : callable, optional
+            ``callback(processed, total_estimate, stats)`` called after
+            each message.
+
+        Returns
+        -------
+        dict
+            Summary with counts of processed, skipped, errors, contacts
+            found, and deals created.
+        """
+        checkpoint_path = Path("data/.deep_scan_checkpoint.json")
+        processed_ids: set[str] = set()
+        if resume and checkpoint_path.exists():
+            try:
+                data = json.loads(checkpoint_path.read_text())
+                processed_ids = set(data.get("processed_ids", []))
+                logger.info("Resuming deep scan — %d messages already processed", len(processed_ids))
+            except (json.JSONDecodeError, OSError):
+                logger.warning("Could not read checkpoint file — starting fresh")
+
+        parts: list[str] = []
+        if after:
+            parts.append(f"after:{after}")
+        if before:
+            parts.append(f"before:{before}")
+        q = " ".join(parts).strip() or "in:anywhere"
+
+        service = await self._build_gmail_service()
+
+        stats: dict[str, int] = {
+            "total_listed": 0,
+            "fetched": 0,
+            "processed": 0,
+            "skipped_duplicate": 0,
+            "skipped_non_business": 0,
+            "contacts_found": 0,
+            "deals_created": 0,
+            "inbound_emails": 0,
+            "outbound_emails": 0,
+            "proposal_signals": 0,
+            "errors": 0,
+        }
+
+        # Track threads to detect missed leads (inbound with no outbound reply)
+        threads_with_inbound: set[str] = set()
+        threads_with_outbound: set[str] = set()
+
+        all_stubs = await self._paginate_message_list(service, q, batch_size)
+        stats["total_listed"] = len(all_stubs)
+        logger.info("Deep scan: %d messages listed for q=%r", len(all_stubs), q)
+
+        for i, stub in enumerate(all_stubs):
+            msg_id = stub["id"]
+
+            if msg_id in processed_ids:
+                stats["skipped_duplicate"] += 1
+                continue
+
+            try:
+                raw_msg = await self._fetch_single_message(service, msg_id)
+                stats["fetched"] += 1
+
+                email = self._parse_message(raw_msg)
+
+                _, from_email = parseaddr(email.from_address)
+                if from_email and _is_non_business_sender(from_email):
+                    stats["skipped_non_business"] += 1
+                    processed_ids.add(msg_id)
+                    continue
+
+                direction = self._infer_direction(email)
+                if direction is Direction.INBOUND:
+                    stats["inbound_emails"] += 1
+                    if email.thread_id:
+                        threads_with_inbound.add(email.thread_id)
+                else:
+                    stats["outbound_emails"] += 1
+                    if email.thread_id:
+                        threads_with_outbound.add(email.thread_id)
+
+                if _DEAL_SUBJECT_PATTERNS.search(email.subject or ""):
+                    stats["proposal_signals"] += 1
+
+                if not dry_run:
+                    analysis = await self._analyze_email(email)
+
+                    if analysis.get("contact", {}).get("email"):
+                        stats["contacts_found"] += 1
+
+                    classification = analysis.get("classification", {})
+                    intent = classification.get("intent", "")
+                    if intent in _DEAL_INTENTS or _DEAL_SUBJECT_PATTERNS.search(email.subject or ""):
+                        stats["deals_created"] += 1
+
+                stats["processed"] += 1
+                processed_ids.add(msg_id)
+
+                if (stats["processed"]) % 50 == 0:
+                    self._save_checkpoint(checkpoint_path, processed_ids, stats)
+
+                if progress_callback is not None:
+                    progress_callback(stats["processed"], stats["total_listed"], stats)
+
+            except (LLMError, DatabaseError, IraError, Exception):
+                stats["errors"] += 1
+                logger.exception("Deep scan failed on message %s", msg_id)
+                processed_ids.add(msg_id)
+
+            if throttle > 0:
+                await asyncio.sleep(throttle)
+
+        unanswered_threads = threads_with_inbound - threads_with_outbound
+        stats["unanswered_inbound_threads"] = len(unanswered_threads)
+
+        self._save_checkpoint(checkpoint_path, processed_ids, stats)
+
+        logger.info("Deep scan complete: %s", stats)
+        return stats
+
+    async def _paginate_message_list(
+        self, service: Any, q: str, page_size: int,
+    ) -> list[dict[str, Any]]:
+        """List all message stubs matching *q*, paging through ``nextPageToken``."""
+
+        def _list_all() -> list[dict[str, Any]]:
+            all_stubs: list[dict[str, Any]] = []
+            page_token: str | None = None
+
+            while True:
+                kwargs: dict[str, Any] = {
+                    "userId": "me",
+                    "q": q,
+                    "maxResults": min(page_size, 500),
+                }
+                if page_token:
+                    kwargs["pageToken"] = page_token
+
+                resp = service.users().messages().list(**kwargs).execute()
+                stubs = resp.get("messages", [])
+                all_stubs.extend(stubs)
+
+                page_token = resp.get("nextPageToken")
+                if not page_token or not stubs:
+                    break
+
+            return all_stubs
+
+        return await asyncio.to_thread(_list_all)
+
+    async def _fetch_single_message(
+        self, service: Any, msg_id: str,
+    ) -> dict[str, Any]:
+        """Fetch a single full message payload in a thread-safe manner."""
+
+        def _get() -> dict[str, Any]:
+            return (
+                service.users()
+                .messages()
+                .get(userId="me", id=msg_id, format="full")
+                .execute()
+            )
+
+        return await asyncio.to_thread(_get)
+
+    @staticmethod
+    def _save_checkpoint(
+        path: Path, processed_ids: set[str], stats: dict[str, int],
+    ) -> None:
+        """Persist scan progress so the scan can be resumed."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "processed_ids": list(processed_ids),
+            "stats": stats,
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }))
 
     # ── Email search ─────────────────────────────────────────────────────
 
