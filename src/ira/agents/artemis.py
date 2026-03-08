@@ -35,18 +35,19 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = load_prompt("artemis_system")
 
-_BATCH_TRIAGE_PROMPT = """You are a fast email triage classifier for Machinecraft, an industrial machinery company.
+_BATCH_TRIAGE_PROMPT = """You are a triage classifier for Machinecraft machine sales emails ONLY.
 
-Given a batch of email summaries (subject + sender + snippet), classify each as:
-- BUSINESS_HIGH: Quote, proposal, pricing, machine inquiry, order, delivery, support issue, complaint — MUST be processed
-- BUSINESS_LOW: General business correspondence, meeting scheduling, internal updates — process if time permits
-- NOISE: Newsletter, notification, marketing, social media, automated, personal — skip entirely
+Machinecraft sells industrial thermoforming and vacuum forming machines.
+Models: PF1, PF2, ATF, AM, IMG, FCS, SAM (and variants like PF1-XL, PF1-C, AM-V, PF1-X-1210, etc.)
 
-Return ONLY valid JSON — an array of objects with "id" and "category":
-[{"id": "msg_001", "category": "BUSINESS_HIGH"}, ...]
+Classify each email as:
+- SALES: Directly about Machinecraft machine sales — quotes, proposals, pricing, orders, delivery, installation, machine inquiries, customer negotiations, techno-commercial offers, support/complaints about delivered machines. MUST be processed.
+- SKIP: Everything else — newsletters, bank alerts, notifications, personal, internal dev tools, marketing from other companies, logistics not about MC machines, HR, finance, social media. Skip entirely.
 
-Be aggressive about filtering noise. Machinecraft sells thermoforming machines (PF1, PF2, ATF, AM, IMG, FCS, SAM models).
-Any email mentioning these models, "quote", "proposal", "pricing", "order", "delivery", "thermoform", or "vacuum form" is BUSINESS_HIGH.
+Return ONLY valid JSON — an array of objects:
+[{"id": "msg_001", "category": "SALES"}, {"id": "msg_002", "category": "SKIP"}, ...]
+
+CRITICAL: Only SALES if the email is clearly about Machinecraft machine sales, quotes, orders, delivery, or customer support for MC machines. Vendor bills, shipping advisories, and general business correspondence are SKIP unless they specifically mention a Machinecraft machine model or deal.
 """
 
 

@@ -222,6 +222,32 @@ class FeedbackHandler:
                 except (DatabaseError, Exception):
                     logger.exception("Micro-learning trigger failed")
 
+            try:
+                from ira.agents.mnemon import Mnemon, _load_ledger, _save_ledger
+                ledger = _load_ledger()
+                entity_key = previous_query[:100].strip().lower()
+                words = entity_key.split()
+                if len(words) > 5:
+                    entity_key = " ".join(words[:5])
+                existing = ledger.get("entities", {}).get(entity_key, {})
+                old_stale = existing.get("stale_values", [])
+                if previous_response and len(previous_response) > 10:
+                    old_stale.append(previous_response[:200])
+                    old_stale = list(set(old_stale))
+                ledger.setdefault("entities", {})[entity_key] = {
+                    "current_status": correction_text[:500],
+                    "stale_values": old_stale,
+                    "corrected_at": __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ).strftime("%Y-%m-%d"),
+                    "source": "feedback",
+                }
+                _save_ledger(ledger)
+                result["mnemon_ledger_updated"] = True
+                logger.info("Mnemon ledger updated for entity '%s'", entity_key)
+            except Exception:
+                logger.warning("Failed to update Mnemon ledger from feedback", exc_info=True)
+
         elif polarity == "positive":
             if self._procedural_memory is not None and agents_used:
                 try:

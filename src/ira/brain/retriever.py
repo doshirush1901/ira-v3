@@ -436,25 +436,48 @@ class UnifiedRetriever:
     # ── learned corrections ────────────────────────────────────────────────
 
     async def _apply_learned_corrections(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Post-process results with learned entity corrections and competitor tags."""
-        try:
-            from ira.brain.correction_learner import CorrectionLearner
-            learner = CorrectionLearner()
-            await learner._load()
+        """Post-process results with Mnemon's correction ledger.
 
+        Checks each result against the correction ledger and appends
+        correction notices when stale data is detected.  Also injects
+        corrected content at the top of results for matching entities.
+        """
+        try:
+            from ira.agents.mnemon import _load_ledger
+            ledger = _load_ledger()
+            entities = ledger.get("entities", {})
+            if not entities:
+                return results
+
+            injected: list[dict[str, Any]] = []
             for r in results:
                 content = r.get("content", "")
-                for entity in learner.get_all_learned().get("entity_corrections", {}):
-                    corrected = learner.get_entity_correction(entity)
-                    if corrected and entity.lower() in content.lower():
-                        r.setdefault("metadata", {})["entity_correction"] = f"{entity} -> {corrected}"
+                content_lower = content.lower()
+                for entity_key, entry in entities.items():
+                    if entity_key not in content_lower:
+                        continue
+                    for stale in entry.get("stale_values", []):
+                        if stale.lower() in content_lower:
+                            r.setdefault("metadata", {})["mnemon_correction"] = (
+                                f"{entity_key}: '{stale}' is outdated. "
+                                f"Current: {entry['current_status'][:200]}"
+                            )
+                            if not any(i.get("_correction_for") == entity_key for i in injected):
+                                injected.append({
+                                    "content": (
+                                        f"[MNEMON CORRECTION] {entity_key}: "
+                                        f"{entry['current_status']}"
+                                    ),
+                                    "score": 1.0,
+                                    "source": "correction_ledger",
+                                    "metadata": {"is_correction": True},
+                                    "_correction_for": entity_key,
+                                })
 
-                for entity in learner.get_all_learned().get("competitors", []):
-                    if entity.lower() in content.lower():
-                        r.setdefault("metadata", {})["competitor_mentioned"] = True
+            return injected + results
         except (IraError, Exception):
-            logger.warning("Learned corrections overlay failed", exc_info=True)
-        return results
+            logger.warning("Mnemon corrections overlay failed", exc_info=True)
+            return results
 
     # ── LLM query decomposition ──────────────────────────────────────────
 

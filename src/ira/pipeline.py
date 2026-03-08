@@ -553,6 +553,19 @@ class RequestPipeline:
         trace["agents"] = agents_used
         logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
 
+        # ── 6.2 CORRECTION CHECK (Mnemon) ────────────────────────────
+        mnemon = self._pantheon.get_agent("mnemon")
+        if mnemon is not None:
+            try:
+                corrected = await mnemon.check_and_correct(raw_response)
+                if corrected != raw_response:
+                    raw_response = corrected
+                    if "mnemon" not in agents_used:
+                        agents_used.append("mnemon")
+                    logger.info("MNEMON | corrections applied to response")
+            except Exception:
+                logger.exception("Mnemon correction check failed")
+
         # ── 6.3 GAP RESOLUTION ───────────────────────────────────────
         gapper = self._pantheon.get_agent("gapper")
         if gapper is not None:

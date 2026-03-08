@@ -49,10 +49,12 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 | **Chiron** | Sales Trainer | Sales patterns, coaching notes for outreach |
 | **Clio** | Researcher | Primary KB search via Qdrant/Neo4j/Mem0; falls back to Alexandros |
 | **Delphi** | Oracle | Email classification, founder communication style simulation |
+| **Gapper** | Gap Resolver | Finds and fills missing data in reports using email search, document archive, KB, web search, CRM, and inter-agent delegation |
 | **Hephaestus** | Production | Machine specs, manufacturing processes, production status |
 | **Hera** | Procurement | Vendors, components, lead times, inventory |
 | **Hermes** | Marketing | Drip campaigns, regional tone, lead intelligence |
 | **Iris** | External Intel | Web search, news APIs, company intelligence |
+| **Mnemon** | Memory Guardian | Correction authority. Maintains the correction ledger and intercepts stale data at every retrieval point, overriding it with corrected truth |
 | **Mnemosyne** | Memory | Long-term memory storage and retrieval via Mem0 |
 | **Nemesis** | Trainer | Corrections, adversarial training, sleep training cycles |
 | **Plutus** | Finance | Pricing, revenue, margins, budgets, quote analytics |

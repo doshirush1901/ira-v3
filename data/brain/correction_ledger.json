@@ -1,0 +1,220 @@
+{
+  "entities": {
+    "dutch tides": {
+      "current_status": "Delivered and installed. PF1-X-6419. Final payment EUR 100K under negotiation (EUR 62,500 discount agreed). Balance is EUR 100K only.",
+      "stale_values": [
+        "Paint + Final Assy",
+        "Packing & Shipping",
+        "Deadline: 15-Nov-2025",
+        "Balance: 2.39 Cr"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "k2025": {
+      "current_status": "PF1-X-1310 for Dezet Netherlands. Delivered and installed. This is NOT an active order.",
+      "stale_values": [
+        "Design, Purchase & Fabrication",
+        "Est. Dispatch: 2025-08-01"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "dezet": {
+      "current_status": "Two machines delivered: K machine (EUR 120K paid) + PF1-X-1310 K2025 show machine (installed). EUR 2,500 balance for cooling bolster.",
+      "stale_values": [],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "jaquar": {
+      "current_status": "Existing client with 2 machines: Machine 1 from 2015, Machine 2 PF1-X-3030 for spas (2025, installed). Outstanding service punch list items to clear.",
+      "stale_values": [
+        "Installation status unclear",
+        "PF1-W"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "pinnacle": {
+      "current_status": "PF1-X-5028 is in final test (FAT) at factory. Awaiting payment before delivery. 5 open punch items (2 MAJOR). Order value Rs 3.94 Cr, paid Rs 1.81 Cr.",
+      "stale_values": [
+        "Installation complete",
+        "Fabrication"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "ncc russia": {
+      "current_status": "2 separate projects ongoing. PO received, working on LC. Both are active orders.",
+      "stale_values": [
+        "single project",
+        "INQUIRY"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "ktx": {
+      "current_status": "Direct machine sale (new type machine). Active order. IMG 1200x2000mm. Order value Rs 2.25 Cr. KTX pressing for response.",
+      "stale_values": [
+        "Strategic Partnership",
+        "Stalled"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "tom india": {
+      "current_status": "Work in progress. Machine currently being built. Active order in production.",
+      "stale_values": [
+        "no details"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "arrdev": {
+      "current_status": "Machine currently in production. NOT complete. Active client with ongoing order.",
+      "stale_values": [
+        "Existing client for spa machines",
+        "complete",
+        "delivered"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "iac group": {
+      "current_status": "PAST CUSTOMER: 1 machine delivered ~1 year ago, final payment Rs 18,98,100 cleared Feb 2026. SEPARATE NEW LEAD: inquiry for 2nd machine (IMG thermoforming) — this is a new sales lead, not an existing order.",
+      "stale_values": [
+        "Pending Payment",
+        "Rs 19.0 L pending"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "thermic energy": {
+      "current_status": "EXISTING CUSTOMER. Machine delivered (PF1-X 1600x1600). Now requesting spare parts. No pending payments.",
+      "stale_values": [
+        "Commisioning Pending",
+        "Rs 15.0 L pending",
+        "INQUIRY lead"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "jpca": {
+      "current_status": "No pending payments from JPCA.",
+      "stale_values": [
+        "Pending Payment",
+        "Rs 10.0 L pending"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "zylog": {
+      "current_status": "No pending payments from Zylog.",
+      "stale_values": [
+        "Pending Payment",
+        "Rs 18.0 L pending"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "alp": {
+      "current_status": "ALP Bedliner project was completed 2 years ago. Cancelled from active orders. NOT a current customer or active order.",
+      "stale_values": [
+        "Active order",
+        "Gantt chart available",
+        "Cancelled"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "dashmesh": {
+      "current_status": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline or order book.",
+      "stale_values": [
+        "Order 3.0 Cr",
+        "Active order"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "eka": {
+      "current_status": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline or order book.",
+      "stale_values": [
+        "Order 4.0 Cr",
+        "Active order"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "tafe": {
+      "current_status": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline or order book.",
+      "stale_values": [
+        "Order 5.0 Cr",
+        "Active order"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "anatomic sitt": {
+      "current_status": "EXISTING CUSTOMER. Purchased PF1-0810 S at K2022 trade show. Past customer, not a lead.",
+      "stale_values": [
+        "PROPOSAL lead"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "menschik": {
+      "current_status": "Company no longer exists. Quotes sent long ago, not relevant. DEFUNCT.",
+      "stale_values": [
+        "INQUIRY lead",
+        "JV discussion"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "im technologies": {
+      "current_status": "VENDOR providing CAD design services TO Machinecraft. NOT a customer. Never quote them a machine.",
+      "stale_values": [
+        "INQUIRY lead"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "apra-plast": {
+      "current_status": "No quotes have been sent to apra-plast. They are NOT a lead.",
+      "stale_values": [
+        "INQUIRY lead"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "tvs motor": {
+      "current_status": "Formpack (sister company) lead, NOT Machinecraft. Do not include in Machinecraft pipeline.",
+      "stale_values": [
+        "Strategic Partnership",
+        "Machinecraft lead"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "joplast": {
+      "current_status": "PF1-X-1006. Delivered and fully paid (3.0 Cr). Top clamp frame being fabricated and supplied. COMPLETED project.",
+      "stale_values": [
+        "Design, drawing, ordering"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "plastisart": {
+      "current_status": "Machine delivered. Parts dispatched Mar 5. EUR 1,065 received. Transport Warmond to Fleurus complete. COMPLETED project.",
+      "stale_values": [
+        "Awaiting bank transfer"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    }
+  },
+  "_metadata": {
+    "last_updated": "2026-03-08",
+    "description": "Mnemon's correction ledger. Single source of truth for all user corrections. Overrides stale data from ingested documents."
+  }
+}

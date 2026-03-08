@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _GUIDANCE_PATH = Path("data/brain/training_guidance.json")
 _LEARNED_PATH = Path("data/brain/sleep_trainer_ledger.json")
+_CORRECTION_LEDGER_PATH = Path("data/brain/correction_ledger.json")
 
 _TRUTH_HINT_SYSTEM = (
     "You are a knowledge-correction analyst. Given a list of corrections, "
@@ -261,9 +262,52 @@ class SleepTrainer:
                 "total_hints": len(existing),
             }
             logger.info("Phase 4: wrote %d total hints to %s", len(existing), _GUIDANCE_PATH)
+
+            self._update_correction_ledger(hints)
+
         except (IraError, Exception):
             logger.exception("Phase 4 (training guidance) failed")
             stats["phases"]["4_training_guidance"] = {"status": "error"}
+
+    def _update_correction_ledger(self, hints: list[dict[str, Any]]) -> None:
+        """Populate Mnemon's correction ledger from training guidance hints."""
+        try:
+            ledger: dict[str, Any] = {"entities": {}, "_metadata": {}}
+            if _CORRECTION_LEDGER_PATH.exists():
+                raw = _CORRECTION_LEDGER_PATH.read_text(encoding="utf-8")
+                ledger = json.loads(raw)
+
+            updated = 0
+            for hint in hints:
+                entity = hint.get("entity", "").lower().strip()
+                if not entity:
+                    continue
+                answer = hint.get("answer", "")
+                if not answer:
+                    continue
+
+                existing = ledger.setdefault("entities", {}).get(entity, {})
+                if existing.get("source") == "user_correction":
+                    continue
+
+                ledger["entities"][entity] = {
+                    "current_status": answer,
+                    "stale_values": existing.get("stale_values", []),
+                    "corrected_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "source": "sleep_training",
+                }
+                updated += 1
+
+            if updated:
+                ledger["_metadata"]["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                _CORRECTION_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _CORRECTION_LEDGER_PATH.write_text(
+                    json.dumps(ledger, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                logger.info("Phase 4.5: updated %d entries in Mnemon correction ledger", updated)
+        except Exception:
+            logger.exception("Failed to update Mnemon correction ledger")
 
     # ── Phase 5: Persist Learned ──────────────────────────────────────────
 

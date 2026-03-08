@@ -492,8 +492,16 @@ class EmailProcessor:
         progress_callback: Any | None = None,
         artemis: Any | None = None,
         triage_batch_size: int = 20,
+        gmail_query: str = "",
     ) -> dict[str, Any]:
         """Scan historical Gmail messages through the full analysis pipeline.
+
+        Parameters
+        ----------
+        gmail_query : str
+            Additional Gmail search operators appended to the date range.
+            Use this to narrow the scan to specific senders, keywords, or
+            labels — e.g. ``"{from:machinecraft.org OR subject:PF1}"``.
 
         When *artemis* is provided, the scan uses a two-phase approach:
 
@@ -522,6 +530,8 @@ class EmailProcessor:
             parts.append(f"after:{after}")
         if before:
             parts.append(f"before:{before}")
+        if gmail_query:
+            parts.append(gmail_query)
         q = " ".join(parts).strip() or "in:anywhere"
 
         service = await self._build_gmail_service()
@@ -589,8 +599,8 @@ class EmailProcessor:
                     classifications = json.loads(result) if isinstance(result, str) else result
                     if isinstance(classifications, list):
                         for item in classifications:
-                            cat = item.get("category", "NOISE")
-                            if cat == "BUSINESS_HIGH":
+                            cat = item.get("category", "SKIP").upper()
+                            if cat in ("SALES", "BUSINESS_HIGH"):
                                 business_ids.add(item["id"])
                                 stats["triaged_business_high"] += 1
                             else:

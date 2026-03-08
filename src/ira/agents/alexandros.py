@@ -33,6 +33,7 @@ from ira.brain.imports_fallback_retriever import (
     queue_for_deferred_ingestion,
 )
 from ira.brain.imports_metadata_index import IMPORTS_DIR, load_index
+from ira.agents.mnemon import _load_ledger as _load_correction_ledger
 from ira.brain.ingestion_gatekeeper import (
     run_ingestion_cycle,
     scan_for_undigested,
@@ -108,6 +109,17 @@ class Alexandros(BaseAgent):
             handler=self._tool_get_archive_stats,
         ))
         self.register_tool(AgentTool(
+            name="extract_document_tables",
+            description=(
+                "Extract tables and structured data from a PDF in the archive "
+                "(e.g. PO copies, quotes, order confirmations). Returns CSV-formatted "
+                "table data with pricing, specs, delivery dates, and payment terms. "
+                "Use this when you need exact numbers from a document."
+            ),
+            parameters={"file_path": "Filename or path of the PDF in the archive"},
+            handler=self._tool_extract_document_tables,
+        ))
+        self.register_tool(AgentTool(
             name="scan_undigested",
             description="Scan for files not yet ingested into the vector store.",
             parameters={},
@@ -137,6 +149,49 @@ class Alexandros(BaseAgent):
 
     async def _tool_get_archive_stats(self) -> str:
         return await self.stats()
+
+    async def _tool_extract_document_tables(self, file_path: str) -> str:
+        """Extract tables from a PDF using PDF.co or Docling fallback."""
+        index = await load_index()
+        files = index.get("files", {})
+
+        target: dict[str, Any] | None = None
+        fn_lower = file_path.lower().strip()
+        for rel_path, meta in files.items():
+            if fn_lower in rel_path.lower() or fn_lower in meta.get("name", "").lower():
+                target = meta
+                break
+
+        if not target:
+            return f"File '{file_path}' not found in the archive."
+
+        filepath = target.get("path", "")
+        if not filepath or not Path(filepath).exists():
+            return f"File '{target.get('name', '')}' is indexed but missing from disk."
+
+        pdfco = self._services.get("pdfco")
+        if pdfco and filepath.lower().endswith(".pdf"):
+            try:
+                file_bytes = Path(filepath).read_bytes()
+                csv_data = await pdfco.extract_tables_csv(file_bytes=file_bytes)
+                if csv_data and len(csv_data.strip()) > 10:
+                    return (
+                        f"Tables extracted from {target.get('name', '')}:\n\n"
+                        f"{csv_data[:4000]}"
+                    )
+            except Exception as exc:
+                logger.warning("PDF.co table extraction failed for %s: %s", filepath, exc)
+
+        text = await extract_file_text(filepath)
+        if not text:
+            return f"Could not extract content from '{target.get('name', '')}'."
+
+        raw = (
+            f"Full text of {target.get('name', '')} "
+            f"(table extraction unavailable, returning raw text):\n\n"
+            f"{text[:4000]}"
+        )
+        return self._apply_corrections_overlay(raw)
 
     async def _tool_scan_undigested(self) -> str:
         results = await self.scan_for_undigested_files()
@@ -293,10 +348,11 @@ class Alexandros(BaseAgent):
             return preamble + "\n\n".join(doc_texts)
 
         citation_block = "\n".join(citations)
-        return (
+        result = (
             f"{answer}\n\n"
             f"---\n**Sources ({len(citations)} documents):**\n{citation_block}"
         )
+        return self._apply_corrections_overlay(result)
 
     # ── Tool 2: browse — list files in a folder ─────────────────────────
 
@@ -409,7 +465,41 @@ class Alexandros(BaseAgent):
             f"Machines: {', '.join(target.get('machines', []))}\n"
             f"Entities: {', '.join(target.get('entities', []))}\n\n"
         )
-        return header + text
+        return self._apply_corrections_overlay(header + text)
+
+    # ── correction overlay ─────────────────────────────────────────────
+
+    @staticmethod
+    def _apply_corrections_overlay(text: str) -> str:
+        """Append Mnemon corrections for any entities found in the text."""
+        try:
+            ledger = _load_correction_ledger()
+            entities = ledger.get("entities", {})
+            if not entities:
+                return text
+
+            text_lower = text.lower()
+            relevant: list[str] = []
+            for key, entry in entities.items():
+                if key in text_lower:
+                    has_stale = any(s.lower() in text_lower for s in entry.get("stale_values", []))
+                    if has_stale:
+                        relevant.append(
+                            f"- {key}: {entry['current_status']} "
+                            f"(corrected {entry.get('corrected_at', '?')})"
+                        )
+
+            if not relevant:
+                return text
+
+            return (
+                text
+                + "\n\n--- MNEMON CORRECTIONS (override stale data above) ---\n"
+                + "\n".join(relevant)
+                + "\n--- END CORRECTIONS ---"
+            )
+        except Exception:
+            return text
 
     # ── stats ────────────────────────────────────────────────────────────
 
