@@ -134,7 +134,7 @@ class Prometheus(BaseAgent):
 
     async def _tool_get_deal(self, deal_id: str) -> str:
         deal = await self._crm.get_deal(deal_id)
-        return json.dumps(deal, default=str) if deal else f"Deal '{deal_id}' not found."
+        return json.dumps(deal.to_dict(), default=str) if deal else f"Deal '{deal_id}' not found."
 
     async def _tool_get_pipeline_summary(self) -> str:
         summary = await self._crm.get_pipeline_summary()

@@ -286,15 +286,16 @@ class Pantheon:
                 return name, f"(Agent '{name}' not found)"
             if on_progress:
                 await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
+            _timeout = getattr(agent, "timeout", None) or self._AGENT_TIMEOUT
             try:
                 response = await asyncio.wait_for(
                     agent.handle(query, {**ctx}),
-                    timeout=self._AGENT_TIMEOUT,
+                    timeout=_timeout,
                 )
                 result = name, response
             except asyncio.TimeoutError:
-                logger.warning("Agent '%s' timed out after %ds", name, self._AGENT_TIMEOUT)
-                result = name, f"(Agent '{name}' timed out after {self._AGENT_TIMEOUT}s)"
+                logger.warning("Agent '%s' timed out after %ds", name, _timeout)
+                result = name, f"(Agent '{name}' timed out after {_timeout}s)"
             except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed", name)
                 result = name, f"(Agent '{name}' encountered an error)"

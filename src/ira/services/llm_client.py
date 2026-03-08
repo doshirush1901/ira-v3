@@ -57,6 +57,8 @@ class LLMClient:
         self._openai_model = cfg.llm.openai_model
         self._anthropic_model = cfg.llm.anthropic_model
 
+        self._semaphore = asyncio.Semaphore(10)
+
     # ── structured output (JSON → Pydantic) ──────────────────────────────
 
     async def generate_structured(
@@ -78,6 +80,28 @@ class LLMClient:
         Uses Instructor to handle structured output with automatic
         validation-retry feedback for both OpenAI and Anthropic.
         """
+        async with self._semaphore:
+            return await self._generate_structured_inner(
+                system, user, response_model,
+                provider=provider, model=model, temperature=temperature,
+                max_tokens=max_tokens, name=name, session_id=session_id,
+                user_id=user_id,
+            )
+
+    async def _generate_structured_inner(
+        self,
+        system: str,
+        user: str,
+        response_model: type[T],
+        *,
+        provider: str = "openai",
+        model: str | None = None,
+        temperature: float = 0,
+        max_tokens: int = 4096,
+        name: str | None = None,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> T:
         if provider == "openai":
             return await self._openai_structured(
                 system, user, response_model,
@@ -222,6 +246,27 @@ class LLMClient:
         user_id: str | None = None,
     ) -> str:
         """Call an LLM and return the raw text response."""
+        async with self._semaphore:
+            return await self._generate_text_inner(
+                system, user,
+                provider=provider, model=model, temperature=temperature,
+                max_tokens=max_tokens, name=name, session_id=session_id,
+                user_id=user_id,
+            )
+
+    async def _generate_text_inner(
+        self,
+        system: str,
+        user: str,
+        *,
+        provider: str = "openai",
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        name: str | None = None,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str:
         if provider == "openai":
             return await self._openai_text(
                 system, user,

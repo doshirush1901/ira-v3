@@ -76,6 +76,7 @@ class SensorySystem:
         self._engine = create_async_engine(url)
 
         self._identity_cache: dict[tuple[str, str], str] = {}
+        self._IDENTITY_CACHE_MAX = 1000
 
     def configure_memory(
         self,
@@ -195,6 +196,8 @@ class SensorySystem:
                     .values(last_seen_at=now)
                 )
             self._identity_cache[cache_key] = contact_email
+            if len(self._identity_cache) > self._IDENTITY_CACHE_MAX:
+                del self._identity_cache[next(iter(self._identity_cache))]
             return self._build_contact(contact_email, sender_name)
 
         # New identity
@@ -224,6 +227,8 @@ class SensorySystem:
                 logger.exception("Failed to add person to knowledge graph")
 
         self._identity_cache[cache_key] = contact_email
+        if len(self._identity_cache) > self._IDENTITY_CACHE_MAX:
+            del self._identity_cache[next(iter(self._identity_cache))]
         logger.info("New identity: %s/%s -> %s", channel, sender_id, contact_email)
         return self._build_contact(contact_email, sender_name)
 
@@ -267,6 +272,8 @@ class SensorySystem:
                 )
 
         self._identity_cache[(channel, sender_id)] = contact_email
+        if len(self._identity_cache) > self._IDENTITY_CACHE_MAX:
+            del self._identity_cache[next(iter(self._identity_cache))]
         logger.info("Identity linked: %s/%s -> %s", channel, sender_id, contact_email)
 
     @staticmethod

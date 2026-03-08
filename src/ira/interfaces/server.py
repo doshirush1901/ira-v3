@@ -539,6 +539,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["respiratory"] = respiratory
 
     # ── Email polling background task ─────────────────────────────────
+    email_poll_task = None
     if settings.google.email_poll_enabled:
         email_poll_task = asyncio.create_task(email_processor.poll_inbox())
         logger.info(
@@ -747,38 +748,46 @@ async def query_stream(req: QueryRequest) -> EventSourceResponse:
 
         task = asyncio.create_task(_run_pipeline())
 
-        while not task.done():
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        try:
+            while not task.done():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield {
+                        "event": event.get("type", "progress"),
+                        "data": _json.dumps(event, default=str),
+                    }
+                except asyncio.TimeoutError:
+                    continue
+
+            while not queue.empty():
+                event = queue.get_nowait()
                 yield {
                     "event": event.get("type", "progress"),
                     "data": _json.dumps(event, default=str),
                 }
-            except asyncio.TimeoutError:
-                continue
 
-        while not queue.empty():
-            event = queue.get_nowait()
-            yield {
-                "event": event.get("type", "progress"),
-                "data": _json.dumps(event, default=str),
-            }
-
-        try:
-            response, agents = task.result()
-            yield {
-                "event": "final_answer",
-                "data": _json.dumps({
-                    "response": response,
-                    "agents_consulted": agents,
-                }, default=str),
-            }
-        except Exception as exc:
-            logger.exception("Streaming query failed")
-            yield {
-                "event": "error",
-                "data": _json.dumps({"error": str(exc)}),
-            }
+            try:
+                response, agents = task.result()
+                yield {
+                    "event": "final_answer",
+                    "data": _json.dumps({
+                        "response": response,
+                        "agents_consulted": agents,
+                    }, default=str),
+                }
+            except Exception as exc:
+                logger.exception("Streaming query failed")
+                yield {
+                    "event": "error",
+                    "data": _json.dumps({"error": str(exc)}),
+                }
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     return EventSourceResponse(_event_generator())
 
@@ -864,6 +873,22 @@ async def deep_health_check() -> dict[str, Any]:
                 checks["mem0"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}
         except (ConfigurationError, Exception) as exc:
             checks["mem0"] = {"status": "unhealthy", "detail": str(exc)}
+
+    langfuse_cfg = get_settings().langfuse
+    if langfuse_cfg.public_key and langfuse_cfg.secret_key.get_secret_value():
+        try:
+            import base64 as _b64
+            token = _b64.b64encode(
+                f"{langfuse_cfg.public_key}:{langfuse_cfg.secret_key.get_secret_value()}".encode()
+            ).decode()
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{langfuse_cfg.base_url.rstrip('/')}/api/public/health",
+                    headers={"Authorization": f"Basic {token}"},
+                )
+                checks["langfuse"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}
+        except Exception as exc:
+            checks["langfuse"] = {"status": "unhealthy", "detail": str(exc)}
 
     _OK_STATUSES = {"healthy", "ok", "connected"}
 
@@ -969,6 +994,7 @@ class ReingestRequest(BaseModel):
 
 
 _reingest_status: dict[str, Any] = {"running": False, "last_result": None}
+_reingest_lock = asyncio.Lock()
 
 
 @app.post("/api/reingest-scanned")
@@ -978,16 +1004,17 @@ async def reingest_scanned(req: ReingestRequest | None = None) -> dict[str, Any]
     Launches as a background task and returns immediately.
     Poll ``GET /api/reingest-scanned`` for status.
     """
-    if _reingest_status["running"]:
-        return {"status": "already_running", "message": "Re-ingestion is already in progress."}
+    async with _reingest_lock:
+        if _reingest_status["running"]:
+            return {"status": "already_running", "message": "Re-ingestion is already in progress."}
+        _reingest_status["running"] = True
+        _reingest_status["last_result"] = None
 
     ingestor = _svc("ingestor")
     params = req or ReingestRequest()
     min_bytes = params.min_file_size_mb * 1024 * 1024
 
     async def _run() -> None:
-        _reingest_status["running"] = True
-        _reingest_status["last_result"] = None
         try:
             summary = await ingestor.reingest_scanned_pdfs(
                 base_path=params.base_path,
@@ -1128,6 +1155,7 @@ class EmailRescanRequest(BaseModel):
 
 
 _rescan_status: dict[str, Any] = {"running": False, "last_result": None}
+_rescan_lock = asyncio.Lock()
 
 
 @app.post("/api/email/rescan")
@@ -1138,13 +1166,14 @@ async def email_rescan_stream(req: EmailRescanRequest) -> EventSourceResponse:
     DigestiveSystem protein extraction, Neo4j entity graph, CRM
     contact/deal creation, then CRM population.
     """
-    if _rescan_status["running"]:
-        raise HTTPException(status_code=409, detail="A rescan is already in progress")
+    async with _rescan_lock:
+        if _rescan_status["running"]:
+            raise HTTPException(status_code=409, detail="A rescan is already in progress")
+        _rescan_status["running"] = True
 
     ep = _svc(SK.EMAIL_PROCESSOR)
 
     async def _event_generator() -> AsyncIterator[dict[str, Any]]:
-        _rescan_status["running"] = True
         try:
             yield {"event": "started", "data": _json.dumps({
                 "after": req.after, "before": req.before,

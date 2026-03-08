@@ -207,21 +207,23 @@ class RequestPipeline:
 
         _now = time.monotonic()
         _fingerprint = hashlib.sha256(f"{sender_id}:{raw_input}".encode()).hexdigest()[:16]
+        _redis_dedup_key = f"{sender_id}:{_fingerprint}"
 
         if pending is None and self._redis is not None and self._redis.available:
-            _redis_hit = await self._redis.dedup_check(_fingerprint)
+            _redis_hit = await self._redis.dedup_check(_redis_dedup_key)
             if _redis_hit is not None:
                 logger.info("DEDUP | Redis cache hit for %s", sender_id)
                 return _redis_hit, []
 
-        self._recent_messages = {
-            k: v for k, v in self._recent_messages.items()
-            if _now - v[1] < 300
-        }
-        if pending is None and _fingerprint in self._recent_messages:
-            logger.info("DEDUP | returning cached response for %s", sender_id)
-            cached_resp = self._recent_messages[_fingerprint][0]
-            return cached_resp, []
+        async with self._state_lock:
+            self._recent_messages = {
+                k: v for k, v in self._recent_messages.items()
+                if _now - v[1] < 300
+            }
+            if pending is None and _fingerprint in self._recent_messages:
+                logger.info("DEDUP | returning cached response for %s", sender_id)
+                cached_resp = self._recent_messages[_fingerprint][0]
+                return cached_resp, []
 
         if pending is not None:
             agent = self._pantheon.get_agent(pending["agent_name"])
@@ -344,7 +346,7 @@ class RequestPipeline:
             logger.info("RETURN (fast) | %s | %.0fms", contact_email, elapsed_ms)
             self._recent_messages[_fingerprint] = (shaped, _now)
             if self._redis is not None and self._redis.available:
-                await self._redis.dedup_store(_fingerprint, shaped, ttl_seconds=300)
+                await self._redis.dedup_store(_redis_dedup_key, shaped, ttl_seconds=300)
             return shaped, ["fast_path"]
 
         # ── 2.7 SPHINX GATE ──────────────────────────────────────────
@@ -813,7 +815,7 @@ class RequestPipeline:
         # ── 11. RETURN ───────────────────────────────────────────────
         self._recent_messages[_fingerprint] = (shaped, _now)
         if self._redis is not None and self._redis.available:
-            await self._redis.dedup_store(_fingerprint, shaped, ttl_seconds=300)
+            await self._redis.dedup_store(_redis_dedup_key, shaped, ttl_seconds=300)
         return shaped, agents_used
 
     # ── Execution helpers ─────────────────────────────────────────────────

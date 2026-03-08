@@ -30,6 +30,7 @@ class Delphi(BaseAgent):
     name = "delphi"
     role = "Classification Specialist"
     description = "Classifies emails by intent and contacts by relationship type"
+    timeout = 30
 
     _SHADOW_DIMENSIONS: list[str] = [
         "technical_accuracy",

@@ -2154,6 +2154,90 @@ def crm_stats() -> None:
     _run(_stats())
 
 
+@crm_app.command("audit")
+def crm_audit() -> None:
+    """Audit CRM data quality: missing values, stale stages, zero-value deals."""
+
+    async def _audit() -> None:
+        from datetime import timedelta
+
+        from ira.data.crm import CRMDatabase
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+
+        deals = await crm.list_deals()
+        issues: list[str] = []
+        zero_value = []
+        missing_model = []
+        stale_proposal = []
+        now = datetime.now(timezone.utc)
+        stale_threshold = now - timedelta(days=90)
+
+        for d in deals:
+            dd = d.to_dict() if hasattr(d, "to_dict") else d
+            val = dd.get("value", 0)
+            if val == 0 or val is None:
+                zero_value.append(dd)
+            if not dd.get("machine_model"):
+                missing_model.append(dd)
+            stage = dd.get("stage", "")
+            updated = dd.get("updated_at")
+            if stage == "PROPOSAL" and updated:
+                updated_dt = datetime.fromisoformat(updated) if isinstance(updated, str) else updated
+                if updated_dt.tzinfo is None:
+                    updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                if updated_dt < stale_threshold:
+                    stale_proposal.append(dd)
+
+        console.print(Panel(
+            f"[bold]Total deals:[/bold] {len(deals)}",
+            title="CRM Data Quality Audit",
+            border_style="yellow",
+        ))
+
+        if zero_value:
+            table = Table(title=f"Deals with value=0 ({len(zero_value)})", show_header=True)
+            table.add_column("Title", width=30)
+            table.add_column("Stage", width=14)
+            table.add_column("Contact ID", width=20)
+            for dd in zero_value[:20]:
+                table.add_row(
+                    (dd.get("title") or "")[:30],
+                    dd.get("stage", "?"),
+                    (dd.get("contact_id") or "")[:20],
+                )
+            console.print(table)
+            issues.append(f"{len(zero_value)} deals have value=0")
+
+        if missing_model:
+            console.print(f"\n[yellow]{len(missing_model)} deals missing machine_model[/yellow]")
+            issues.append(f"{len(missing_model)} deals missing machine_model")
+
+        if stale_proposal:
+            table = Table(title=f"Stale PROPOSAL deals (>90 days, {len(stale_proposal)})", show_header=True)
+            table.add_column("Title", width=30)
+            table.add_column("Value", justify="right", width=12)
+            table.add_column("Last Updated", width=20)
+            for dd in stale_proposal[:20]:
+                table.add_row(
+                    (dd.get("title") or "")[:30],
+                    f"{dd.get('value', 0):,.2f}",
+                    (dd.get("updated_at") or "")[:20],
+                )
+            console.print(table)
+            issues.append(f"{len(stale_proposal)} PROPOSAL deals stale >90 days")
+
+        if not issues:
+            console.print("[green bold]No data quality issues found.[/green bold]")
+        else:
+            console.print(f"\n[yellow bold]Issues found: {len(issues)}[/yellow bold]")
+            for issue in issues:
+                console.print(f"  - {issue}")
+
+    _run(_audit())
+
+
 @crm_app.command("companies")
 def crm_companies() -> None:
     """List all companies with contact counts."""

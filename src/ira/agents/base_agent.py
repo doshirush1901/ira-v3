@@ -65,6 +65,7 @@ class BaseAgent(ABC):
     description: str = ""
     model_provider: str = "openai"  # "openai" or "anthropic"
     knowledge_categories: list[str] = []
+    timeout: int | None = None
 
     def __init__(
         self,
@@ -84,6 +85,7 @@ class BaseAgent(ABC):
         self.state: AgentState = AgentState.THINKING
         self._default_tools_registered: bool = False
         self._last_grounding_score: float = 0.0
+        self._tools_lock = asyncio.Lock()
 
     def inject_services(self, services: dict[str, Any]) -> None:
         """Late-bind shared services after construction.
@@ -319,14 +321,22 @@ class BaseAgent(ABC):
             lines.append(f"- [{ts}] {narrative}")
         return "\n".join(lines)
 
-    _MAX_DELEGATION_DEPTH = 3
+    @property
+    def _max_delegation_depth(self) -> int:
+        try:
+            from ira.config import get_settings
+            return get_settings().app.max_delegation_depth
+        except Exception:
+            return 5
 
     async def _tool_ask_agent(self, agent_name: str, question: str) -> str:
         depth = self._services.get("_delegation_depth", 0)
-        if depth >= self._MAX_DELEGATION_DEPTH:
+        limit = self._max_delegation_depth
+        if depth >= limit:
             return (
-                f"Cannot delegate to '{agent_name}': maximum delegation "
-                f"depth ({self._MAX_DELEGATION_DEPTH}) reached."
+                f"[WARNING: Maximum delegation depth ({limit}) reached. "
+                f"Cannot delegate to '{agent_name}'. "
+                "This is a partial answer based on incomplete data.]"
             )
         pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
@@ -625,13 +635,18 @@ class BaseAgent(ABC):
         """
         _progress = on_progress or (context or {}).get("_on_progress")
 
+        self.state = AgentState.THINKING
+        self._last_grounding_score = 0.0
+        self._services.pop("_delegation_depth", None)
+
         if context and "services" in context:
             for key, svc in context["services"].items():
                 if svc is not None and key not in self._services:
                     self._services[key] = svc
             self._default_tools_registered = False
 
-        self._register_default_tools()
+        async with self._tools_lock:
+            self._register_default_tools()
 
         agent_prompt = system_prompt or (
             f"You are {self.name}, the {self.role} of the Machinecraft AI Pantheon. "

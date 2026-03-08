@@ -24,6 +24,7 @@ class Sphinx(BaseAgent):
     name = "sphinx"
     role = "Gatekeeper / Clarifier"
     description = "Asks clarifying questions when queries are ambiguous"
+    timeout = 30
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()

@@ -25,6 +25,7 @@ class Clio(BaseAgent):
     name = "clio"
     role = "Research Director"
     description = "Searches the knowledge base and answers factual questions"
+    timeout = 120
 
     # ── tool registration ────────────────────────────────────────────────
 

@@ -51,6 +51,7 @@ class Gapper(BaseAgent):
         "Uses email search, document archive, knowledge base, web search, "
         "CRM, and inter-agent delegation to resolve every gap."
     )
+    timeout = 120
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()

@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -133,6 +134,7 @@ class ContactModel(Base):
         return {
             "id": str(self.id),
             "company_id": str(self.company_id) if self.company_id else None,
+            "company_name": self.company.name if self.company is not None else None,
             "name": self.name,
             "email": self.email,
             "phone": self.phone,
@@ -149,6 +151,9 @@ class ContactModel(Base):
 
 class DealModel(Base):
     __tablename__ = "deals"
+    __table_args__ = (
+        CheckConstraint("value >= 0", name="ck_deals_value_non_negative"),
+    )
 
     id: Mapped[UUID] = mapped_column(String(36), primary_key=True, default=_str_uuid)
     contact_id: Mapped[UUID] = mapped_column(
@@ -481,13 +486,40 @@ class CRMDatabase:
         async with self._session_factory() as session:
             return await session.get(DealModel, str(deal_id))
 
+    _VALID_STAGE_TRANSITIONS: dict[DealStage, set[DealStage]] = {
+        DealStage.NEW: {DealStage.CONTACTED, DealStage.ENGAGED, DealStage.LOST},
+        DealStage.CONTACTED: {DealStage.ENGAGED, DealStage.QUALIFIED, DealStage.LOST},
+        DealStage.ENGAGED: {DealStage.QUALIFIED, DealStage.PROPOSAL, DealStage.LOST},
+        DealStage.QUALIFIED: {DealStage.PROPOSAL, DealStage.LOST},
+        DealStage.PROPOSAL: {DealStage.NEGOTIATION, DealStage.WON, DealStage.LOST},
+        DealStage.NEGOTIATION: {DealStage.WON, DealStage.LOST},
+        DealStage.WON: set(),
+        DealStage.LOST: {DealStage.NEW},
+    }
+
     async def update_deal(
-        self, deal_id: str | UUID, **kwargs: Any
+        self, deal_id: str | UUID, force: bool = False, **kwargs: Any
     ) -> DealModel | None:
+        if "value" in kwargs and kwargs["value"] is not None and kwargs["value"] < 0:
+            raise ValueError("Deal value cannot be negative")
+
         async with self._session_factory() as session:
             deal = await session.get(DealModel, str(deal_id))
             if not deal:
                 return None
+
+            if "stage" in kwargs and not force:
+                new_stage = kwargs["stage"]
+                if isinstance(new_stage, str):
+                    new_stage = DealStage(new_stage)
+                current = deal.stage if isinstance(deal.stage, DealStage) else DealStage(deal.stage)
+                valid = self._VALID_STAGE_TRANSITIONS.get(current, set())
+                if new_stage not in valid:
+                    logger.warning(
+                        "Invalid stage transition %s -> %s for deal %s (use force=True to override)",
+                        current.value, new_stage.value, deal_id,
+                    )
+
             for k, v in kwargs.items():
                 setattr(deal, k, v)
             if "updated_at" not in kwargs:
