@@ -456,6 +456,12 @@ class BaseAgent(ABC):
                     f"SISTER COMPANY: {sister['name']} — {sister.get('note', '')}"
                 )
 
+        for excluded in data.get("not_machinecraft", []):
+            if query_lower in excluded.get("name", "").lower():
+                matches.append(
+                    f"NOT MACHINECRAFT: {excluded['name']} — {excluded.get('note', '')}"
+                )
+
         if not matches:
             return f"No known entity match for '{query}'. Proceed with normal classification."
         return "\n".join(matches)

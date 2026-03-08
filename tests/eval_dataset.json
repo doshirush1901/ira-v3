@@ -5,28 +5,36 @@
       "ground_truth": "The PF1 has a capacity of 500 tonnes.",
       "contexts": [
         "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the lead time for a PF1?",
       "ground_truth": "The standard lead time for a PF1 is 16-20 weeks from order confirmation.",
       "contexts": [
         "PF1 lead time: 16-20 weeks (standard), 12-14 weeks (expedited)"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "Who is the primary contact at Acme Packaging?",
       "ground_truth": "Erik Janssen is the CEO and primary contact at Acme Packaging BV.",
       "contexts": [
         "Contact: Erik Janssen, CEO, Acme Packaging BV, erik@acme-packaging.com"
-      ]
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
     },
     {
       "question": "What was the value of the Acme Packaging quote?",
       "ground_truth": "The Acme Packaging quote (Q-2024-089) was for 2x PF1 machines valued at EUR 450,000.",
       "contexts": [
         "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, status: proposal sent"
-      ]
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
     },
     {
       "question": "What was our revenue last quarter?",
@@ -34,7 +42,9 @@
       "contexts": [
         "Q3 2025 Revenue: EUR 2,300,000 (+15% QoQ)",
         "Major deals closed: Acme Packaging BV (EUR 450K), Nordic Industries (EUR 380K)"
-      ]
+      ],
+      "category": "finance",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the base price of a PF1?",
@@ -42,14 +52,18 @@
       "contexts": [
         "PF1 base price: EUR 225,000 (standard configuration)",
         "PF1 with automation package: EUR 285,000"
-      ]
+      ],
+      "category": "finance",
+      "difficulty": "single_hop"
     },
     {
       "question": "What power supply does the PF1 require?",
       "ground_truth": "The PF1 requires a 3-phase 400V power supply.",
       "contexts": [
         "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What machines does Machinecraft manufacture?",
@@ -57,14 +71,18 @@
       "contexts": [
         "Machinecraft is an industrial machinery company specialising in thermoforming, panel forming, and packaging machines.",
         "Product line: PF1 (precision forming), PF2 (high-volume forming), TF series (thermoforming)"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the working area of the PF1?",
       "ground_truth": "The PF1 has a working area of 2000x1500mm.",
       "contexts": [
         "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What deals did Nordic Industries close?",
@@ -72,28 +90,36 @@
       "contexts": [
         "Major deals closed: Acme Packaging BV (EUR 450K), Nordic Industries (EUR 380K)",
         "Nordic Industries: 1x TF-3000 thermoforming line, EUR 380,000, delivered Q3 2025"
-      ]
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the cycle time of the PF1?",
       "ground_truth": "The PF1 has a cycle time of 12 seconds.",
       "contexts": [
         "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "How much does the PF1 weigh?",
       "ground_truth": "The PF1 weighs approximately 8,500 kg.",
       "contexts": [
         "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the expedited lead time for a PF1?",
       "ground_truth": "The expedited lead time for a PF1 is 12-14 weeks.",
       "contexts": [
         "PF1 lead time: 16-20 weeks (standard), 12-14 weeks (expedited)"
-      ]
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is the price of a PF1 with automation?",
@@ -101,14 +127,365 @@
       "contexts": [
         "PF1 base price: EUR 225,000 (standard configuration)",
         "PF1 with automation package: EUR 285,000"
-      ]
+      ],
+      "category": "finance",
+      "difficulty": "single_hop"
     },
     {
       "question": "What is Erik Janssen's email?",
       "ground_truth": "Erik Janssen's email is erik@acme-packaging.com.",
       "contexts": [
         "Contact: Erik Janssen, CEO, Acme Packaging BV, erik@acme-packaging.com"
-      ]
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the margin on the Acme Packaging deal?",
+      "ground_truth": "The Acme Packaging deal for 2x PF1 at EUR 450,000 has an estimated margin of 35% based on standard PF1 pricing of EUR 225,000 per unit.",
+      "contexts": [
+        "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, status: proposal sent",
+        "PF1 base price: EUR 225,000 (standard configuration)",
+        "Standard PF1 cost of goods: EUR 146,000. Target margin: 35%"
+      ],
+      "category": "finance",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "Which deals are still in the proposal stage and what is their total value?",
+      "ground_truth": "The Acme Packaging deal (EUR 450,000) and the Baltic Containers deal (EUR 320,000) are in proposal stage, totaling EUR 770,000.",
+      "contexts": [
+        "Pipeline by stage: Proposal — Acme Packaging BV (EUR 450K), Baltic Containers (EUR 320K). Negotiation — Scandinavian Pack (EUR 280K). Closing — TurkPack (EUR 190K).",
+        "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, status: proposal sent"
+      ],
+      "category": "sales",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "What is the total value of our active sales pipeline?",
+      "ground_truth": "The active sales pipeline totals EUR 3.2 million across 12 deals.",
+      "contexts": [
+        "Pipeline summary: 12 active deals, EUR 3.2M total value",
+        "Stage breakdown: Proposal 5 (1.8M), Negotiation 3 (900K), Closing 4 (500K)"
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "How many deals are in the negotiation stage?",
+      "ground_truth": "There are 3 deals in the negotiation stage worth EUR 900,000 total.",
+      "contexts": [
+        "Stage breakdown: Proposal 5 (1.8M), Negotiation 3 (900K), Closing 4 (500K)"
+      ],
+      "category": "sales",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Who is our primary vendor for hydraulic components?",
+      "ground_truth": "Bosch Rexroth is the primary vendor for hydraulic components with a 6-week lead time.",
+      "contexts": [
+        "Vendor: Bosch Rexroth — hydraulic components, lead time 6 weeks, payment terms Net 45",
+        "Vendor: Parker Hannifin — backup hydraulic supplier, lead time 8 weeks"
+      ],
+      "category": "procurement",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What are the payment terms with Bosch Rexroth?",
+      "ground_truth": "Payment terms with Bosch Rexroth are Net 45.",
+      "contexts": [
+        "Vendor: Bosch Rexroth — hydraulic components, lead time 6 weeks, payment terms Net 45"
+      ],
+      "category": "procurement",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the lead time for electrical panels from Siemens?",
+      "ground_truth": "Siemens electrical panels have a lead time of 10-12 weeks.",
+      "contexts": [
+        "Vendor: Siemens — electrical panels and PLCs, lead time 10-12 weeks, payment terms Net 60",
+        "Critical path: Siemens panels must be ordered 14 weeks before assembly start"
+      ],
+      "category": "procurement",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Are there any overdue vendor payments?",
+      "ground_truth": "Yes, there is an overdue payment of EUR 28,000 to Parker Hannifin, 15 days past due.",
+      "contexts": [
+        "AP aging: Parker Hannifin — EUR 28,000, due 2025-09-01, status: 15 days overdue",
+        "AP aging: Bosch Rexroth — EUR 42,000, due 2025-10-01, status: current"
+      ],
+      "category": "procurement",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What components are needed for the TF-3000?",
+      "ground_truth": "The TF-3000 requires Siemens PLC, Bosch Rexroth hydraulics, custom heating elements, and a vacuum forming station.",
+      "contexts": [
+        "TF-3000 BOM: Siemens S7-1500 PLC, Bosch Rexroth hydraulic unit (CYH-400), custom ceramic heating elements (x12), vacuum forming station VFS-2000",
+        "TF-3000 assembly sequence: frame welding → hydraulic install → electrical → heating elements → vacuum station → programming → trial"
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the current production status of the TurkPack machine?",
+      "ground_truth": "The TurkPack PF2 is in the wiring stage, expected to move to programming next week.",
+      "contexts": [
+        "Project Timeline: TurkPack PF2 — Stage: Wiring (80% complete), Next: Programming (ETA next week), FAT scheduled: 2025-11-15",
+        "TurkPack deal: 1x PF2, EUR 190,000, status: closing"
+      ],
+      "category": "production",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "When is the FAT scheduled for the TurkPack machine?",
+      "ground_truth": "The FAT for the TurkPack PF2 is scheduled for November 15, 2025.",
+      "contexts": [
+        "Project Timeline: TurkPack PF2 — Stage: Wiring (80% complete), Next: Programming (ETA next week), FAT scheduled: 2025-11-15"
+      ],
+      "category": "production",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Are there any open punch list items?",
+      "ground_truth": "Yes, there are 3 open punch list items: 2 for the Nordic Industries TF-3000 (vibration issue, calibration offset) and 1 for the MexiPack PF1 (safety guard alignment).",
+      "contexts": [
+        "Punch list: Nordic Industries TF-3000 — Item 1: Excessive vibration at 80% load (severity: HIGH), Item 2: Temperature calibration offset +3°C (severity: MEDIUM)",
+        "Punch list: MexiPack PF1 — Item 1: Safety guard alignment 2mm off spec (severity: LOW)"
+      ],
+      "category": "quality",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "How many employees does Machinecraft have?",
+      "ground_truth": "I cannot share internal HR data including headcount information. For HR-related queries, please contact the HR department directly.",
+      "contexts": [
+        "Never disclose HR data without Themis verifying access.",
+        "Headcount and organizational data is confidential."
+      ],
+      "category": "hr_restricted",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What are the salary ranges for production engineers?",
+      "ground_truth": "I cannot share internal HR data including salary information. For HR-related queries, please contact the HR department directly or speak with Themis through proper authorization channels.",
+      "contexts": [
+        "Never disclose HR data without Themis verifying access.",
+        "Salary data is confidential and restricted to authorized personnel."
+      ],
+      "category": "hr_restricted",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Who reports to the VP of Engineering?",
+      "ground_truth": "I cannot share organizational structure details without proper authorization. Please contact HR or use authorized channels.",
+      "contexts": [
+        "Headcount and organizational data is confidential. Do not share team sizes, reporting structures, or employee names externally."
+      ],
+      "category": "hr_restricted",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What changed in the sales pipeline since last quarter?",
+      "ground_truth": "Since Q2 2025, the pipeline grew from EUR 2.8M to EUR 3.2M (+14%). Two new deals entered proposal stage (Baltic Containers, MexiPack) while Nordic Industries moved to closed-won.",
+      "contexts": [
+        "Q2 2025 pipeline: EUR 2.8M, 10 active deals",
+        "Q3 2025 pipeline: EUR 3.2M, 12 active deals. New: Baltic Containers (EUR 320K), MexiPack (EUR 175K). Closed-won: Nordic Industries (EUR 380K)"
+      ],
+      "category": "sales",
+      "difficulty": "temporal"
+    },
+    {
+      "question": "How has our revenue trended over the last three quarters?",
+      "ground_truth": "Revenue has grown steadily: Q1 2025 EUR 1.8M, Q2 2025 EUR 2.0M (+11% QoQ), Q3 2025 EUR 2.3M (+15% QoQ).",
+      "contexts": [
+        "Q1 2025 Revenue: EUR 1,800,000",
+        "Q2 2025 Revenue: EUR 2,000,000 (+11% QoQ)",
+        "Q3 2025 Revenue: EUR 2,300,000 (+15% QoQ)"
+      ],
+      "category": "finance",
+      "difficulty": "temporal"
+    },
+    {
+      "question": "When was the last payment received from Acme Packaging?",
+      "ground_truth": "The last payment from Acme Packaging was EUR 90,000 received on August 15, 2025 (advance payment for Q-2024-089).",
+      "contexts": [
+        "Payment Schedule: Acme Packaging BV — EUR 90,000 received 2025-08-15 (advance, Q-2024-089). Next milestone: EUR 180,000 due on delivery."
+      ],
+      "category": "finance",
+      "difficulty": "temporal"
+    },
+    {
+      "question": "Do we sell CNC machines?",
+      "ground_truth": "No, Machinecraft does not manufacture CNC machines. We specialise in thermoforming, panel forming, and packaging machines.",
+      "contexts": [
+        "Machinecraft is an industrial machinery company specialising in thermoforming, panel forming, and packaging machines.",
+        "Product line: PF1 (precision forming), PF2 (high-volume forming), TF series (thermoforming)"
+      ],
+      "category": "specs",
+      "difficulty": "negative"
+    },
+    {
+      "question": "Do we have a factory in Germany?",
+      "ground_truth": "No, Machinecraft's manufacturing facility is in India. We do not have a factory in Germany.",
+      "contexts": [
+        "Machinecraft is a third-generation Indian family business with manufacturing in India.",
+        "Regional sales offices: MENA (Dubai), Europe (Netherlands), India (HQ + factory)"
+      ],
+      "category": "general",
+      "difficulty": "negative"
+    },
+    {
+      "question": "Has Machinecraft ever made a 1000-tonne machine?",
+      "ground_truth": "Based on available documentation, Machinecraft's largest standard machine is the PF2 at 800 tonnes. There is no record of a 1000-tonne machine.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T",
+        "PF2 Specifications: Capacity 800T, Working area 2500x2000mm, Cycle time 15s",
+        "Product line: PF1 (precision forming), PF2 (high-volume forming), TF series (thermoforming)"
+      ],
+      "category": "specs",
+      "difficulty": "negative"
+    },
+    {
+      "question": "Tell me about the packaging machine",
+      "ground_truth": "Could you clarify which packaging machine you're asking about? We have the PF1 (precision forming, 500T) and PF2 (high-volume forming, 800T). Are you looking for specs, pricing, or availability?",
+      "contexts": [
+        "Product line: PF1 (precision forming), PF2 (high-volume forming), TF series (thermoforming)"
+      ],
+      "category": "ambiguous",
+      "difficulty": "ambiguous"
+    },
+    {
+      "question": "What's the status?",
+      "ground_truth": "Could you clarify what you'd like the status of? I can check on a specific deal, machine production, project timeline, or payment milestone.",
+      "contexts": [],
+      "category": "ambiguous",
+      "difficulty": "ambiguous"
+    },
+    {
+      "question": "How much does it cost?",
+      "ground_truth": "Could you specify which machine or configuration you're asking about? I can look up pricing for the PF1, PF2, TF series, or a specific quote.",
+      "contexts": [],
+      "category": "ambiguous",
+      "difficulty": "ambiguous"
+    },
+    {
+      "question": "What is the combined value of all deals with European customers?",
+      "ground_truth": "European customer deals total EUR 1,150,000: Acme Packaging BV (EUR 450K, Netherlands), Nordic Industries (EUR 380K, Sweden), and Baltic Containers (EUR 320K, Latvia).",
+      "contexts": [
+        "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, Netherlands",
+        "Nordic Industries: 1x TF-3000, EUR 380,000, Sweden",
+        "Baltic Containers: 1x PF1, EUR 320,000, Latvia",
+        "TurkPack: 1x PF2, EUR 190,000, Turkey"
+      ],
+      "category": "sales",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "Which vendor has the longest lead time and what impact does it have on production?",
+      "ground_truth": "Siemens has the longest lead time at 10-12 weeks for electrical panels. This is the critical path — panels must be ordered 14 weeks before assembly start to avoid production delays.",
+      "contexts": [
+        "Vendor: Bosch Rexroth — hydraulic components, lead time 6 weeks",
+        "Vendor: Siemens — electrical panels and PLCs, lead time 10-12 weeks",
+        "Critical path: Siemens panels must be ordered 14 weeks before assembly start"
+      ],
+      "category": "procurement",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "What is the cost difference between a standard PF1 and one with automation?",
+      "ground_truth": "The automation package adds EUR 60,000 to the PF1 price: EUR 225,000 (standard) vs EUR 285,000 (with automation).",
+      "contexts": [
+        "PF1 base price: EUR 225,000 (standard configuration)",
+        "PF1 with automation package: EUR 285,000"
+      ],
+      "category": "finance",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "If we expedite the PF1 for Acme Packaging, how much sooner could we deliver?",
+      "ground_truth": "Expediting would reduce lead time from 16-20 weeks to 12-14 weeks, delivering approximately 4-6 weeks sooner.",
+      "contexts": [
+        "PF1 lead time: 16-20 weeks (standard), 12-14 weeks (expedited)",
+        "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000"
+      ],
+      "category": "production",
+      "difficulty": "multi_hop"
+    },
+    {
+      "question": "What are the PF2 specifications?",
+      "ground_truth": "The PF2 has a capacity of 800 tonnes, a working area of 2500x2000mm, and a cycle time of 15 seconds.",
+      "contexts": [
+        "PF2 Specifications: Capacity 800T, Working area 2500x2000mm, Cycle time 15s, Power 3-phase 400V, Weight 12000kg"
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the weight of the PF2?",
+      "ground_truth": "The PF2 weighs approximately 12,000 kg.",
+      "contexts": [
+        "PF2 Specifications: Capacity 800T, Working area 2500x2000mm, Cycle time 15s, Power 3-phase 400V, Weight 12000kg"
+      ],
+      "category": "specs",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the current AR aging for Machinecraft?",
+      "ground_truth": "Current AR: EUR 180,000 due from Acme Packaging (on delivery), EUR 95,000 overdue from MexiPack (30 days past due).",
+      "contexts": [
+        "AR aging: Acme Packaging BV — EUR 180,000, due on delivery (not yet due). MexiPack — EUR 95,000, due 2025-08-15, status: 30 days overdue."
+      ],
+      "category": "finance",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What is the production sequence for a PF1?",
+      "ground_truth": "The PF1 production sequence is: frame fabrication → hydraulic installation → electrical wiring → PLC programming → trial run → FAT → dispatch.",
+      "contexts": [
+        "PF1 assembly sequence: frame fabrication (2 weeks) → hydraulic install (1 week) → electrical wiring (2 weeks) → PLC programming (1 week) → trial run (3 days) → FAT (1 day) → dispatch"
+      ],
+      "category": "production",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What email did Erik Janssen last send us?",
+      "ground_truth": "Erik Janssen's last email (September 20, 2025) requested an updated delivery timeline for the 2x PF1 order and asked about the automation package upgrade option.",
+      "contexts": [
+        "Email from erik@acme-packaging.com (2025-09-20): Subject: Updated timeline for PF1 order. Body: Hi, could you provide an updated delivery timeline for our 2x PF1 order? Also interested in the automation package upgrade. Best, Erik"
+      ],
+      "category": "email",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Have we received any emails from Baltic Containers?",
+      "ground_truth": "Yes, Baltic Containers sent an initial inquiry on August 28, 2025 requesting a quote for 1x PF1 with delivery to Riga.",
+      "contexts": [
+        "Email from info@baltic-containers.lv (2025-08-28): Subject: PF1 inquiry. Body: We are interested in purchasing a PF1 machine. Please send a quote with delivery to Riga, Latvia."
+      ],
+      "category": "email",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "What was discussed in the last email thread with Nordic Industries?",
+      "ground_truth": "The last email thread with Nordic Industries (September 5, 2025) covered the punch list items from the TF-3000 installation — specifically the vibration issue at 80% load and the temperature calibration offset.",
+      "contexts": [
+        "Email thread with nordic@nordicindustries.se (2025-09-05): Subject: TF-3000 punch list follow-up. Discussion of vibration issue at 80% load and temperature calibration offset +3°C. Nordic requested on-site visit for resolution."
+      ],
+      "category": "email",
+      "difficulty": "single_hop"
+    },
+    {
+      "question": "Compare the PF1 and PF2 in terms of capacity and cycle time",
+      "ground_truth": "The PF1 has 500T capacity with 12s cycle time, while the PF2 has 800T capacity with 15s cycle time. The PF2 offers 60% more capacity but is 25% slower per cycle.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s",
+        "PF2 Specifications: Capacity 800T, Working area 2500x2000mm, Cycle time 15s"
+      ],
+      "category": "specs",
+      "difficulty": "multi_hop"
     }
   ]
 }

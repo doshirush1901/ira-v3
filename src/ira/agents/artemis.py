@@ -213,11 +213,11 @@ class Artemis(BaseAgent):
                 f"Snippet: {item.get('snippet', '')[:150]}"
             )
 
-        prompt = _BATCH_TRIAGE_PROMPT + "\n\nEMAILS:\n" + "\n".join(summaries)
+        user_msg = _BATCH_TRIAGE_PROMPT + "\n\nEMAILS:\n" + "\n".join(summaries)
 
         result = await self._llm.generate_text(
-            prompt=prompt,
-            system="You are a fast email classifier. Return only valid JSON.",
+            "You are a fast email classifier. Return only valid JSON.",
+            user_msg,
             temperature=0.0,
             max_tokens=1000,
         )
@@ -303,7 +303,8 @@ class Artemis(BaseAgent):
         thread_text = "\n---\n".join(messages)
 
         summary = await self._llm.generate_text(
-            prompt=(
+            "You are a sales intelligence analyst for Machinecraft.",
+            (
                 f"Analyze this email thread from Machinecraft (industrial machinery).\n\n"
                 f"{thread_text}\n\n"
                 "Return a structured summary:\n"
@@ -314,7 +315,6 @@ class Artemis(BaseAgent):
                 "5. Current status (won, lost, pending, no response)\n"
                 "6. Next action recommended"
             ),
-            system="You are a sales intelligence analyst for Machinecraft.",
             temperature=0.1,
             max_tokens=1500,
         )

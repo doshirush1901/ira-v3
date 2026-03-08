@@ -434,3 +434,64 @@ class TestRetrievalQuality:
         result = ragas_evaluate(dataset, metrics=[answer_relevancy])
         score = result["answer_relevancy"]
         assert score >= 0.6, f"Answer relevancy {score:.2f} below 0.6 threshold"
+
+
+@pytest.mark.skipif(not HAS_RAGAS, reason="ragas not installed")
+class TestRetrievalQualityByCategory:
+    """Per-category RAGAS evaluation for targeted quality tracking.
+
+    Groups the eval dataset by ``category`` and runs context_precision
+    per group so regressions in specific domains are caught early.
+    """
+
+    _CATEGORY_THRESHOLDS: dict[str, float] = {
+        "specs": 0.6,
+        "sales": 0.5,
+        "finance": 0.5,
+        "procurement": 0.5,
+        "production": 0.5,
+        "quality": 0.4,
+        "email": 0.4,
+        "general": 0.4,
+        "ambiguous": 0.3,
+        "hr_restricted": 0.2,
+    }
+
+    def test_per_category_context_precision(self):
+        """Context precision should meet per-category thresholds."""
+        items = _load_eval_dataset()
+        if not items:
+            pytest.skip("eval_dataset.json not found or empty")
+
+        categories: dict[str, list[dict]] = {}
+        for item in items:
+            cat = item.get("category", "uncategorized")
+            categories.setdefault(cat, []).append(item)
+
+        failures: list[str] = []
+        for cat, cat_items in sorted(categories.items()):
+            if not cat_items or not any(i.get("contexts") for i in cat_items):
+                continue
+            filtered = [i for i in cat_items if i.get("contexts")]
+            if not filtered:
+                continue
+            dataset = Dataset.from_dict({
+                "question": [i["question"] for i in filtered],
+                "answer": [i["ground_truth"] for i in filtered],
+                "contexts": [i["contexts"] for i in filtered],
+                "ground_truth": [i["ground_truth"] for i in filtered],
+            })
+            result = ragas_evaluate(dataset, metrics=[context_precision])
+            score = result["context_precision"]
+            threshold = self._CATEGORY_THRESHOLDS.get(cat, 0.4)
+            if score < threshold:
+                failures.append(
+                    f"{cat}: precision={score:.2f} < threshold={threshold:.2f} "
+                    f"({len(filtered)} questions)"
+                )
+
+        if failures:
+            pytest.fail(
+                "Per-category context precision below threshold:\n"
+                + "\n".join(f"  - {f}" for f in failures)
+            )
