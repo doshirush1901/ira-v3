@@ -112,7 +112,7 @@ When the user asks to find, search, or pull up emails from a person or about a t
 curl -s -X POST http://localhost:8000/api/email/search \
   -H "Content-Type: application/json" \
   -d '{
-    "from_address": "<sender email or domain, e.g. jaap@dutch-tides.com>",
+    "from_address": "<sender email or domain, e.g. contact@acme-corp.com>",
     "subject": "<optional subject keyword>",
     "after": "<optional YYYY/MM/DD>",
     "before": "<optional YYYY/MM/DD>",

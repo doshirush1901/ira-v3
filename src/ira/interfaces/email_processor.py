@@ -7,7 +7,7 @@ Supports two modes controlled by the ``IRA_EMAIL_MODE`` environment variable:
   through the DigestiveSystem, resolves sender identity, and logs interactions
   in the CRM.  **Never** sends, drafts, or modifies emails.
 
-* **OPERATIONAL**: Active processing of ``ira@machinecraft.org``.  Fetches
+* **OPERATIONAL**: Active processing of the configured ``GOOGLE_IRA_EMAIL``.  Fetches
   unread emails, runs the full analysis pipeline, generates reply drafts via
   Pantheon agents for actionable intents, saves drafts to Gmail, sends a
   Telegram notification, and marks originals as read.  Human-in-the-loop:
@@ -470,7 +470,7 @@ class EmailProcessor:
         """Search Gmail using native query syntax and return parsed Email models.
 
         Parameters build a Gmail ``q`` string.  For example
-        ``from_address="jaap@dutch-tides.com"`` becomes ``from:jaap@dutch-tides.com``.
+        ``from_address="contact@acme-corp.com"`` becomes ``from:contact@acme-corp.com``.
         ``query`` is appended verbatim for free-form Gmail search operators.
         ``after`` / ``before`` accept ``YYYY/MM/DD`` strings.
         """

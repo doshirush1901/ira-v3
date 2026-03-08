@@ -99,15 +99,15 @@ class TestAnswerRelevancy:
 
     def test_sales_query_relevancy(self):
         test_case = _make_test_case(
-            query="What is the current status of the Dutch Tides deal?",
+            query="What is the current status of the Acme Packaging deal?",
             response=(
-                "The Dutch Tides deal is currently in the proposal stage. "
+                "The Acme Packaging deal is currently in the proposal stage. "
                 "We sent a quote for 2x PF1 machines on January 15th, valued at EUR 450,000. "
-                "Jaap van der Berg is the primary contact. Follow-up is scheduled for next week."
+                "Erik Janssen is the primary contact. Follow-up is scheduled for next week."
             ),
             retrieval_context=[
-                "Quote Q-2024-089: Dutch Tides BV, 2x PF1, EUR 450,000, status: proposal sent",
-                "Contact: Jaap van der Berg, CEO, Dutch Tides BV, jaap@dutch-tides.com",
+                "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, status: proposal sent",
+                "Contact: Erik Janssen, CEO, Acme Packaging BV, erik@acme-packaging.com",
             ],
         )
         assert_test(test_case, [self.metric])
@@ -141,11 +141,11 @@ class TestFaithfulness:
             query="What was our revenue last quarter?",
             response=(
                 "Last quarter's revenue was EUR 2.3 million, up 15% from the previous quarter. "
-                "The main contributors were the Dutch Tides and Norsk Hydro deals."
+                "The main contributors were the Acme Packaging and Nordic Industries deals."
             ),
             retrieval_context=[
                 "Q3 2025 Revenue: EUR 2,300,000 (+15% QoQ)",
-                "Major deals closed: Dutch Tides BV (EUR 450K), Norsk Hydro (EUR 380K)",
+                "Major deals closed: Acme Packaging BV (EUR 450K), Nordic Industries (EUR 380K)",
             ],
         )
         assert_test(test_case, [self.metric])
@@ -194,7 +194,7 @@ class TestAgentToolCorrectness:
 
     def test_quote_query_uses_pricing_tools(self):
         test_case = _make_test_case(
-            query="Generate a quote for 2x PF1 machines for Dutch Tides",
+            query="Generate a quote for 2x PF1 machines for Acme Packaging",
             response="Quote Q-2025-001 generated: 2x PF1, EUR 450,000.",
             tools_called=["search_knowledge", "estimate_price", "generate_quote_document"],
             expected_tools=["search_knowledge", "estimate_price", "generate_quote_document"],
@@ -221,7 +221,7 @@ class TestAgentToolCorrectness:
 
     def test_email_draft_uses_writing_tools(self):
         test_case = _make_test_case(
-            query="Draft a follow-up email to Jaap at Dutch Tides",
+            query="Draft a follow-up email to Erik at Acme Packaging",
             response="Subject: Follow-up on PF1 Quote\n\nDear Jaap, ...",
             tools_called=["search_knowledge", "search_emails", "draft_proposal"],
             expected_tools=["search_knowledge", "search_emails", "draft_proposal"],
@@ -248,18 +248,18 @@ class TestAgentTaskCompletion:
 
     def test_email_draft_produces_email(self):
         test_case = _make_test_case(
-            query="Draft a follow-up email to Dutch Tides about the PF1 quote",
+            query="Draft a follow-up email to Acme Packaging about the PF1 quote",
             response=(
                 "Subject: Follow-up — PF1 Quote Q-2024-089\n\n"
                 "Dear Jaap,\n\n"
                 "I hope this message finds you well. I wanted to follow up on the "
                 "quote we sent for 2x PF1 machines (EUR 450,000). We are ready to "
                 "discuss any adjustments to the configuration or timeline.\n\n"
-                "Best regards,\nRushabh Doshi\nMachinecraft"
+                "Best regards,\nThe Machinecraft Team"
             ),
             retrieval_context=[
-                "Quote Q-2024-089: Dutch Tides BV, 2x PF1, EUR 450,000",
-                "Contact: Jaap van der Berg, CEO, Dutch Tides BV",
+                "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000",
+                "Contact: Erik Janssen, CEO, Acme Packaging BV",
             ],
         )
         assert_test(test_case, [self.relevancy])
@@ -276,7 +276,7 @@ class TestAgentTaskCompletion:
                 "- Proposal stage: 5 deals (EUR 1.8M)\n"
                 "- Negotiation: 3 deals (EUR 900K)\n"
                 "- Closing: 4 deals (EUR 500K)\n\n"
-                "Top deals: Dutch Tides (EUR 450K), Norsk Hydro (EUR 380K)"
+                "Top deals: Acme Packaging (EUR 450K), Nordic Industries (EUR 380K)"
             ),
             retrieval_context=[
                 "Pipeline: 12 active deals, EUR 3.2M total value",

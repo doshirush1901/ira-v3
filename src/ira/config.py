@@ -77,7 +77,7 @@ class GoogleConfig(BaseSettings):
     token_path: Path = Path("token.json")
     oauth_client_id: str = ""
     oauth_client_secret: SecretStr = SecretStr("")
-    ira_email: str = "rushabh@machinecraft.org"
+    ira_email: str = ""
     training_email: str = ""
     email_mode: EmailMode = Field(
         default=EmailMode.TRAINING,

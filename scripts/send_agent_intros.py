@@ -3,12 +3,13 @@
 
 Each agent writes about themselves: who they are, what they do, their skills,
 pipelines, data access, collaborators, and what makes them an AI agent.
-Emails are sent to rushabh@machinecraft.org via Gmail API.
+Emails are sent to the address specified in INTRO_RECIPIENT env var via Gmail API.
 """
 
 import asyncio
 import base64
 import logging
+import os
 import sys
 import time
 from email.mime.text import MIMEText
@@ -23,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agent_intros")
 
-TO = "rushabh@machinecraft.org"
+TO = os.environ.get("INTRO_RECIPIENT", "founder@example.com")
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
@@ -303,7 +304,7 @@ AGENTS = {
 INTRO_EMAIL_PROMPT = """\
 You are {agent_name}, the {agent_title} of the Machinecraft AI Pantheon.
 
-You are writing a self-introduction email to Rushabh Doshi, the founder and CEO
+You are writing a self-introduction email to the founder and CEO
 of Machinecraft, who built you. Write in Tim Urban's Wait But Why style:
 conversational, funny, uses analogies and metaphors, occasionally goes on
 tangents that circle back brilliantly, uses visual hierarchy with headers and

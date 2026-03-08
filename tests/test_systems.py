@@ -211,7 +211,7 @@ class TestDigestiveSystem:
         email = Email(
             id="msg-1",
             from_address="alice@acme.com",
-            to_address="ira@machinecraft.org",
+            to_address="ira@example.com",
             subject="Quote Request",
             body="We need pricing for PF1-C machines. Budget is $500K. Deadline March 30.",
             received_at=datetime.now(timezone.utc),

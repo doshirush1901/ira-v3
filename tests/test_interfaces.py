@@ -44,8 +44,8 @@ def _make_settings(email_mode: EmailMode = EmailMode.TRAINING) -> MagicMock:
     s.external_apis.api_key.get_secret_value.return_value = ""
     s.google.credentials_path = "/tmp/creds.json"
     s.google.token_path = "/tmp/token.json"
-    s.google.ira_email = "ira@machinecraft.org"
-    s.google.training_email = "rushabh@machinecraft.org"
+    s.google.ira_email = "ira@example.com"
+    s.google.training_email = "founder@example.com"
     s.google.email_mode = email_mode
     s.embedding.api_key.get_secret_value.return_value = ""
     s.embedding.model = "voyage-test"
@@ -65,7 +65,7 @@ def _make_settings(email_mode: EmailMode = EmailMode.TRAINING) -> MagicMock:
 
 def _make_email(
     from_addr: str = "client@example.com",
-    to_addr: str = "rushabh@machinecraft.org",
+    to_addr: str = "founder@example.com",
     subject: str = "Test email",
     body: str = "Hello, I need pricing for PF1-C.",
     msg_id: str = "msg_001",
@@ -86,7 +86,7 @@ def _make_email(
 def _make_gmail_raw_message(
     msg_id: str = "msg_001",
     from_addr: str = "client@example.com",
-    to_addr: str = "rushabh@machinecraft.org",
+    to_addr: str = "founder@example.com",
     subject: str = "Test email",
     body: str = "Hello, I need pricing for PF1-C.",
     thread_id: str = "thread_001",
@@ -174,7 +174,7 @@ class TestEmailProcessorTraining:
 
     def test_training_mode_initialises(self, training_processor):
         assert training_processor._mode is EmailMode.TRAINING
-        assert training_processor._training_email == "rushabh@machinecraft.org"
+        assert training_processor._training_email == "founder@example.com"
 
     def test_no_public_send_method_exists(self, training_processor):
         assert not hasattr(training_processor, "send_email")
@@ -215,7 +215,7 @@ class TestEmailProcessorTraining:
         assert training_processor._infer_direction(email) is Direction.INBOUND
 
     def test_infer_direction_outbound(self, training_processor):
-        email = _make_email(from_addr="rushabh@machinecraft.org", to_addr="client@example.com")
+        email = _make_email(from_addr="founder@example.com", to_addr="client@example.com")
         assert training_processor._infer_direction(email) is Direction.OUTBOUND
 
     async def test_analyze_email_runs_full_pipeline(self, training_processor):
@@ -304,7 +304,7 @@ class TestEmailProcessorOperational:
 
     def test_operational_mode_initialises(self, operational_processor):
         assert operational_processor._mode is EmailMode.OPERATIONAL
-        assert operational_processor._operational_email == "ira@machinecraft.org"
+        assert operational_processor._operational_email == "ira@example.com"
 
     def test_operational_stores_dependencies(self, operational_processor):
         assert operational_processor._delphi is not None
@@ -317,7 +317,7 @@ class TestEmailProcessorOperational:
     async def test_process_inbox_creates_draft_for_reply_intent(self, operational_processor):
         """Verify that process_inbox creates a draft and does NOT send directly."""
         raw_msg = _make_gmail_raw_message(
-            to_addr="ira@machinecraft.org",
+            to_addr="ira@example.com",
             body="I need a quote for the PF1-C machine.",
         )
 
@@ -352,7 +352,7 @@ class TestEmailProcessorOperational:
             return_value='{"intent":"SPAM","urgency":"LOW","suggested_agent":"","summary":"Spam"}',
         )
         raw_msg = _make_gmail_raw_message(
-            to_addr="ira@machinecraft.org",
+            to_addr="ira@example.com",
             body="Buy cheap watches now!",
         )
 
@@ -421,13 +421,13 @@ class TestEmailProcessorOperational:
     def test_infer_direction_operational_inbound(self, operational_processor):
         email = _make_email(
             from_addr="client@example.com",
-            to_addr="ira@machinecraft.org",
+            to_addr="ira@example.com",
         )
         assert operational_processor._infer_direction(email) is Direction.INBOUND
 
     def test_infer_direction_operational_outbound(self, operational_processor):
         email = _make_email(
-            from_addr="ira@machinecraft.org",
+            from_addr="ira@example.com",
             to_addr="client@example.com",
         )
         assert operational_processor._infer_direction(email) is Direction.OUTBOUND
@@ -570,7 +570,7 @@ class TestCLIGraduate:
         assert "Graduation successful" in result.output
         mock_env.assert_called_once_with({
             "IRA_EMAIL_MODE": "OPERATIONAL",
-            "IRA_EMAIL": "ira@machinecraft.org",
+            "IRA_EMAIL": "${GOOGLE_IRA_EMAIL}",
         })
         assert mock_subproc.call_count == 2
 
@@ -911,8 +911,8 @@ class TestServerEndpoints:
         email = SimpleNamespace(
             id="msg_100",
             thread_id="thread_50",
-            from_address="jaap@dutch-tides.com",
-            to_address="rushabh@machinecraft.org",
+            from_address="erik@acme-packaging.com",
+            to_address="founder@example.com",
             subject="FW: last payment",
             body="Thanks for the mail, but we don't think we can...",
             received_at=datetime(2026, 3, 4, 17, 17, tzinfo=timezone.utc),
@@ -922,18 +922,18 @@ class TestServerEndpoints:
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/api/email/search", json={
-                "from_address": "jaap@dutch-tides.com",
+                "from_address": "erik@acme-packaging.com",
             })
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1
-        assert data["emails"][0]["from"] == "jaap@dutch-tides.com"
+        assert data["emails"][0]["from"] == "erik@acme-packaging.com"
         assert data["emails"][0]["subject"] == "FW: last payment"
         assert data["emails"][0]["thread_id"] == "thread_50"
 
         ep.search_emails.assert_awaited_once_with(
-            from_address="jaap@dutch-tides.com",
+            from_address="erik@acme-packaging.com",
             to_address="",
             subject="",
             query="",
@@ -947,16 +947,16 @@ class TestServerEndpoints:
         ep = AsyncMock()
         msg1 = SimpleNamespace(
             id="msg_1",
-            from_address="rushabh@machinecraft.org",
-            to_address="jaap@dutch-tides.com",
+            from_address="founder@example.com",
+            to_address="erik@acme-packaging.com",
             subject="Re: last payment",
-            body="Hi Jaap, thanks for your message.",
+            body="Hi Erik, thanks for your message.",
             received_at=datetime(2026, 3, 3, 10, 0, tzinfo=timezone.utc),
         )
         msg2 = SimpleNamespace(
             id="msg_2",
-            from_address="jaap@dutch-tides.com",
-            to_address="rushabh@machinecraft.org",
+            from_address="erik@acme-packaging.com",
+            to_address="founder@example.com",
             subject="Re: last payment",
             body="Thanks for the mail, but we don't think...",
             received_at=datetime(2026, 3, 4, 17, 17, tzinfo=timezone.utc),
@@ -971,8 +971,8 @@ class TestServerEndpoints:
         data = resp.json()
         assert data["thread_id"] == "thread_50"
         assert data["message_count"] == 2
-        assert data["messages"][0]["from"] == "rushabh@machinecraft.org"
-        assert data["messages"][1]["from"] == "jaap@dutch-tides.com"
+        assert data["messages"][0]["from"] == "founder@example.com"
+        assert data["messages"][1]["from"] == "erik@acme-packaging.com"
 
     async def test_email_search_returns_503_when_processor_missing(self, server_app):
         app, services = server_app

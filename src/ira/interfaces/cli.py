@@ -1415,7 +1415,7 @@ def graduate(
 
         _update_env_file({
             "IRA_EMAIL_MODE": "OPERATIONAL",
-            "IRA_EMAIL": "ira@machinecraft.org",
+            "IRA_EMAIL": "${GOOGLE_IRA_EMAIL}",
         })
 
         console.print(Panel(

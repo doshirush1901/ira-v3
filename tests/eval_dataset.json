@@ -15,17 +15,17 @@
       ]
     },
     {
-      "question": "Who is the primary contact at Dutch Tides?",
-      "ground_truth": "Jaap van der Berg is the CEO and primary contact at Dutch Tides BV.",
+      "question": "Who is the primary contact at Acme Packaging?",
+      "ground_truth": "Erik Janssen is the CEO and primary contact at Acme Packaging BV.",
       "contexts": [
-        "Contact: Jaap van der Berg, CEO, Dutch Tides BV, jaap@dutch-tides.com"
+        "Contact: Erik Janssen, CEO, Acme Packaging BV, erik@acme-packaging.com"
       ]
     },
     {
-      "question": "What was the value of the Dutch Tides quote?",
-      "ground_truth": "The Dutch Tides quote (Q-2024-089) was for 2x PF1 machines valued at EUR 450,000.",
+      "question": "What was the value of the Acme Packaging quote?",
+      "ground_truth": "The Acme Packaging quote (Q-2024-089) was for 2x PF1 machines valued at EUR 450,000.",
       "contexts": [
-        "Quote Q-2024-089: Dutch Tides BV, 2x PF1, EUR 450,000, status: proposal sent"
+        "Quote Q-2024-089: Acme Packaging BV, 2x PF1, EUR 450,000, status: proposal sent"
       ]
     },
     {
@@ -33,7 +33,7 @@
       "ground_truth": "Q3 2025 revenue was EUR 2.3 million, up 15% quarter-over-quarter.",
       "contexts": [
         "Q3 2025 Revenue: EUR 2,300,000 (+15% QoQ)",
-        "Major deals closed: Dutch Tides BV (EUR 450K), Norsk Hydro (EUR 380K)"
+        "Major deals closed: Acme Packaging BV (EUR 450K), Nordic Industries (EUR 380K)"
       ]
     },
     {
@@ -67,11 +67,11 @@
       ]
     },
     {
-      "question": "What deals did Norsk Hydro close?",
-      "ground_truth": "Norsk Hydro closed a deal worth EUR 380,000.",
+      "question": "What deals did Nordic Industries close?",
+      "ground_truth": "Nordic Industries closed a deal worth EUR 380,000.",
       "contexts": [
-        "Major deals closed: Dutch Tides BV (EUR 450K), Norsk Hydro (EUR 380K)",
-        "Norsk Hydro: 1x TF-3000 thermoforming line, EUR 380,000, delivered Q3 2025"
+        "Major deals closed: Acme Packaging BV (EUR 450K), Nordic Industries (EUR 380K)",
+        "Nordic Industries: 1x TF-3000 thermoforming line, EUR 380,000, delivered Q3 2025"
       ]
     },
     {
@@ -104,10 +104,10 @@
       ]
     },
     {
-      "question": "What is Jaap van der Berg's email?",
-      "ground_truth": "Jaap van der Berg's email is jaap@dutch-tides.com.",
+      "question": "What is Erik Janssen's email?",
+      "ground_truth": "Erik Janssen's email is erik@acme-packaging.com.",
       "contexts": [
-        "Contact: Jaap van der Berg, CEO, Dutch Tides BV, jaap@dutch-tides.com"
+        "Contact: Erik Janssen, CEO, Acme Packaging BV, erik@acme-packaging.com"
       ]
     }
   ]

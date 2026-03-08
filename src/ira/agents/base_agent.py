@@ -210,7 +210,7 @@ class BaseAgent(ABC):
                     "to find, show, or pull up emails from a person, company, or about a topic."
                 ),
                 parameters={
-                    "from_address": "Sender email or partial match (e.g. 'jaap@dutch-tides.com' or 'dutch-tides')",
+                    "from_address": "Sender email or partial match (e.g. 'contact@acme-corp.com' or 'acme-corp')",
                     "to_address": "Recipient email (optional)",
                     "subject": "Subject keyword (optional)",
                     "query": "Free-form Gmail search query (optional, e.g. 'has:attachment')",

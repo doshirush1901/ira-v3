@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -66,7 +67,7 @@ Now they can search databases, recall memories, check CRM data, consult
 each other, and reason step-by-step before answering.
 
 Your job: rewrite these board meeting minutes into a single, brilliant
-Wait-But-Why-style email report for Rushabh Doshi, the founder and CEO.
+Wait-But-Why-style email report for the founder and CEO.
 
 Rules:
 - Tim Urban's signature style: conversational, funny, analogies, metaphors,
@@ -340,12 +341,12 @@ async def main():
     send_gmail(
         html_body=tim_urban_html,
         subject=subject,
-        to="rushabh@machinecraft.org",
+        to=os.environ.get("BOARD_RECIPIENT", "founder@example.com"),
     )
 
     print(f"\n{'=' * 60}")
     print(f"  DONE!")
-    print(f"  Email SENT to rushabh@machinecraft.org")
+    print(f"  Email SENT to {os.environ.get('BOARD_RECIPIENT', 'founder@example.com')}")
     print(f"  Subject: {subject}")
     print(f"  Raw minutes: {raw_path}")
     print(f"  HTML report: {html_path}")

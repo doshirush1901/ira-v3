@@ -26,8 +26,8 @@ def mock_settings():
     s.external_apis.api_key.get_secret_value.return_value = ""
     s.google.credentials_path = "/tmp/creds.json"
     s.google.token_path = "/tmp/token.json"
-    s.google.ira_email = "ira@machinecraft.org"
-    s.google.training_email = "rushabh@machinecraft.org"
+    s.google.ira_email = "ira@example.com"
+    s.google.training_email = "founder@example.com"
     s.google.email_mode = EmailMode.TRAINING
     s.embedding.api_key.get_secret_value.return_value = ""
     s.embedding.model = "voyage-test"
@@ -67,7 +67,7 @@ def sample_email():
     return Email(
         id="msg_test_001",
         from_address="client@example.com",
-        to_address="rushabh@machinecraft.org",
+        to_address="founder@example.com",
         subject="Test email",
         body="Hello, I need pricing for PF1-C.",
         received_at=datetime(2025, 6, 1, 10, 0, tzinfo=timezone.utc),

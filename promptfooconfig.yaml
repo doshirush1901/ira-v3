@@ -89,12 +89,12 @@ tests:
   # ── Clio (research) ──────────────────────────────────────────────────
   - description: "Clio searches knowledge base"
     vars:
-      query: "What do we know about Dutch Tides?"
+      query: "What do we know about Acme Packaging?"
     assert:
       - type: llm-rubric
-        value: "Response should search the knowledge base for information about Dutch Tides"
+        value: "Response should search the knowledge base for information about Acme Packaging"
       - type: contains-any
-        value: ["search", "knowledge", "Dutch Tides", "qdrant", "tool_to_use"]
+        value: ["search", "knowledge", "Acme Packaging", "qdrant", "tool_to_use"]
     options:
       provider: clio
 
@@ -113,7 +113,7 @@ tests:
   # ── Calliope (writing) ───────────────────────────────────────────────
   - description: "Calliope drafts professional email"
     vars:
-      query: "Draft a follow-up email to Jaap at Dutch Tides about the PF1 quote"
+      query: "Draft a follow-up email to Erik at Acme Packaging about the PF1 quote"
     assert:
       - type: llm-rubric
         value: "Response should draft a professional email or search for context first"
@@ -183,7 +183,7 @@ tests:
   # ── Atlas (project management) ─────────────────────────────────────
   - description: "Atlas checks project status"
     vars:
-      query: "What's the status of the Dutch Tides project?"
+      query: "What's the status of the Acme Packaging project?"
     assert:
       - type: llm-rubric
         value: "Response should search for project status or milestone data"
@@ -252,7 +252,7 @@ tests:
   # ── Quotebuilder (quotes) ──────────────────────────────────────────
   - description: "Quotebuilder generates a quote"
     vars:
-      query: "Generate a quote for 1x PF1 for Norsk Hydro"
+      query: "Generate a quote for 1x PF1 for Nordic Industries"
     assert:
       - type: llm-rubric
         value: "Response should look up machine specs and pricing to build a formal quote"
@@ -263,11 +263,11 @@ tests:
 
   - description: "Quotebuilder searches past quotes"
     vars:
-      query: "What quotes have we sent to Dutch Tides?"
+      query: "What quotes have we sent to Acme Packaging?"
     assert:
       - type: llm-rubric
         value: "Response should search for historical quotes or quote records"
       - type: contains-any
-        value: ["quote", "search", "Dutch Tides", "tool_to_use", "past"]
+        value: ["quote", "search", "Acme Packaging", "tool_to_use", "past"]
     options:
       provider: quotebuilder

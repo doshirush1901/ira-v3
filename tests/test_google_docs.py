@@ -184,7 +184,7 @@ class TestGoogleDocsConnected:
     async def test_health_check_connected(self, mock_to_thread):
         svc = self._make_connected_service()
         mock_to_thread.return_value = {
-            "user": {"displayName": "Ira", "emailAddress": "ira@machinecraft.org"},
+            "user": {"displayName": "Ira", "emailAddress": "ira@example.com"},
         }
 
         result = await svc.health_check()

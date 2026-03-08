@@ -101,7 +101,7 @@ Open this repo in [Cursor](https://cursor.sh). The `.cursor/rules/` directory te
 Step 1:  Open ira-v3 in Cursor
 Step 2:  Type "wake up Ira" in Cursor chat
 Step 3:  Wait ~60 seconds for all services to boot
-Step 4:  Ask anything — "@Ira what's the status of the Dutch Tides deal?"
+Step 4:  Ask anything — "@Ira what's the status of the Acme Packaging deal?"
 ```
 
 ### Other CLI Commands

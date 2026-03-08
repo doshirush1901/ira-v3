@@ -53,7 +53,7 @@ You run a business. Or you work at one. Every day, emails come in. Leads asking 
 
 Now, most people solve this one of two ways:
 
-**Option A: The Human Way.** You read every email. You mentally file it. You remember that Jaap from Dutch Tides asked about a thermoforming machine in March, that the quote was EUR 180k, that he went quiet in April, and that his colleague Pieter mentioned they're expanding their Rotterdam facility. You remember all of this because you are a superhuman with infinite working memory. (You are not.)
+**Option A: The Human Way.** You read every email. You mentally file it. You remember that Erik from Acme Packaging asked about a thermoforming machine in March, that the quote was EUR 180k, that he went quiet in April, and that his colleague Lars mentioned they're expanding their Hamburg facility. You remember all of this because you are a superhuman with infinite working memory. (You are not.)
 
 **Option B: The CRM Way.** You buy Salesforce. You hire someone to enter data into Salesforce. Nobody enters data into Salesforce. You now have a very expensive database of nothing.
 
@@ -76,10 +76,10 @@ When you open this repo in Cursor, three things happen automatically:
 1. **Cursor learns who Ira is.** The `.cursor/rules/` directory contains rules that teach Cursor how to start Ira, query it, search emails, ingest documents, and shut it down. You don't configure anything. It just works.
 
 2. **You get natural language access to your entire email history.** Say "wake up Ira" in Cursor chat. Then ask things like:
-   - *"@Ira find all emails from Jaap at Dutch Tides"*
-   - *"@Ira what's the latest on the PF1 quote for Sealed Air?"*
+   - *"@Ira find all emails from Erik at Acme Packaging"*
+   - *"@Ira what's the latest on the PF1 quote for GlobalPack?"*
    - *"@Ira draft a follow-up to the vendor who hasn't replied about the servo motors"*
-   - *"@Ira what did we discuss with Tetra Pak last quarter?"*
+   - *"@Ira what did we discuss with EuroPack last quarter?"*
 
 3. **Every answer is grounded in real data.** Ira doesn't hallucinate your email history. It searches Gmail directly, pulls the actual threads, cross-references them with your knowledge base and CRM, and gives you an answer with receipts.
 
@@ -98,27 +98,27 @@ That's it. Cursor reads the rules in `.cursor/rules/ira-api.mdc`, knows how to s
 ### What It Looks Like in Practice
 
 ```
-You:     @Ira show me all emails from dutch-tides.com in the last 3 months
+You:     @Ira show me all emails from acme-packaging.com in the last 3 months
 
-Ira:     Found 7 emails from dutch-tides.com:
-         - [2026-01-15] Jaap van der Berg — RE: PF1 Thermoforming Quote
-         - [2026-01-22] Jaap van der Berg — Delivery timeline question
-         - [2026-02-03] Pieter de Vries — Rotterdam facility expansion
+Ira:     Found 7 emails from acme-packaging.com:
+         - [2026-01-15] Erik Janssen — RE: PF1 Thermoforming Quote
+         - [2026-01-22] Erik Janssen — Delivery timeline question
+         - [2026-02-03] Lars Andersen — Hamburg facility expansion
          ...
 
-You:     @Ira what's the status of the Dutch Tides deal?
+You:     @Ira what's the status of the Acme Packaging deal?
 
 Ira:     [Prometheus consulted]
-         Dutch Tides (Jaap van der Berg) — NEGOTIATION stage
+         Acme Packaging (Erik Janssen) — NEGOTIATION stage
          Quote: EUR 180,000 for PF1-C thermoforming machine
-         Last contact: Feb 3 — Pieter mentioned Rotterdam expansion
-         Risk: 45 days since last response from Jaap
+         Last contact: Feb 3 — Lars mentioned Hamburg expansion
+         Risk: 45 days since last response from Erik
          Suggested action: Follow up referencing the expansion plans
 
 You:     @Ira draft that follow-up
 
 Ira:     [Calliope consulted]
-         Subject: PF1 for Rotterdam — quick check-in
+         Subject: PF1 for Hamburg — quick check-in
          ...
 ```
 
