@@ -59,6 +59,7 @@ class AdaptiveStyleTracker:
 
     def __init__(self) -> None:
         self._profiles: dict[str, StyleProfile] = {}
+        self._lock = asyncio.Lock()
 
     async def _load(self) -> None:
         if not _PROFILES_PATH.exists():
@@ -109,22 +110,25 @@ class AdaptiveStyleTracker:
 
     async def update_profile(self, contact_id: str, message: str) -> StyleProfile:
         """Analyze a message and update the contact's style profile."""
-        profile = self._profiles.get(contact_id, StyleProfile())
         deltas = self.analyze_message(message)
 
-        lr = max(
-            _LEARNING_RATE_MIN,
-            _LEARNING_RATE_INITIAL / (1 + profile.interactions / _CONFIDENCE_DECAY),
-        )
+        async with self._lock:
+            profile = self._profiles.get(contact_id, StyleProfile())
 
-        for dim, delta in deltas.items():
-            current = getattr(profile, dim)
-            updated = max(0.0, min(1.0, current + delta * lr))
-            setattr(profile, dim, round(updated, 3))
+            lr = max(
+                _LEARNING_RATE_MIN,
+                _LEARNING_RATE_INITIAL / (1 + profile.interactions / _CONFIDENCE_DECAY),
+            )
 
-        profile.interactions += 1
-        self._profiles[contact_id] = profile
-        await self._save()
+            for dim, delta in deltas.items():
+                current = getattr(profile, dim)
+                updated = max(0.0, min(1.0, current + delta * lr))
+                setattr(profile, dim, round(updated, 3))
+
+            profile.interactions += 1
+            self._profiles[contact_id] = profile
+            await self._save()
+
         return profile
 
     def get_style_prompt(self, contact_id: str) -> str:

@@ -52,6 +52,7 @@ class PowerLevelTracker:
     def __init__(self, data_path: Path | None = None) -> None:
         self._path = data_path or _DATA_PATH
         self._agents: dict[str, dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
 
     async def _load(self) -> None:
         if not self._path.exists():
@@ -80,17 +81,19 @@ class PowerLevelTracker:
 
     async def record_success(self, agent_name: str, boost: int = 10) -> None:
         """Increase *agent_name*'s score after a successful task."""
-        entry = self._ensure_agent(agent_name)
-        entry["score"] += boost
-        entry["successes"] += 1
-        await self._save()
+        async with self._lock:
+            entry = self._ensure_agent(agent_name)
+            entry["score"] += boost
+            entry["successes"] += 1
+            await self._save()
 
     async def record_failure(self, agent_name: str, penalty: int = 5) -> None:
         """Decrease *agent_name*'s score after a failure (floor at 0)."""
-        entry = self._ensure_agent(agent_name)
-        entry["score"] = max(0, entry["score"] - penalty)
-        entry["failures"] += 1
-        await self._save()
+        async with self._lock:
+            entry = self._ensure_agent(agent_name)
+            entry["score"] = max(0, entry["score"] - penalty)
+            entry["failures"] += 1
+            await self._save()
 
     async def training_boost(self, agent_name: str, training_score: int) -> None:
         """Apply a Nemesis-training boost.
@@ -100,9 +103,10 @@ class PowerLevelTracker:
         """
         clamped = max(1, min(_TRAINING_MAX_SCORE, training_score))
         boost = round(clamped / _TRAINING_MAX_SCORE * _TRAINING_MAX_BOOST)
-        entry = self._ensure_agent(agent_name)
-        entry["score"] += boost
-        await self._save()
+        async with self._lock:
+            entry = self._ensure_agent(agent_name)
+            entry["score"] += boost
+            await self._save()
         logger.info(
             "Training boost: %s +%d (training_score=%d)",
             agent_name, boost, training_score,
