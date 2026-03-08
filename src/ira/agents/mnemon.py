@@ -50,6 +50,16 @@ def _save_ledger(ledger: dict[str, Any]) -> None:
     )
 
 
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
 class Mnemon(BaseAgent):
     name = "mnemon"
     role = "Memory Guardian"
@@ -116,12 +126,15 @@ class Mnemon(BaseAgent):
 
     # ── core methods (called from pipeline, retriever, alexandros) ────────
 
+    _entity_embeddings_cache: dict[str, list[float]] = {}
+
     async def check_and_correct(self, text: str) -> str:
         """Scan text for entities with known corrections and override stale values.
 
-        This is the fast, non-LLM check called from the pipeline,
-        retriever, and Alexandros.  It does pure string matching
-        against the correction ledger.
+        Primary path is fast string matching.  When ``mnemon_semantic_check``
+        is enabled in config and string matching finds nothing, a secondary
+        embedding-based pass catches paraphrased references to corrected
+        entities.
         """
         if not text:
             return text
@@ -147,6 +160,9 @@ class Mnemon(BaseAgent):
                     )
 
         if not corrections_applied:
+            corrections_applied = await self._semantic_check(text, entities)
+
+        if not corrections_applied:
             return text
 
         correction_block = (
@@ -159,6 +175,90 @@ class Mnemon(BaseAgent):
             len(corrections_applied),
         )
         return text + correction_block
+
+    async def _semantic_check(
+        self, text: str, entities: dict[str, Any],
+    ) -> list[str]:
+        """Embedding-based fallback when string matching finds nothing.
+
+        Only runs when ``mnemon_semantic_check`` is enabled in config.
+        Compares text segments against entity descriptions using cosine
+        similarity.
+        """
+        from ira.config import get_settings
+        if not get_settings().app.mnemon_semantic_check:
+            return []
+
+        try:
+            from ira.brain.embeddings import EmbeddingService
+        except ImportError:
+            return []
+
+        try:
+            embedder = EmbeddingService()
+        except Exception:
+            logger.debug("EmbeddingService unavailable for semantic check")
+            return []
+
+        _SIMILARITY_THRESHOLD = 0.75
+
+        sentences = [s.strip() for s in text.split(".") if len(s.strip()) > 20]
+        if not sentences:
+            return []
+
+        try:
+            text_vecs = await embedder.embed_texts(sentences[:20])
+        except Exception:
+            logger.debug("Embedding failed in Mnemon semantic check", exc_info=True)
+            return []
+
+        entity_keys = list(entities.keys())
+        entity_descs = [
+            f"{k}: {entities[k].get('current_status', '')}"
+            for k in entity_keys
+        ]
+
+        uncached_keys: list[int] = []
+        entity_vecs: list[list[float] | None] = [None] * len(entity_keys)
+        for i, k in enumerate(entity_keys):
+            cached = self._entity_embeddings_cache.get(k)
+            if cached is not None:
+                entity_vecs[i] = cached
+            else:
+                uncached_keys.append(i)
+
+        if uncached_keys:
+            try:
+                new_vecs = await embedder.embed_texts(
+                    [entity_descs[i] for i in uncached_keys],
+                )
+                for idx, vec in zip(uncached_keys, new_vecs):
+                    entity_vecs[idx] = vec
+                    self._entity_embeddings_cache[entity_keys[idx]] = vec
+            except Exception:
+                logger.debug("Entity embedding failed", exc_info=True)
+                return []
+
+        corrections: list[str] = []
+        for ek_idx, ek in enumerate(entity_keys):
+            ev = entity_vecs[ek_idx]
+            if ev is None:
+                continue
+            for tv in text_vecs:
+                sim = _cosine_similarity(ev, tv)
+                if sim >= _SIMILARITY_THRESHOLD:
+                    entry = entities[ek]
+                    corrections.append(
+                        f"[CORRECTION-SEMANTIC] {ek}: "
+                        f"Current status: {entry['current_status']}"
+                    )
+                    break
+
+        if corrections:
+            logger.info(
+                "Mnemon semantic check found %d corrections", len(corrections),
+            )
+        return corrections
 
     async def flag_staleness(self, text: str, source_date: str | None = None) -> str:
         """Append a staleness warning if the source data is old."""

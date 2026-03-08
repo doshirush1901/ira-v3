@@ -83,6 +83,7 @@ class BaseAgent(ABC):
         self.max_iterations: int = get_settings().app.react_max_iterations
         self.state: AgentState = AgentState.THINKING
         self._default_tools_registered: bool = False
+        self._last_grounding_score: float = 0.0
 
     def inject_services(self, services: dict[str, Any]) -> None:
         """Late-bind shared services after construction.
@@ -466,6 +467,34 @@ class BaseAgent(ABC):
             return f"No known entity match for '{query}'. Proceed with normal classification."
         return "\n".join(matches)
 
+    # ── grounding score ────────────────────────────────────────────────────
+
+    _RETRIEVAL_TOOLS: frozenset[str] = frozenset({
+        "search_knowledge", "recall_memory", "recall_episodes",
+        "search_emails", "ask_agent", "web_search",
+    })
+
+    @staticmethod
+    def _compute_grounding_score(scratchpad: list[dict[str, str]]) -> float:
+        """Score how well the answer is grounded in tool outputs.
+
+        Returns 1.0 if retrieval tools were used, 0.5 if only
+        non-retrieval tools, 0.0 if no tools were called.
+        """
+        if not scratchpad:
+            return 0.0
+        tool_names = set()
+        for entry in scratchpad:
+            action = entry.get("action", "")
+            paren = action.find("(")
+            if paren > 0:
+                tool_names.add(action[:paren])
+        if not tool_names:
+            return 0.0
+        if tool_names & BaseAgent._RETRIEVAL_TOOLS:
+            return 1.0
+        return 0.5
+
     # ── ReAct loop ────────────────────────────────────────────────────────
 
     def _build_tool_descriptions(self) -> str:
@@ -627,15 +656,22 @@ class BaseAgent(ABC):
 
             if "final_answer" in decision:
                 self.state = AgentState.RESPONDING
+                self._last_grounding_score = self._compute_grounding_score(scratchpad)
+                if self._last_grounding_score == 0.0 and len(decision["final_answer"]) > 100:
+                    logger.warning(
+                        "GROUNDING | %s answered without retrieval tools — hallucination risk",
+                        self.name,
+                    )
                 logger.info(
-                    "%s reached final answer after %d iterations",
-                    self.name, iteration + 1,
+                    "%s reached final answer after %d iterations (grounding=%.1f)",
+                    self.name, iteration + 1, self._last_grounding_score,
                 )
                 return decision["final_answer"]
 
             tool_call = decision.get("tool_to_use")
             if not isinstance(tool_call, dict) or "name" not in tool_call:
                 self.state = AgentState.RESPONDING
+                self._last_grounding_score = self._compute_grounding_score(scratchpad)
                 return decision.get("final_answer", thought or "(No response)")
 
             tool_name = tool_call["name"]
@@ -666,6 +702,7 @@ class BaseAgent(ABC):
             "%s hit max iterations (%d) — forcing final answer",
             self.name, self.max_iterations,
         )
+        self._last_grounding_score = self._compute_grounding_score(scratchpad)
         return await self._force_final_answer(agent_prompt, query, scratchpad)
 
     # ── abstract interface ───────────────────────────────────────────────

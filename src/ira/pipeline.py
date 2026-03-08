@@ -18,7 +18,12 @@ Steps
 5. **ROUTE (LLM)** — Athena for open-ended LLM-based routing.
 5.5. **ENRICH CONTEXT** — AdaptiveStyle, RealTimeObserver, Endocrine, etc.
 6. **EXECUTE** — Routed agent(s) produce a raw response.
+6.4. **FAITHFULNESS GATE** — ``check_faithfulness()`` verifies claims against KB.
+     Appends caveat when score < threshold.  Also runs confidentiality and
+     competitor checks for LLM-routed responses.
 7. **ASSESS** — Metacognition evaluates confidence and adds caveats.
+7.1. **CONFIDENCE FLOOR** — Replaces response with honest "I don't know" when
+     state is UNKNOWN or confidence is below the floor.
 8. **REFLECT** — InnerVoice surfaces optional reflections.
 9. **SHAPE** — VoiceSystem formats for channel and recipient.
 10. **LEARN** — Record in ConversationMemory, CRM, MusculoskeletalSystem; trigger Sophia.
@@ -583,6 +588,70 @@ class RequestPipeline:
             except Exception:
                 logger.exception("Gapper resolution failed, continuing with original response")
 
+        # ── 6.4 FAITHFULNESS GATE ─────────────────────────────────────
+        if route_method not in ("truth_hint", "fast_path"):
+            try:
+                from ira.brain.guardrails import check_faithfulness
+                from ira.config import get_settings as _get_settings
+
+                _app_cfg = _get_settings().app
+                retriever = self._pantheon.retriever
+                _faith_kb = await retriever.search(resolved_input, limit=5)
+                _faith_docs = [
+                    r.get("content", "") for r in _faith_kb if r.get("content")
+                ]
+                if _faith_docs:
+                    if on_progress:
+                        await on_progress({"type": "faithfulness_check"})
+                    _faith_result = await check_faithfulness(raw_response, _faith_docs)
+                    trace["faithfulness"] = _faith_result.get("score", 1.0)
+                    _faith_score = _faith_result.get("score", 1.0)
+
+                    if _faith_score < _app_cfg.faithfulness_threshold:
+                        _caveat = (
+                            "\n\n> Note: Some claims could not be fully verified "
+                            "against our documentation. Please cross-check "
+                            "critical details."
+                        )
+                        raw_response += _caveat
+                        logger.info(
+                            "FAITHFULNESS | score=%.2f < %.2f — caveat appended",
+                            _faith_score, _app_cfg.faithfulness_threshold,
+                        )
+            except (LLMError, Exception):
+                logger.warning("Faithfulness gate failed (non-critical)", exc_info=True)
+
+        # ── 6.4b GUARDRAILS (LLM-routed responses) ───────────────────
+        if route_method == "llm":
+            try:
+                from ira.brain.guardrails import (
+                    check_competitor_mentions,
+                    check_confidentiality,
+                )
+
+                _guard_conf, _guard_comp = await asyncio.gather(
+                    check_confidentiality(raw_response, "external"),
+                    check_competitor_mentions(raw_response),
+                    return_exceptions=True,
+                )
+                _guardrail_results: dict[str, Any] = {}
+                if isinstance(_guard_conf, dict) and not _guard_conf.get("safe", True):
+                    _guardrail_results["confidentiality"] = _guard_conf
+                    logger.warning(
+                        "GUARDRAILS | confidential data detected: %s",
+                        _guard_conf.get("leaked_categories"),
+                    )
+                if isinstance(_guard_comp, dict) and not _guard_comp.get("clean", True):
+                    _guardrail_results["competitors"] = _guard_comp
+                    logger.warning(
+                        "GUARDRAILS | competitor mentions: %s",
+                        [m["competitor"] for m in _guard_comp.get("mentions", [])],
+                    )
+                if _guardrail_results:
+                    trace["guardrails"] = _guardrail_results
+            except (IraError, Exception):
+                logger.warning("Guardrails checks failed (non-critical)", exc_info=True)
+
         # ── 6.5 CLARIFICATION CHECK ──────────────────────────────────
         _CLARIFY_PREFIX = "[CLARIFY]"
         if raw_response.startswith(_CLARIFY_PREFIX):
@@ -622,6 +691,39 @@ class RequestPipeline:
                         assessment["state"],
                         assessment["gaps"],
                     )
+
+                # ── 7.1 CONFIDENCE FLOOR ──────────────────────────────
+                from ira.config import get_settings as _get_settings_assess
+                from ira.data.models import KnowledgeState
+
+                _assess_cfg = _get_settings_assess().app
+                _state = assessment["state"]
+                _conf = assessment["confidence"]
+                _is_unknown = _state == KnowledgeState.UNKNOWN
+                _is_low_uncertain = (
+                    _state == KnowledgeState.UNCERTAIN
+                    and _conf < _assess_cfg.confidence_floor
+                )
+                if _is_unknown or _is_low_uncertain:
+                    raw_response = (
+                        "I don't have reliable information to answer this "
+                        "question accurately. I'd recommend checking with "
+                        "the relevant team or documentation directly."
+                    )
+                    logger.info(
+                        "CONFIDENCE FLOOR | state=%s confidence=%.2f — "
+                        "replaced response with honest 'I don't know'",
+                        _state, _conf,
+                    )
+                elif _state == KnowledgeState.CONFLICTING:
+                    _conflicts = assessment.get("conflicts", [])
+                    if _conflicts:
+                        _conflict_lines = "\n".join(
+                            f"- {c}" for c in _conflicts[:5]
+                        )
+                        confidence_prefix += (
+                            f"Specific conflicts found:\n{_conflict_lines}\n\n"
+                        )
             except (LLMError, Exception):
                 logger.exception("Metacognition assessment failed")
 

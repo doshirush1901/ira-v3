@@ -141,6 +141,11 @@ class AppConfig(BaseSettings):
     mem0_timeout: float = 15.0
     neo4j_max_pool_size: int = 50
 
+    faithfulness_threshold: float = 0.6
+    faithfulness_hard_threshold: float = 0.3
+    confidence_floor: float = 0.3
+    mnemon_semantic_check: bool = False
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
