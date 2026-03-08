@@ -26,7 +26,6 @@ from ira.data.models import Channel, Contact, Direction, Email, KnowledgeState
 from ira.schemas.llm_outputs import ReActDecision
 
 _has_google_auth = importlib.util.find_spec("google_auth_oauthlib") is not None
-_has_telegram = importlib.util.find_spec("telegram") is not None
 _has_neo4j = importlib.util.find_spec("neo4j") is not None
 
 
@@ -56,8 +55,6 @@ def _make_settings(email_mode: EmailMode = EmailMode.TRAINING) -> MagicMock:
     s.neo4j.password.get_secret_value.return_value = ""
     s.database.url = "sqlite+aiosqlite://"
     s.memory.api_key.get_secret_value.return_value = ""
-    s.telegram.bot_token.get_secret_value.return_value = ""
-    s.telegram.admin_chat_id = ""
     s.app.log_level = "WARNING"
     s.app.environment = "test"
     return s
@@ -117,7 +114,6 @@ def _make_gmail_raw_message(
 class TestInterfaceModulesExist:
     _OPTIONAL_DEPS = {
         "ira.interfaces.email_processor": "google_auth_oauthlib",
-        "ira.interfaces.telegram_bot": "telegram",
     }
 
     @pytest.mark.parametrize("module_name", [
@@ -125,7 +121,6 @@ class TestInterfaceModulesExist:
         "ira.interfaces.cli",
         "ira.interfaces.server",
         "ira.interfaces.email_processor",
-        "ira.interfaces.telegram_bot",
     ])
     def test_module_importable(self, module_name: str):
         dep = self._OPTIONAL_DEPS.get(module_name)
@@ -333,15 +328,13 @@ class TestEmailProcessorOperational:
 
         operational_processor._service = mock_service
 
-        with patch.object(operational_processor, "_send_telegram_notification", new_callable=AsyncMock) as mock_tg:
-            results = await operational_processor.process_inbox()
+        results = await operational_processor.process_inbox()
 
         assert len(results) == 1
         assert results[0]["draft_created"] is True
 
         mock_service.users.return_value.drafts.return_value.create.assert_called_once()
         mock_service.users.return_value.messages.return_value.modify.assert_called_once()
-        mock_tg.assert_awaited_once()
 
         send_mock = mock_service.users.return_value.messages.return_value.send
         send_mock.assert_not_called()
@@ -365,36 +358,11 @@ class TestEmailProcessorOperational:
 
         operational_processor._service = mock_service
 
-        with patch.object(operational_processor, "_send_telegram_notification", new_callable=AsyncMock) as mock_tg:
-            results = await operational_processor.process_inbox()
+        results = await operational_processor.process_inbox()
 
         assert len(results) == 1
         assert results[0]["draft_created"] is False
         mock_service.users.return_value.drafts.return_value.create.assert_not_called()
-        mock_tg.assert_not_awaited()
-
-    async def test_telegram_notification_sent_with_subject(self, operational_processor):
-        """Verify the Telegram notification includes the email subject."""
-        with patch("ira.interfaces.email_processor.get_settings") as mock_gs:
-            mock_gs.return_value.telegram.bot_token.get_secret_value.return_value = "fake-token"
-            mock_gs.return_value.telegram.admin_chat_id = "12345"
-
-            with patch("ira.interfaces.email_processor.httpx.AsyncClient") as mock_client_cls:
-                mock_client = AsyncMock()
-                mock_resp = MagicMock()
-                mock_resp.raise_for_status = MagicMock()
-                mock_client.post = AsyncMock(return_value=mock_resp)
-                mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-                mock_client.__aexit__ = AsyncMock(return_value=False)
-                mock_client_cls.return_value = mock_client
-
-                await operational_processor._send_telegram_notification("PF1-C Quote Request")
-
-                mock_client.post.assert_awaited_once()
-                call_kwargs = mock_client.post.call_args
-                payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
-                assert "PF1-C Quote Request" in payload["text"]
-                assert "review and send" in payload["text"].lower()
 
     async def test_mark_as_read_removes_unread_label(self, operational_processor):
         mock_service = MagicMock()
@@ -1129,214 +1097,6 @@ class TestDashboardEndpoint:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Telegram Bot — inline keyboards and campaign commands
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.skipif(not _has_telegram, reason="python-telegram-bot not installed")
-class TestTelegramCallbacks:
-    """Test Telegram inline keyboard callbacks and campaign commands."""
-
-    @pytest.fixture(autouse=True)
-    def _inject_services(self):
-        import ira.interfaces.telegram_bot as tg
-
-        self._tg = tg
-        self._orig_pantheon = tg._pantheon
-        self._orig_bm = tg._board_meeting
-        self._orig_crm = tg._crm
-        self._orig_uctx = tg._unified_context
-
-        tg._pantheon = MagicMock()
-        tg._board_meeting = AsyncMock()
-        tg._crm = AsyncMock()
-        tg._unified_context = None
-
-        yield
-
-        tg._pantheon = self._orig_pantheon
-        tg._board_meeting = self._orig_bm
-        tg._crm = self._orig_crm
-        tg._unified_context = self._orig_uctx
-
-    def _make_update(self, text: str = "", chat_id: int = 42, args: list | None = None):
-        """Build a minimal mock Update for command handlers."""
-        update = MagicMock()
-        update.effective_message = MagicMock()
-        update.effective_message.chat_id = chat_id
-        update.effective_message.text = text
-        update.effective_message.reply_text = AsyncMock()
-
-        ctx = MagicMock()
-        ctx.args = args
-        return update, ctx
-
-    def _make_callback_update(self, data: str, chat_id: int = 42):
-        """Build a minimal mock Update for CallbackQueryHandler."""
-        update = MagicMock()
-        update.callback_query = MagicMock()
-        update.callback_query.data = data
-        update.callback_query.answer = AsyncMock()
-        update.callback_query.edit_message_text = AsyncMock()
-        update.callback_query.message = MagicMock()
-        update.callback_query.message.chat_id = chat_id
-
-        ctx = MagicMock()
-        return update, ctx
-
-    # ── Draft approve / reject ────────────────────────────────────────
-
-    async def test_draft_approve_with_cached_draft(self):
-        self._tg._pending_drafts[42] = {"context": "test", "body": "Draft body"}
-
-        update, ctx = self._make_callback_update("draft_approve", chat_id=42)
-        await self._tg.on_draft_callback(update, ctx)
-
-        update.callback_query.answer.assert_awaited_once()
-        update.callback_query.edit_message_text.assert_awaited_once()
-        text = update.callback_query.edit_message_text.call_args[0][0]
-        assert "approved" in text.lower()
-        assert "Draft body" in text
-        assert 42 not in self._tg._pending_drafts
-
-    async def test_draft_approve_without_cached_draft(self):
-        update, ctx = self._make_callback_update("draft_approve", chat_id=99)
-        await self._tg.on_draft_callback(update, ctx)
-
-        text = update.callback_query.edit_message_text.call_args[0][0]
-        assert "approved" in text.lower()
-
-    async def test_draft_reject(self):
-        self._tg._pending_drafts[42] = {"context": "test", "body": "Draft body"}
-
-        update, ctx = self._make_callback_update("draft_reject", chat_id=42)
-        await self._tg.on_draft_callback(update, ctx)
-
-        text = update.callback_query.edit_message_text.call_args[0][0]
-        assert "rejected" in text.lower()
-
-    # ── /campaign start ───────────────────────────────────────────────
-
-    async def test_campaign_start_missing_args(self):
-        update, ctx = self._make_update(args=["start"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        reply = update.effective_message.reply_text
-        reply.assert_awaited()
-        assert "Usage" in reply.call_args[0][0]
-
-    async def test_campaign_start_contact_not_found(self):
-        hermes = AsyncMock()
-        hermes.handle = AsyncMock(return_value="plan")
-        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
-        self._tg._crm.get_contact_by_email = AsyncMock(return_value=None)
-
-        update, ctx = self._make_update(args=["start", "TestCampaign", "nobody@test.com"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        calls = update.effective_message.reply_text.call_args_list
-        texts = [c[0][0] for c in calls]
-        assert any("not found" in t.lower() for t in texts)
-
-    async def test_campaign_start_success(self):
-        hermes = AsyncMock()
-        hermes.handle = AsyncMock(return_value="3-step campaign plan")
-        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
-
-        contact = MagicMock()
-        contact.name = "Alice"
-        contact.lead_score = 75.0
-        contact.company_id = "comp-1"
-        self._tg._crm.get_contact_by_email = AsyncMock(return_value=contact)
-
-        update, ctx = self._make_update(args=["start", "EULaunch", "alice@test.com"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        hermes.handle.assert_awaited_once()
-        calls = update.effective_message.reply_text.call_args_list
-        texts = " ".join(c[0][0] for c in calls)
-        assert "Campaign Plan" in texts
-
-    # ── /campaign status ──────────────────────────────────────────────
-
-    async def test_campaign_status_not_found(self):
-        hermes = AsyncMock()
-        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
-        self._tg._crm.list_campaigns = AsyncMock(return_value=[])
-
-        update, ctx = self._make_update(args=["status", "NoSuchCampaign"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        calls = update.effective_message.reply_text.call_args_list
-        texts = [c[0][0] for c in calls]
-        assert any("not found" in t.lower() or "No campaign" in t for t in texts)
-
-    async def test_campaign_status_success(self):
-        hermes = AsyncMock()
-        hermes.handle = AsyncMock(return_value="Campaign is performing well.")
-        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
-
-        campaign = MagicMock()
-        campaign.name = "EULaunch"
-        campaign.id = "camp-1"
-        campaign.status = MagicMock(value="ACTIVE")
-        self._tg._crm.list_campaigns = AsyncMock(return_value=[campaign])
-
-        step = MagicMock()
-        step.sent_at = datetime(2025, 6, 1, tzinfo=timezone.utc)
-        step.reply_received = False
-        self._tg._crm.list_drip_steps = AsyncMock(return_value=[step])
-
-        update, ctx = self._make_update(args=["status", "EULaunch"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        calls = update.effective_message.reply_text.call_args_list
-        texts = " ".join(c[0][0] for c in calls)
-        assert "EULaunch" in texts
-        assert "1 sent" in texts
-
-    # ── /campaign unknown sub-command ─────────────────────────────────
-
-    async def test_campaign_unknown_subcommand(self):
-        hermes = AsyncMock()
-        self._tg._pantheon.get_agent = MagicMock(return_value=hermes)
-
-        update, ctx = self._make_update(args=["delete", "SomeCampaign"])
-        await self._tg.cmd_campaign(update, ctx)
-
-        text = update.effective_message.reply_text.call_args[0][0]
-        assert "Unknown" in text
-
-    # ── /board ────────────────────────────────────────────────────────
-
-    async def test_board_returns_minutes(self):
-        minutes = SimpleNamespace(
-            topic="Q3 Strategy",
-            participants=["athena", "prometheus"],
-            contributions={"prometheus": "Revenue is up."},
-            synthesis="We should expand.",
-            action_items=["Hire more reps"],
-        )
-        self._tg._board_meeting.run_meeting = AsyncMock(return_value=minutes)
-
-        update, ctx = self._make_update(args=["Q3", "Strategy"])
-        await self._tg.cmd_board(update, ctx)
-
-        calls = update.effective_message.reply_text.call_args_list
-        texts = " ".join(c[0][0] for c in calls)
-        assert "Board Meeting" in texts
-        assert "prometheus" in texts
-        assert "expand" in texts
-
-    async def test_board_no_topic(self):
-        update, ctx = self._make_update(args=[])
-        await self._tg.cmd_board(update, ctx)
-
-        text = update.effective_message.reply_text.call_args[0][0]
-        assert "Usage" in text
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # RequestPipeline — full 11-step end-to-end
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1359,7 +1119,7 @@ class TestRequestPipeline:
             "emotional_state": {"state": "NEUTRAL", "confidence": 0.5},
             "conversation_history": [],
             "relationship": {"warmth": "STRANGER"},
-            "channel_context": {"channel": "TELEGRAM", "sender_id": "alice_tg", "metadata": {}},
+            "channel_context": {"channel": "CLI", "sender_id": "alice_cli", "metadata": {}},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         return s
@@ -1485,20 +1245,20 @@ class TestRequestPipeline:
         )
 
     async def test_returns_shaped_response(self, pipeline):
-        result, agents = await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
+        result, agents = await pipeline.process_request("Hello", "CLI", "alice_cli")
         assert result == "Shaped response for channel"
         assert isinstance(agents, list)
 
     async def test_step1_perceive_called(self, pipeline, mock_sensory):
-        await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
+        await pipeline.process_request("Hello", "CLI", "alice_cli")
         mock_sensory.perceive.assert_awaited_once()
         event = mock_sensory.perceive.call_args[0][0]
         assert event.raw_input == "Hello"
-        assert event.channel == Channel.TELEGRAM
+        assert event.channel == Channel.CLI
 
     async def test_step2_remember_fetches_history(self, pipeline, mock_conversation):
-        await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
-        mock_conversation.get_history.assert_awaited_once_with("alice@example.com", "TELEGRAM", limit=20)
+        await pipeline.process_request("Hello", "CLI", "alice_cli")
+        mock_conversation.get_history.assert_awaited_once_with("alice@example.com", "CLI", limit=20)
 
     async def test_step5_llm_route_when_no_fast_match(self, pipeline, mock_pantheon):
         mock_pantheon.router.route.return_value = None
@@ -1533,7 +1293,7 @@ class TestRequestPipeline:
         assert call_args[0][1] == "EMAIL"
 
     async def test_step10_learn_records_conversation(self, pipeline, mock_conversation):
-        await pipeline.process_request("Hello", "TELEGRAM", "alice_tg")
+        await pipeline.process_request("Hello", "CLI", "alice_cli")
         calls = mock_conversation.add_message.call_args_list
         assert len(calls) == 2
         assert calls[0].args[2] == "user"
@@ -1541,7 +1301,7 @@ class TestRequestPipeline:
 
     async def test_full_pipeline_all_steps_execute(self, full_pipeline):
         result, agents = await full_pipeline.process_request(
-            "What is the price of PF1-C?", "TELEGRAM", "alice_tg",
+            "What is the price of PF1-C?", "CLI", "alice_cli",
         )
         assert result == "Shaped response for channel"
         assert isinstance(agents, list)
@@ -1575,7 +1335,7 @@ class TestRequestPipeline:
         ])
         mock_conversation.resolve_coreferences = AsyncMock(return_value="Tell me more about PF1-C")
 
-        await pipeline.process_request("Tell me more about it", "TELEGRAM", "alice_tg")
+        await pipeline.process_request("Tell me more about it", "CLI", "alice_cli")
         mock_conversation.resolve_coreferences.assert_awaited_once()
 
     async def test_pipeline_optional_systems_gracefully_skipped(self):

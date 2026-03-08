@@ -211,11 +211,11 @@ different directory, the log file lands in an unexpected location.
 **Impact:** After 500 dream cycles (~1.4 years of daily runs), the oldest
 entries are silently dropped. No warning or archival mechanism.
 
-#### L3 — Stage 10 Telegram message has no error context
+#### L3 — Stage 10 morning summary has no error context
 
 **File:** `src/ira/memory/dream_mode.py:834-843`
 **Impact:** The morning summary reports counts but not which stages failed.
-A cycle with 5 failed stages sends the same "Good morning!" message as a
+A cycle with 5 failed stages logs the same "Good morning!" message as a
 fully successful one.
 
 #### L4 — Three expected prompt files never created
@@ -308,7 +308,7 @@ so these are documentation errors rather than functional gaps.
 |:---|:-------|:------|
 | L1 | Use an absolute path for `_DREAM_LOG_PATH` (e.g. `data/dream_log.json`) | `dream_mode.py:44` |
 | L2 | Add log rotation or archival when approaching the 500-entry cap | `dream_mode.py:878` |
-| L3 | Include failed-stage names in the Stage 10 Telegram summary | `dream_mode.py:834-843` |
+| L3 | Include failed-stage names in the Stage 10 morning summary | `dream_mode.py:834-843` |
 | L4 | Remove the three phantom prompt entries from `SYSTEM_AUDIT.md` | `docs/SYSTEM_AUDIT.md` |
 
 ### Priority 5 — Increase Test Coverage
@@ -335,7 +335,7 @@ so these are documentation errors rather than functional gaps.
 
 1. **C1 + C2 + H1** — Fix the two CLI crashes and missing `initialize()`. These are blocking bugs.
 2. **C3** — Fix the `DreamInsight` schema mismatch. This causes runtime errors when the LLM returns recommendations.
-3. **H4 + L3** — Add stage status to `DreamReport` and Telegram summary for observability.
+3. **H4 + L3** — Add stage status to `DreamReport` and morning summary for observability.
 4. **B1** — Extract shared bootstrap factory to prevent future wiring drift.
 5. **M1 + M2** — Performance fixes for resource creation in loops.
 6. **T1-T6** — Test coverage expansion.

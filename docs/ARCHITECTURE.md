@@ -7,7 +7,7 @@ requests through an 11-stage pipeline, delegates work to a pantheon of 24
 specialist agents, and maintains persistent memory across conversations.
 
 ```
-User Input (CLI / Telegram / API / Email)
+User Input (CLI / API / Email)
     │
     ▼
 ┌───────────────────┐
@@ -209,13 +209,12 @@ PostgreSQL CRM schema.
 |:----------|:--------|
 | `server.py` | FastAPI REST API (primary production interface) |
 | `cli.py` | Interactive CLI and single-query mode via Typer + Rich |
-| `telegram_bot.py` | Telegram bot integration |
 | `email_processor.py` | Gmail inbox processing, email search, thread reading, draft sending |
 | `dashboard.py` | Web dashboard (HTML, served at `/dashboard/`) |
 
 ## Data Flow
 
-1. User sends a message via CLI, Telegram, email, or the FastAPI server.
+1. User sends a message via CLI, email, or the FastAPI server.
 2. The interface layer constructs a `RequestPipeline` and calls
    `process_request()`.
 3. The pipeline runs 11 stages, delegating to the Pantheon at the

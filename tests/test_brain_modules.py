@@ -494,7 +494,7 @@ class TestCorrectionStore:
                 entity="PF1",
                 new_value="Price is $190,000",
                 old_value="Price is $200,000",
-                source="telegram",
+                source="api",
             )
             assert row_id > 0
 

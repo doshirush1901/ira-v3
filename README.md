@@ -129,7 +129,7 @@ Every agent that contributed is named. Every fact traces to a real email or docu
 
 ## How It Actually Works
 
-Every message — whether it comes from the CLI, Telegram, or the REST API — flows through an **11-stage pipeline** that mimics how a human organization processes a request:
+Every message — whether it comes from the CLI or the REST API — flows through an **11-stage pipeline** that mimics how a human organization processes a request:
 
 ```
   You say something
@@ -368,7 +368,6 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 | API Framework | FastAPI |
 | CLI | Typer + Rich |
 | MCP Server | FastMCP (Model Context Protocol — 30 tools for Cursor/Claude) |
-| Messaging | python-telegram-bot |
 | Reranking | Voyage Rerank (primary) + FlashRank (local fallback) |
 | Migrations | Alembic |
 | Containerization | Docker |
@@ -387,7 +386,7 @@ ira-v3/
 │   │                        #   entity extraction (GLiNER + LLM), guardrails (30 modules)
 │   ├── memory/              # 9 memory subsystems + dream mode + goal sweep
 │   ├── systems/             # Body systems + extended systems (20 modules)
-│   ├── interfaces/          # CLI, FastAPI server, MCP server, Telegram bot,
+│   ├── interfaces/          # CLI, FastAPI server, MCP server,
 │   │                        #   email processor, dashboard, cursor feedback
 │   ├── services/            # LLMClient (OpenAI + Anthropic SDK with Langfuse tracing)
 │   ├── schemas/             # Pydantic models for structured LLM outputs
@@ -421,7 +420,7 @@ ira-v3/
 - Python 3.11+
 - [Poetry](https://python-poetry.org/)
 - Docker & Docker Compose
-- API keys: OpenAI, Voyage AI (embeddings), and optionally Anthropic, Mem0, Telegram, Google OAuth
+- API keys: OpenAI, Voyage AI (embeddings), and optionally Anthropic, Mem0, Google OAuth
 
 ### 1. Clone and Install
 
@@ -476,11 +475,6 @@ poetry run uvicorn ira.interfaces.server:app --reload
 **MCP Server (for Cursor / Claude):**
 ```bash
 poetry run ira mcp
-```
-
-**Telegram Bot:**
-```bash
-python -m ira.interfaces.telegram_bot
 ```
 
 ### Other CLI Commands

@@ -78,7 +78,7 @@ After all phases complete (or a `complete` decision is reached):
 ## Relationship to Other Endpoints
 
 - **This rule** (MCP tools): Used when Cursor is the orchestrator. Gives phase-by-phase control with observe/replan capability.
-- **ira-task-loop.mdc** (HTTP/SSE): Used by CLI/Telegram. The server streams the entire loop as SSE events via `/api/task/stream`.
+- **ira-task-loop.mdc** (HTTP/SSE): Used by CLI. The server streams the entire loop as SSE events via `/api/task/stream`.
 
 The MCP tools use the `AgentLoop` backend (in-memory, with observe/replan). The HTTP endpoints use the `TaskOrchestrator` backend (Redis-backed, linear execution).
 

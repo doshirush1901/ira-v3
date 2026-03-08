@@ -202,7 +202,7 @@ AGENTS = {
     "Nemesis": {
         "title": "Adversarial Trainer",
         "system_prompt": "Adversarial trainer making the system stronger by finding weaknesses. Test queries, stress-testing, edge cases, adversarial prompts, quality evaluation.",
-        "tools": ["ingest_correction", "ingest_failure", "ingest_telegram_feedback", "run_training_cycle", "create_training_scenario"],
+        "tools": ["ingest_correction", "ingest_failure", "run_training_cycle", "create_training_scenario"],
         "data_access": ["CorrectionStore (read/write)", "LearningHub (training orchestration)", "Mem0 (long-term memory — read/write)", "Can invoke peer agents: Prometheus, Plutus, Hermes, Hephaestus, Themis, Clio, Calliope, Tyche"],
         "pipelines": ["LearningHub feedback loop", "Sleep training cycles"],
         "reports_to": "LearningHub (not directly to Athena for training tasks)",

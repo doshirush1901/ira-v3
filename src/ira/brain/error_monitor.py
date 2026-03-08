@@ -1,8 +1,8 @@
 """Rich error tracking with context and self-healing suggestions.
 
 :class:`ErrorMonitor` records exceptions with full context (traceback,
-severity, surrounding state), rate-limits Telegram alerts, and identifies
-errors that might be auto-fixable (connection timeouts, stale caches, etc.).
+severity, surrounding state), rate-limits alerts, and identifies errors
+that might be auto-fixable (connection timeouts, stale caches, etc.).
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ import traceback
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +32,9 @@ _SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
 
 class ErrorMonitor:
-    """In-memory error tracker with Telegram alerting and self-healing hints."""
+    """In-memory error tracker with self-healing hints."""
 
-    def __init__(
-        self,
-        telegram_token: str | None = None,
-        telegram_chat_id: str | None = None,
-    ) -> None:
-        self._telegram_token = telegram_token
-        self._telegram_chat_id = telegram_chat_id
+    def __init__(self) -> None:
         self._errors: list[dict[str, Any]] = []
         self._alert_counts: dict[str, list[datetime]] = defaultdict(list)
 
@@ -93,46 +85,23 @@ class ErrorMonitor:
         self._alert_counts[error_type] = recent
         return len(recent) < _ALERTS_PER_HOUR
 
-    async def send_alert(self, message: str) -> None:
-        """Send a Telegram notification for CRITICAL/HIGH errors."""
-        if not self._telegram_token or not self._telegram_chat_id:
-            logger.debug("Telegram alerting not configured; skipping alert")
-            return
-
-        url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
-        payload = {
-            "chat_id": self._telegram_chat_id,
-            "text": message[:4096],
-            "parse_mode": "HTML",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-            logger.info("Alert sent to Telegram")
-        except httpx.HTTPError:
-            logger.exception("Failed to send Telegram alert")
-
     async def record_and_alert(
         self,
         error: Exception,
         context: dict[str, Any],
         severity: str = "MEDIUM",
     ) -> None:
-        """Record an error and send a Telegram alert if severity warrants it."""
+        """Record an error and log a warning if severity warrants it."""
         self.record_error(error, context, severity)
 
         if severity.upper() in ("CRITICAL", "HIGH"):
             error_type = type(error).__name__
             if self.should_alert(error_type):
                 self._alert_counts[error_type].append(datetime.now(timezone.utc))
-                msg = (
-                    f"<b>[{severity.upper()}]</b> {error_type}\n"
-                    f"{str(error)[:500]}\n"
-                    f"Context: {str(context)[:200]}"
+                logger.warning(
+                    "[%s] %s: %s | context=%s",
+                    severity.upper(), error_type, str(error)[:500], str(context)[:200],
                 )
-                await self.send_alert(msg)
 
     # ── summaries ─────────────────────────────────────────────────────────
 

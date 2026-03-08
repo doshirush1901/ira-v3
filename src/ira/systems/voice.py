@@ -34,13 +34,6 @@ class ChannelProfile:
 
 
 CHANNEL_PROFILES: dict[str, ChannelProfile] = {
-    "TELEGRAM": ChannelProfile(
-        max_length=2000,
-        format_style="concise_markdown",
-        tone_default="direct",
-        supports_markdown=True,
-        supports_html=False,
-    ),
     "EMAIL": ChannelProfile(
         max_length=10000,
         format_style="formal_prose",
@@ -81,7 +74,6 @@ WARMTH_TONE: dict[str, str] = {
 }
 
 _CHANNEL_INSTRUCTIONS: dict[str, str] = {
-    "TELEGRAM": "Use Markdown bold/italic for emphasis. Be concise. No greeting/closing unless the tone calls for it.",
     "EMAIL": "Include a greeting line and a professional closing. Use paragraphs. Be thorough.",
     "CLI": "Use code blocks for data. Use bullet points for lists. Be detailed and technical.",
 }
@@ -114,7 +106,7 @@ class VoiceSystem:
             return raw_response
 
         # Short-circuit: very short responses don't need reshaping
-        if len(raw_response) <= _SHORT_RESPONSE_THRESHOLD and channel in ("TELEGRAM", "CLI"):
+        if len(raw_response) <= _SHORT_RESPONSE_THRESHOLD and channel == "CLI":
             return self._enforce_length(raw_response, profile.max_length)
 
         # Resolve tone
@@ -272,16 +264,6 @@ class VoiceSystem:
 
         return f"{greeting}\n\n{text}\n\nBest regards,\nIra\nMachinecraft AI Assistant"
 
-    @staticmethod
-    def format_for_telegram(text: str) -> str:
-        """Ensure Markdown is valid for Telegram's MarkdownV2 parser."""
-        text = re.sub(r"<[^>]+>", "", text)
-        # Backslash must be escaped first to avoid double-escaping
-        text = text.replace("\\", "\\\\")
-        special = r"_[]()~`>#+-=|{}.!"
-        for ch in special:
-            text = text.replace(ch, f"\\{ch}")
-        return text
 
 
 def _infer_warmth(contact: Contact) -> str:

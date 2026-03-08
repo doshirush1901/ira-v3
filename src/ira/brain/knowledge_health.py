@@ -271,21 +271,6 @@ class KnowledgeHealthMonitor:
                 })
         return chronic
 
-    async def send_telegram_alert(self, message: str) -> None:
-        """Send an alert via the Telegram bot API."""
-        settings = get_settings()
-        token = settings.telegram.bot_token.get_secret_value()
-        chat_id = settings.telegram.admin_chat_id
-        if not token or not chat_id:
-            logger.warning("Telegram not configured; skipping alert")
-            return
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-            logger.info("Telegram alert sent to chat %s", chat_id)
-        except httpx.HTTPError:
-            logger.exception("Failed to send Telegram alert")
+    async def send_alert(self, message: str) -> None:
+        """Log a knowledge-health alert."""
+        logger.warning("Knowledge health alert: %s", message)

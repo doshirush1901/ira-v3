@@ -55,12 +55,12 @@ class TestUnifiedContextManagerBasics:
 class TestRecordTurn:
     def test_records_user_and_assistant_messages(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("u1", "telegram", "hello", "hi there")
+        mgr.record_turn("u1", "cli", "hello", "hi there")
         history = mgr.get("u1").history
         assert len(history) == 2
         assert history[0]["role"] == "user"
         assert history[0]["content"] == "hello"
-        assert history[0]["channel"] == "telegram"
+        assert history[0]["channel"] == "cli"
         assert history[1]["role"] == "assistant"
         assert history[1]["content"] == "hi there"
 
@@ -68,8 +68,8 @@ class TestRecordTurn:
         mgr = UnifiedContextManager()
         mgr.record_turn("u1", "email", "msg", "reply")
         assert mgr.get("u1").last_channel == "email"
-        mgr.record_turn("u1", "telegram", "msg2", "reply2")
-        assert mgr.get("u1").last_channel == "telegram"
+        mgr.record_turn("u1", "cli", "msg2", "reply2")
+        assert mgr.get("u1").last_channel == "cli"
 
     def test_updates_last_interaction_at(self):
         mgr = UnifiedContextManager()
@@ -94,38 +94,38 @@ class TestRecordTurn:
 class TestCrossChannelPreservation:
     """The core requirement: context persists across different channels."""
 
-    def test_telegram_then_email_sees_full_history(self):
+    def test_cli_then_email_sees_full_history(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("alice", "telegram", "What is PF1-C?", "It's a machine.")
+        mgr.record_turn("alice", "cli", "What is PF1-C?", "It's a machine.")
         mgr.record_turn("alice", "email", "Send me a quote", "Sure, here it is.")
 
         history = mgr.recent_history("alice", limit=10)
         assert len(history) == 4
         channels = [m["channel"] for m in history]
-        assert "telegram" in channels
+        assert "cli" in channels
         assert "email" in channels
 
-    def test_cli_then_api_then_telegram(self):
+    def test_cli_then_api_then_web(self):
         mgr = UnifiedContextManager()
         mgr.record_turn("bob", "cli", "q1", "a1")
         mgr.record_turn("bob", "api", "q2", "a2")
-        mgr.record_turn("bob", "telegram", "q3", "a3")
+        mgr.record_turn("bob", "web", "q3", "a3")
 
         history = mgr.recent_history("bob")
         assert len(history) == 6
         assert history[0]["channel"] == "cli"
         assert history[2]["channel"] == "api"
-        assert history[4]["channel"] == "telegram"
+        assert history[4]["channel"] == "web"
 
     def test_channel_filter_returns_only_matching(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("alice", "telegram", "tg msg", "tg reply")
+        mgr.record_turn("alice", "cli", "cli msg", "cli reply")
         mgr.record_turn("alice", "email", "email msg", "email reply")
-        mgr.record_turn("alice", "telegram", "tg msg 2", "tg reply 2")
+        mgr.record_turn("alice", "cli", "cli msg 2", "cli reply 2")
 
-        tg_only = mgr.recent_history("alice", channel="telegram")
-        assert len(tg_only) == 4
-        assert all(m["channel"] == "telegram" for m in tg_only)
+        cli_only = mgr.recent_history("alice", channel="cli")
+        assert len(cli_only) == 4
+        assert all(m["channel"] == "cli" for m in cli_only)
 
         email_only = mgr.recent_history("alice", channel="email")
         assert len(email_only) == 2
@@ -133,7 +133,7 @@ class TestCrossChannelPreservation:
 
     def test_unfiltered_returns_all_channels(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("alice", "telegram", "a", "b")
+        mgr.record_turn("alice", "cli", "a", "b")
         mgr.record_turn("alice", "email", "c", "d")
 
         all_msgs = mgr.recent_history("alice")
@@ -141,7 +141,7 @@ class TestCrossChannelPreservation:
 
     def test_separate_users_do_not_leak(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("alice", "telegram", "alice q", "alice a")
+        mgr.record_turn("alice", "cli", "alice q", "alice a")
         mgr.record_turn("bob", "email", "bob q", "bob a")
 
         alice_h = mgr.recent_history("alice")
@@ -153,8 +153,8 @@ class TestCrossChannelPreservation:
 
     def test_last_channel_tracks_most_recent(self):
         mgr = UnifiedContextManager()
-        mgr.record_turn("alice", "telegram", "a", "b")
-        assert mgr.get("alice").last_channel == "telegram"
+        mgr.record_turn("alice", "cli", "a", "b")
+        assert mgr.get("alice").last_channel == "cli"
         mgr.record_turn("alice", "email", "c", "d")
         assert mgr.get("alice").last_channel == "email"
         mgr.record_turn("alice", "cli", "e", "f")

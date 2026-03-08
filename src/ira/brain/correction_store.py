@@ -1,7 +1,6 @@
 """SQLite-backed store for corrections that Ira receives from users.
 
-Corrections flow in from Nemesis (adversarial feedback), Telegram reactions,
-and direct CLI corrections.  They accumulate here until the next dream-mode
+Corrections flow in from Nemesis (adversarial feedback) and direct corrections.  They accumulate here until the next dream-mode
 sleep-training cycle processes them into the vector store and long-term memory.
 """
 

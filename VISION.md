@@ -23,7 +23,7 @@ but by routing to specialists who each own their domain.
 - Hybrid retrieval across Qdrant (vectors), Neo4j (graph), and Mem0 (memory)
 - Nine memory subsystems including dream mode for overnight consolidation
 - Body-system metaphor for subsystem organization
-- REST API, CLI, and Telegram interfaces
+- REST API and CLI interfaces
 - CRM with companies, contacts, deals, and quotes in PostgreSQL
 - Drip campaign engine with 7-stage sequences
 - Document ingestion pipeline (PDF, DOCX, Excel)

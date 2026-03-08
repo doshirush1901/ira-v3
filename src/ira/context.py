@@ -1,7 +1,7 @@
 """Unified cross-channel context manager.
 
-Tracks conversation state for each user across every channel (Telegram,
-Email, CLI, API) so that Ira maintains continuity regardless of where the
+Tracks conversation state for each user across every channel (Email,
+CLI, API) so that Ira maintains continuity regardless of where the
 user interacts.
 
 Storage is an in-memory dictionary for now; a persistent backend (Redis,
@@ -39,8 +39,7 @@ class UnifiedContextManager:
     """In-memory, cross-channel context store keyed by ``user_id``.
 
     ``user_id`` is a stable identifier for the human -- typically an email
-    address, a Telegram chat-ID string, or any opaque key the caller
-    chooses.  The same ``user_id`` must be used across channels for
+    address or any opaque key the caller chooses.  The same ``user_id`` must be used across channels for
     continuity to work.
     """
 

@@ -16,7 +16,7 @@ Implements an 11-stage dream cycle:
   7.   Conversation Quality Review — review retrieval quality via co-access matrix.
   8.   Graph Consolidation — tune knowledge graph relationships.
   9.   Follow-up Automation — detect stale quotes for follow-up.
-  10.  Morning Summary — send Telegram summary.
+  10.  Morning Summary — log dream cycle results.
 
 Each cycle is logged to ``data/dream_log.json`` for auditability.
 """
@@ -175,7 +175,7 @@ class DreamMode:
         # Stage 9 — Follow-up Automation
         await self._stage9_follow_up_automation(stage_log)
 
-        # Stage 10 — Morning Summary (Telegram)
+        # Stage 10 — Morning Summary
         await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
 
         stage_results = {
@@ -850,15 +850,8 @@ class DreamMode:
         connections: list[dict[str, Any]],
         price_conflicts: list[dict[str, Any]],
     ) -> None:
-        """Send a morning summary to Telegram."""
+        """Log a morning summary of the dream cycle."""
         try:
-            settings = get_settings()
-            token = settings.telegram.bot_token.get_secret_value()
-            chat_id = settings.telegram.admin_chat_id
-            if not token or not chat_id:
-                stage_log["stages"]["10_morning_summary"] = {"status": "skipped", "reason": "no telegram"}
-                return
-
             deferred = stage_log.get("stages", {}).get("0_deferred_ingestion", {}).get("files_ingested", 0)
             sleep_training = stage_log.get("stages", {}).get("0_5_sleep_training", {}).get("corrections", 0)
 
@@ -868,7 +861,7 @@ class DreamMode:
             ]
 
             lines = [
-                "Good morning! Dream cycle complete.",
+                "Dream cycle complete.",
                 f"- Memories consolidated: {memories_consolidated}",
                 f"- Knowledge gaps found: {len(gaps)}",
                 f"- Creative connections: {len(connections)}",
@@ -878,15 +871,9 @@ class DreamMode:
             ]
             if failed_stages:
                 lines.append(f"- FAILED stages: {', '.join(failed_stages)}")
-            message = "\n".join(lines)
 
-            async with httpx.AsyncClient(timeout=15) as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{token}/sendMessage",
-                    json={"chat_id": chat_id, "text": message},
-                )
+            logger.info("Stage 10: %s", "\n".join(lines))
             stage_log["stages"]["10_morning_summary"] = {"status": "ok"}
-            logger.info("Stage 10: morning summary sent to Telegram")
         except (IraError, Exception):
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}

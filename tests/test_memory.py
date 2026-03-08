@@ -90,11 +90,11 @@ class TestConversationMemory:
 
     @pytest.mark.asyncio
     async def test_add_message_and_get_history(self, memory):
-        await memory.add_message("user1", "telegram", "user", "Hello")
-        await memory.add_message("user1", "telegram", "assistant", "Hi there")
-        await memory.add_message("user1", "telegram", "user", "How are you?")
+        await memory.add_message("user1", "cli", "user", "Hello")
+        await memory.add_message("user1", "cli", "assistant", "Hi there")
+        await memory.add_message("user1", "cli", "user", "How are you?")
 
-        history = await memory.get_history("user1", "telegram", limit=20)
+        history = await memory.get_history("user1", "cli", limit=20)
 
         assert len(history) == 3
         assert history[0]["role"] == "user"
@@ -104,7 +104,7 @@ class TestConversationMemory:
 
     @pytest.mark.asyncio
     async def test_new_conversation_after_timeout(self, memory):
-        await memory.add_message("user1", "telegram", "user", "First message")
+        await memory.add_message("user1", "cli", "user", "First message")
 
         old_time = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat()
         await memory._db.execute(
@@ -113,13 +113,13 @@ class TestConversationMemory:
         )
         await memory._db.commit()
 
-        result = await memory.should_start_new_conversation("user1", "telegram")
+        result = await memory.should_start_new_conversation("user1", "cli")
         assert result is True
 
     @pytest.mark.asyncio
     async def test_same_conversation_within_timeout(self, memory):
-        await memory.add_message("user1", "telegram", "user", "Msg 1")
-        await memory.add_message("user1", "telegram", "user", "Msg 2")
+        await memory.add_message("user1", "cli", "user", "Msg 1")
+        await memory.add_message("user1", "cli", "user", "Msg 2")
 
         cursor = await memory._db.execute(
             "SELECT DISTINCT conversation_id FROM messages"
@@ -623,7 +623,7 @@ class TestDreamMode:
         now = datetime.now(timezone.utc).isoformat()
         await dm._conversation._db.execute(
             "INSERT INTO conversations (user_id, channel, started_at, last_message_at) VALUES (?, ?, ?, ?)",
-            ("user1", "telegram", now, now),
+            ("user1", "cli", now, now),
         )
         await dm._conversation._db.execute(
             "INSERT INTO knowledge_gaps (query, state, gaps, created_at) VALUES (?, ?, ?, ?)",

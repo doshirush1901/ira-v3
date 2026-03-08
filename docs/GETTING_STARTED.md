@@ -14,7 +14,7 @@ This guide walks you through local setup and first interactions.
 | **OpenAI API Key** | Core LLM reasoning |
 | **Voyage AI API Key** | Text embeddings |
 
-Optional: Anthropic API key (fallback LLM), Mem0 API key (long-term memory), Google OAuth credentials (Gmail integration), Telegram bot token, Langfuse keys (LLM observability/tracing).
+Optional: Anthropic API key (fallback LLM), Mem0 API key (long-term memory), Google OAuth credentials (Gmail integration), Langfuse keys (LLM observability/tracing).
 
 ## Installation
 

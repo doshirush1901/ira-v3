@@ -7,7 +7,6 @@ reports dream recency, knowledge health, and agent power levels.
 Usage::
 
     python scripts/ira_vital_signs.py
-    python scripts/ira_vital_signs.py --telegram
     python scripts/ira_vital_signs.py --json
 """
 
@@ -36,11 +35,6 @@ POWER_LEVELS_PATH = PROJECT_ROOT / "data" / "brain" / "power_levels.json"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Ira's daily health check across all subsystems.",
-    )
-    parser.add_argument(
-        "--telegram",
-        action="store_true",
-        help="Send the report to Telegram.",
     )
     parser.add_argument(
         "--json",
@@ -225,38 +219,6 @@ def check_power_levels() -> dict[str, Any]:
         return {"status": "FAIL", "latency_ms": None, "detail": str(exc)}
 
 
-async def send_telegram(report: dict[str, dict[str, Any]]) -> None:
-    import httpx
-    from ira.config import get_settings
-
-    settings = get_settings()
-    token = settings.telegram.bot_token.get_secret_value()
-    chat_id = settings.telegram.admin_chat_id
-    if not token or not chat_id:
-        console.print("[yellow]Telegram not configured, skipping send.[/yellow]")
-        return
-
-    lines = ["Ira Vital Signs Report", ""]
-    for name, info in report.items():
-        status = info.get("status", "?")
-        marker = {"OK": "+", "WARN": "~", "FAIL": "!!"}.get(status, "?")
-        detail = info.get("detail", "")
-        latency = info.get("latency_ms")
-        lat_str = f" ({latency}ms)" if latency is not None else ""
-        lines.append(f"[{marker}] {name}: {status}{lat_str}")
-        if detail:
-            lines.append(f"    {detail}")
-
-    message = "\n".join(lines)
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message},
-        )
-    console.print("[green]Report sent to Telegram.[/green]")
-
-
 def render_table(report: dict[str, dict[str, Any]]) -> None:
     table = Table(title="Ira Vital Signs")
     table.add_column("Service", style="cyan")
@@ -356,9 +318,6 @@ async def main() -> None:
     else:
         render_table(report)
         await render_leaderboard()
-
-    if args.telegram:
-        await send_telegram(report)
 
     fail_count = sum(1 for v in report.values() if v.get("status") == "FAIL")
     warn_count = sum(1 for v in report.values() if v.get("status") == "WARN")

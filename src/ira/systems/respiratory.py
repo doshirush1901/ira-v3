@@ -184,30 +184,7 @@ class RespiratorySystem:
             logger.debug("EXHALE skipping goal sweep (GoalManager not configured)")
 
         summary = "Ira Daily Exhale Report\n" + "\n".join(summary_parts) if summary_parts else "Ira Daily Exhale: no active subsystems"
-        await self._send_telegram_summary(summary)
-
-    async def _send_telegram_summary(self, summary: str) -> None:
-        settings = get_settings()
-        token = settings.telegram.bot_token.get_secret_value()
-        chat_id = settings.telegram.admin_chat_id
-
-        if not token or not chat_id:
-            logger.debug("Telegram not configured — skipping daily summary")
-            return
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": summary[:4096],
-            "parse_mode": "Markdown",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-        except Exception:
-            logger.exception("Failed to send Telegram daily summary")
+        logger.info(summary)
 
     # ── Public CLI entry points ─────────────────────────────────────────────
 

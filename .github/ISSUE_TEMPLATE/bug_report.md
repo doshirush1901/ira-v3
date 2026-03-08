@@ -29,7 +29,7 @@ What actually happened. Include error messages or logs if available.
 - **OS:** (e.g., macOS 15, Ubuntu 24.04)
 - **Python version:** (e.g., 3.11.9)
 - **Ira version:** (e.g., 3.1.0)
-- **Interface:** (CLI / API / Telegram / Email)
+- **Interface:** (CLI / API / Email)
 - **Docker:** (yes/no, version)
 
 ## Additional Context

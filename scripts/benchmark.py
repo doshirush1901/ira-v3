@@ -9,7 +9,6 @@ Usage::
     python scripts/benchmark.py
     python scripts/benchmark.py --quick
     python scripts/benchmark.py --category pricing --json
-    python scripts/benchmark.py --telegram
 """
 
 from __future__ import annotations
@@ -263,23 +262,6 @@ async def _build_pantheon() -> Pantheon:
     return pantheon
 
 
-async def _send_telegram(message: str) -> None:
-    settings = get_settings()
-    token = settings.telegram.bot_token.get_secret_value()
-    chat_id = settings.telegram.admin_chat_id
-    if not token or not chat_id:
-        console.print("[yellow]Telegram not configured — skipping[/yellow]")
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json={"chat_id": chat_id, "text": message})
-            resp.raise_for_status()
-    except httpx.HTTPError:
-        logger.exception("Failed to send Telegram message")
-
-
 # ── Main runner ──────────────────────────────────────────────────────────────
 
 async def run(args: argparse.Namespace) -> None:
@@ -327,10 +309,6 @@ async def run(args: argparse.Namespace) -> None:
     if args.json:
         _output_json(results)
 
-    if args.telegram:
-        summary = _build_summary(results)
-        await _send_telegram(summary)
-        console.print("[green]Results sent to Telegram[/green]")
 
 
 def _print_results(results: list[TestResult]) -> None:
@@ -455,7 +433,6 @@ def main() -> None:
         "--category", choices=categories,
         help="Run only a specific category",
     )
-    parser.add_argument("--telegram", action="store_true", help="Send results to Telegram")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
 

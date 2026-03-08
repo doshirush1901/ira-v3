@@ -39,8 +39,6 @@ def mock_settings():
     s.neo4j.password.get_secret_value.return_value = ""
     s.database.url = "sqlite+aiosqlite://"
     s.memory.api_key.get_secret_value.return_value = ""
-    s.telegram.bot_token.get_secret_value.return_value = ""
-    s.telegram.admin_chat_id = ""
     s.app.log_level = "WARNING"
     s.app.environment = "test"
     s.app.cors_origins = ""

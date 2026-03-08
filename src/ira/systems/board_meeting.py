@@ -1,8 +1,8 @@
 """Board meeting system — multi-agent collaborative discussions.
 
 Gathers contributions from multiple Pantheon agents on a topic, then
-synthesises a final decision via Athena.  Used by the ``/board`` Telegram
-command and the ``POST /api/board-meeting`` endpoint.
+synthesises a final decision via Athena.  Used by the
+``POST /api/board-meeting`` endpoint and the CLI.
 """
 
 from __future__ import annotations

@@ -56,7 +56,7 @@ src/ira/
   brain/        # Knowledge retrieval, embeddings, entity extraction,
                 #   guardrails, pricing, routing (30 modules)
   data/         # CRM models, quote models
-  interfaces/   # CLI, server, Telegram, email, dashboard, cursor feedback
+  interfaces/   # CLI, server, email, dashboard, cursor feedback
   memory/       # Conversation, episodic, relationship, goals
   services/     # LLMClient (OpenAI + Anthropic with Langfuse tracing)
   schemas/      # Pydantic models for structured LLM outputs

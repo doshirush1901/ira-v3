@@ -17,7 +17,7 @@ src/ira/
                 #   entity extraction (GLiNER), guardrails (30 modules)
   memory/       # 9 memory subsystems + dream mode + goal sweep
   systems/      # Body-system metaphor (20 modules)
-  interfaces/   # FastAPI server, CLI, Telegram, email processor, dashboard, cursor feedback
+  interfaces/   # FastAPI server, CLI, email processor, dashboard, cursor feedback
   data/         # CRM models, quote models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers

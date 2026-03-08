@@ -66,8 +66,6 @@ def _make_settings_mock():
     s.neo4j.user = "neo4j"
     s.neo4j.password.get_secret_value.return_value = "test"
     s.database.url = "sqlite+aiosqlite://"
-    s.telegram.bot_token.get_secret_value.return_value = "test-token"
-    s.telegram.admin_chat_id = "12345"
     s.memory.api_key.get_secret_value.return_value = ""
     s.google.credentials_path = "creds.json"
     s.google.token_path = "token.json"
@@ -490,19 +488,18 @@ class TestSensorySystem:
         assert contact2.email == "alice@example.com"
 
     @pytest.mark.asyncio
-    async def test_resolve_identity_telegram_creates_placeholder(self, sensory_system):
-        contact = await sensory_system.resolve_identity("TELEGRAM", "12345", "Bob")
+    async def test_resolve_identity_cli_creates_placeholder(self, sensory_system):
+        contact = await sensory_system.resolve_identity("CLI", "12345", "Bob")
         assert "12345" in contact.email
         assert contact.name == "Bob"
 
     @pytest.mark.asyncio
     async def test_link_identity_merges_channels(self, sensory_system):
-        await sensory_system.resolve_identity("TELEGRAM", "12345", "Bob")
-        await sensory_system.link_identity("TELEGRAM", "12345", "bob@example.com")
+        await sensory_system.resolve_identity("CLI", "12345", "Bob")
+        await sensory_system.link_identity("CLI", "12345", "bob@example.com")
 
-        # Clear cache to force DB lookup
         sensory_system._identity_cache.clear()
-        contact = await sensory_system.resolve_identity("TELEGRAM", "12345", "Bob")
+        contact = await sensory_system.resolve_identity("CLI", "12345", "Bob")
         assert contact.email == "bob@example.com"
 
 
@@ -536,13 +533,13 @@ class TestVoiceSystem:
         assert result == "raw text"
 
     @pytest.mark.asyncio
-    async def test_shape_response_telegram_enforces_length(self, voice_system):
-        long_response = "A" * 5000
+    async def test_shape_response_email_enforces_length(self, voice_system):
+        long_response = "A" * 15000
 
         voice_system._llm.generate_text = AsyncMock(return_value=long_response)
-        result = await voice_system.shape_response(long_response, "TELEGRAM", None, {})
+        result = await voice_system.shape_response(long_response, "EMAIL", None, {})
 
-        assert len(result) <= 2003  # 2000 + "..."
+        assert len(result) <= 10003  # 10000 + "..."
 
     @pytest.mark.asyncio
     async def test_shape_response_applies_behavioral_modifiers(self, voice_system):
@@ -551,7 +548,7 @@ class TestVoiceSystem:
         voice_system._llm.generate_text = AsyncMock(return_value="shaped")
         await voice_system.shape_response(
             "Some long response that needs reshaping " * 20,
-            "TELEGRAM", None, modifiers,
+            "CLI", None, modifiers,
         )
 
         system_prompt_arg = voice_system._llm.generate_text.call_args[0][0]
@@ -1428,36 +1425,22 @@ class TestDreamModeStages:
     # ── Stage 10: Morning Summary ────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_stage10_skips_without_telegram(self, dream):
+    async def test_stage10_logs_summary(self, dream):
         dm, _, _, _, _ = dream
 
-        mock_settings = _make_settings_mock()
-        mock_settings.telegram.bot_token.get_secret_value.return_value = ""
-        mock_settings.telegram.admin_chat_id = ""
+        stage_log: dict = {"stages": {}}
+        await dm._stage10_morning_summary(stage_log, 5, [], [], [])
 
-        with patch("ira.memory.dream_mode.get_settings", return_value=mock_settings):
-            stage_log: dict = {"stages": {}}
-            await dm._stage10_morning_summary(stage_log, 5, [], [], [])
-
-        assert stage_log["stages"]["10_morning_summary"]["status"] == "skipped"
+        assert stage_log["stages"]["10_morning_summary"]["status"] == "ok"
 
     @pytest.mark.asyncio
     async def test_stage10_includes_failed_stages(self, dream):
         dm, _, _, _, _ = dream
 
-        mock_settings = _make_settings_mock()
-        with (
-            patch("ira.memory.dream_mode.get_settings", return_value=mock_settings),
-            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
-        ):
-            mock_post.return_value = MagicMock(status_code=200)
-            stage_log: dict = {"stages": {"1_memory_ingestion": {"status": "error"}}}
-            await dm._stage10_morning_summary(stage_log, 0, [], [], [])
+        stage_log: dict = {"stages": {"1_memory_ingestion": {"status": "error"}}}
+        await dm._stage10_morning_summary(stage_log, 0, [], [], [])
 
-        if mock_post.called:
-            body = mock_post.call_args[1]["json"]["text"]
-            assert "FAILED stages" in body
-            assert "1_memory_ingestion" in body
+        assert stage_log["stages"]["10_morning_summary"]["status"] == "ok"
 
     # ── Report persistence ───────────────────────────────────────────
 

@@ -58,7 +58,7 @@
 | 1.4b | GOOD | `config.py` uses `pydantic-settings` with `SecretStr` for all API keys. No secrets are logged. |
 | 1.4c | GOOD | `get_settings()` is cached via `@lru_cache(maxsize=1)` — singleton pattern. |
 | 1.4d | GOOD | No hardcoded secrets found anywhere in `src/ira/`. |
-| 1.4e | LOW | 16 hardcoded OpenAI/Voyage/Telegram API endpoint URLs across brain modules. Should be centralized in config. |
+| 1.4e | LOW | 16 hardcoded OpenAI/Voyage API endpoint URLs across brain modules. Should be centralized in config. |
 
 ### 1.5 Documentation
 
@@ -292,7 +292,7 @@ context: dict[str, Any] = {
 - **Layer 3:** Brain orchestrators (`retriever.py`, `imports_fallback_retriever.py`, etc.)
 - **Layer 4:** Agents (`base_agent.py` + 24 agents)
 - **Layer 5:** Orchestrators (`pantheon.py`, `pipeline.py`)
-- **Layer 6:** Entry points (`server.py`, `cli.py`, `telegram_bot.py`)
+- **Layer 6:** Entry points (`server.py`, `cli.py`)
 
 `pipeline.py` uses **6 inline imports** inside method bodies to avoid import-time cycles. These create hidden runtime dependencies invisible to static analysis.
 
@@ -341,7 +341,7 @@ The CLI path creates a **minimal subset** of the full system. This means CLI use
 | `test_brain.py` | 764 | ~37 | EmbeddingService, QdrantManager, Chunking, UnifiedRetriever, DeterministicRouter, MachineIntelligence, PricingEngine, SalesIntelligence |
 | `test_memory.py` | 671 | ~31 | ConversationMemory, LongTermMemory, EpisodicMemory, Metacognition, EmotionalIntelligence, InnerVoice, RelationshipMemory, DreamMode |
 | `test_systems.py` | 1,194 | ~42 | DigestiveSystem, RespiratorySystem, ImmuneSystem, EndocrineSystem, SensorySystem, VoiceSystem, LearningHub, Nemesis training |
-| `test_interfaces.py` | 1,409 | ~39 | EmailProcessor, CLI, FastAPI server, Dashboard, Telegram bot, RequestPipeline (full 11-step) |
+| `test_interfaces.py` | 1,409 | ~39 | EmailProcessor, CLI, FastAPI server, Dashboard, RequestPipeline (full 11-step) |
 | `test_crm.py` | 665 | ~27 | CRMDatabase CRUD, pipeline summary, stale leads, QuoteManager, AutonomousDripEngine |
 | `test_drip_engine.py` | 468 | ~15 | Campaign creation, step scheduling, cycle execution, reply checking |
 | `test_context.py` | 210 | ~21 | UnifiedContextManager, cross-channel preservation, goal management |
@@ -356,7 +356,7 @@ The CLI path creates a **minimal subset** of the full system. This means CLI use
 | `adaptive_style.py` | 158 | Low — style tracking |
 | `correction_learner.py` | 161 | Medium — learns from corrections |
 | `correction_store.py` | 180 | Medium — SQLite persistence |
-| `error_monitor.py` | 190 | Medium — Telegram alerting |
+| `error_monitor.py` | 190 | Medium — error alerting |
 | `feedback_handler.py` | 262 | Medium — feedback detection |
 | `graph_consolidation.py` | 211 | High — modifies graph edges |
 | `hybrid_search.py` | 215 | N/A — dead code |

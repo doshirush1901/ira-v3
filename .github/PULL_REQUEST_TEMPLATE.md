@@ -23,7 +23,7 @@
 
 - [ ] Existing tests pass (`poetry run pytest`)
 - [ ] New tests added for changed behavior
-- [ ] Manually tested via CLI / API / Telegram
+- [ ] Manually tested via CLI / API
 
 ## Checklist
 

@@ -217,33 +217,17 @@ class PricingLearner:
         return dict(self._index)
 
     async def send_conflict_alert(self, conflicts: list[dict[str, Any]]) -> None:
-        """Send a Telegram notification about price conflicts."""
+        """Log price conflicts for review."""
         if not conflicts:
             return
-        settings = get_settings()
-        token = settings.telegram.bot_token.get_secret_value()
-        chat_id = settings.telegram.admin_chat_id
-        if not token or not chat_id:
-            logger.warning("Telegram not configured; skipping conflict alert")
-            return
 
-        lines = ["*Price Conflicts Detected*\n"]
+        lines = ["Price Conflicts Detected"]
         for c in conflicts[:10]:
             lines.append(
                 f"- {c['model']}: avg ${c['avg_price']:,.0f}, "
                 f"deviation {c['max_deviation']:.1%} ({c['price_count']} data points)"
             )
-        text = "\n".join(lines)
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-            logger.info("Conflict alert sent to chat %s", chat_id)
-        except httpx.HTTPError:
-            logger.exception("Failed to send conflict alert")
+        logger.warning("\n".join(lines))
 
     # ── internals ─────────────────────────────────────────────────────────
 

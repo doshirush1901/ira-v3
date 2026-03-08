@@ -58,7 +58,6 @@ class Channel(str, Enum):
     """Communication channel for an interaction."""
 
     EMAIL = "EMAIL"
-    TELEGRAM = "TELEGRAM"
     PHONE = "PHONE"
     MEETING = "MEETING"
     WEB = "WEB"

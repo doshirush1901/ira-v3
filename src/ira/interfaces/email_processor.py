@@ -10,7 +10,7 @@ Supports two modes controlled by the ``IRA_EMAIL_MODE`` environment variable:
 * **OPERATIONAL**: Active processing of the configured ``GOOGLE_IRA_EMAIL``.  Fetches
   unread emails, runs the full analysis pipeline, generates reply drafts via
   Pantheon agents for actionable intents, saves drafts to Gmail, sends a
-  Telegram notification, and marks originals as read.  Human-in-the-loop:
+  and marks originals as read.  Human-in-the-loop:
   drafts must be manually reviewed and sent.
 """
 
@@ -235,7 +235,7 @@ class EmailProcessor:
         """Fetch unread emails, analyse, draft replies, and mark as read.
 
         OPERATIONAL mode entry point.  Creates Gmail drafts for actionable
-        intents and sends a Telegram notification for each.  Never sends
+        intents.  Never sends
         emails directly — a human must review and send each draft.
         """
         service = await self._build_gmail_service()
@@ -258,7 +258,6 @@ class EmailProcessor:
                             service, email.from_address, email.subject,
                             reply_body, email.thread_id,
                         )
-                        await self._send_telegram_notification(email.subject)
                         draft_created = True
 
                 await self._mark_as_read(service, email.id)
@@ -358,28 +357,6 @@ class EmailProcessor:
             ).execute()
 
         await asyncio.to_thread(_modify)
-
-    async def _send_telegram_notification(self, subject: str) -> None:
-        """Notify the admin that a new draft has been created."""
-        settings = get_settings()
-        token = settings.telegram.bot_token.get_secret_value()
-        chat_id = settings.telegram.admin_chat_id
-
-        if not token or not chat_id:
-            logger.warning("Telegram not configured — skipping draft notification")
-            return
-
-        text = (
-            f"New draft email created for [{subject}]. "
-            "Please review and send."
-        )
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json={"chat_id": chat_id, "text": text})
-                resp.raise_for_status()
-        except (IraError, Exception):
-            logger.exception("Failed to send Telegram draft notification")
 
     # ── Deal creation from email signals ────────────────────────────────
 
@@ -1115,8 +1092,8 @@ class EmailProcessor:
 class GmailDraftSender:
     """Adapter that satisfies the DripEngine's ``GmailSenderProtocol``.
 
-    Creates Gmail drafts (never sends directly) and notifies the admin
-    via Telegram so a human can review before sending.
+    Creates Gmail drafts (never sends directly). A human must review
+    before sending.
     """
 
     def __init__(self, email_processor: EmailProcessor) -> None:
@@ -1131,21 +1108,7 @@ class GmailDraftSender:
         )
 
     async def send_notification(self, message: str) -> None:
-        settings = get_settings()
-        token = settings.telegram.bot_token.get_secret_value()
-        chat_id = settings.telegram.admin_chat_id
-
-        if not token or not chat_id:
-            logger.warning("Telegram not configured — skipping drip notification")
-            return
-
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json={"chat_id": chat_id, "text": message})
-                resp.raise_for_status()
-        except (IraError, Exception):
-            logger.exception("Failed to send Telegram drip notification")
+        logger.info("Drip notification: %s", message)
 
     async def check_replies(self, thread_id: str) -> list[dict[str, Any]]:
         service = await self._processor._build_gmail_service()

@@ -1,13 +1,14 @@
 """Immune system — health monitoring, error tracking, and self-healing.
 
 Provides startup validation of all external services, continuous error-rate
-monitoring with Telegram alerting, knowledge-base health auditing, and basic
-service recovery actions.
+monitoring, knowledge-base health auditing, and basic service recovery
+actions.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 from typing import Any
@@ -50,22 +51,21 @@ class ImmuneSystem:
 
         settings = get_settings()
         self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._telegram_token = settings.telegram.bot_token.get_secret_value()
-        self._telegram_chat_id = settings.telegram.admin_chat_id
         self._database_url = settings.database.url
         self._qdrant_url = settings.qdrant.url
         self._neo4j_uri = settings.neo4j.uri
         self._neo4j_user = settings.neo4j.user
         self._neo4j_password = settings.neo4j.password.get_secret_value()
 
+        self._langfuse_public_key = settings.langfuse.public_key
+        self._langfuse_secret_key = settings.langfuse.secret_key.get_secret_value()
+        self._langfuse_base_url = settings.langfuse.base_url.rstrip("/")
+
         self._error_tracker: dict[str, list[float]] = {}
         self._error_monitor: Any = None
         try:
             from ira.brain.error_monitor import ErrorMonitor
-            self._error_monitor = ErrorMonitor(
-                telegram_token=self._telegram_token,
-                telegram_chat_id=self._telegram_chat_id,
-            )
+            self._error_monitor = ErrorMonitor()
         except ImportError:
             pass
 
@@ -79,10 +79,11 @@ class ImmuneSystem:
             self._check_postgresql(),
             self._check_openai(),
             self._check_voyage(),
+            self._check_langfuse(),
             return_exceptions=True,
         )
 
-        names = ["qdrant", "neo4j", "postgresql", "openai", "voyage"]
+        names = ["qdrant", "neo4j", "postgresql", "openai", "voyage", "langfuse"]
         report: dict[str, dict[str, Any]] = {}
 
         for name, result in zip(names, checks):
@@ -165,6 +166,24 @@ class ImmuneSystem:
         latency = (time.monotonic() - start) * 1000
         return {"status": "healthy", "latency_ms": round(latency, 1), "error": None}
 
+    async def _check_langfuse(self) -> dict[str, Any]:
+        if not self._langfuse_public_key or not self._langfuse_secret_key:
+            return {"status": "not_configured", "latency_ms": None, "error": None}
+
+        token = base64.b64encode(
+            f"{self._langfuse_public_key}:{self._langfuse_secret_key}".encode()
+        ).decode()
+
+        start = time.monotonic()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{self._langfuse_base_url}/api/public/health",
+                headers={"Authorization": f"Basic {token}"},
+            )
+            resp.raise_for_status()
+        latency = (time.monotonic() - start) * 1000
+        return {"status": "healthy", "latency_ms": round(latency, 1), "error": None}
+
     # ── ERROR LOGGING ─────────────────────────────────────────────────────
 
     def log_error(self, error: Exception, context: dict[str, Any]) -> None:
@@ -203,24 +222,11 @@ class ImmuneSystem:
     # ── ALERTING ──────────────────────────────────────────────────────────
 
     async def send_alert(self, message: str, severity: str = "warning") -> None:
-        """Send a Telegram message to the admin chat."""
-        if not self._telegram_token or not self._telegram_chat_id:
-            logger.warning("Telegram not configured — alert not sent: %s", message)
-            return
-
-        url = f"https://api.telegram.org/bot{self._telegram_token}/sendMessage"
-        payload = {
-            "chat_id": self._telegram_chat_id,
-            "text": f"[IRA {severity.upper()}] {message}",
-            "parse_mode": "Markdown",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-        except Exception:
-            logger.exception("Failed to send Telegram alert")
+        """Log an alert at the appropriate severity level."""
+        logger.log(
+            logging.CRITICAL if severity.upper() == "critical" else logging.WARNING,
+            "[IRA %s] %s", severity.upper(), message,
+        )
 
     # ── KNOWLEDGE HEALTH ──────────────────────────────────────────────────
 

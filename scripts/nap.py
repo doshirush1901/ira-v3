@@ -6,7 +6,7 @@ Runs the full nightly consolidation pipeline:
   2. Nemesis sleep training (corrections)
   3. Full dream mode cycle
   4. Graph consolidation
-  5. Morning summary to Telegram
+  5. Morning summary (logged)
 
 Usage::
 
@@ -182,15 +182,6 @@ async def phase_graph_consolidation(dry_run: bool) -> dict:
 
 
 async def phase_morning_summary(stats: dict, dry_run: bool) -> dict:
-    import httpx
-    from ira.config import get_settings
-
-    settings = get_settings()
-    token = settings.telegram.bot_token.get_secret_value()
-    chat_id = settings.telegram.admin_chat_id
-    if not token or not chat_id:
-        return {"sent": False, "reason": "telegram not configured"}
-
     dream_detail = stats.get("Dream Cycle", {}).get("detail", {})
     training_detail = stats.get("Sleep Training", {}).get("detail", {})
 
@@ -209,17 +200,8 @@ async def phase_morning_summary(stats: dict, dry_run: bool) -> dict:
         lines.append(f"  {phase_name}: {status} ({elapsed}s)")
 
     message = "\n".join(lines)
-
-    if dry_run:
-        console.print(f"    [dim]DRY-RUN: would send to Telegram:[/dim]\n{message}")
-        return {"sent": False, "dry_run": True}
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        await client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message},
-        )
-    return {"sent": True}
+    console.print(f"    [dim]{message}[/dim]")
+    return {"logged": True}
 
 
 async def main() -> None:
