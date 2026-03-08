@@ -4,19 +4,23 @@ All LLM calls in the codebase route through this module.  OpenAI calls
 go via the ``langfuse.openai`` wrapper so every request is automatically
 traced in Langfuse.  Anthropic calls use the standard SDK with manual
 ``@observe()`` tracing.
+
+Structured output uses `instructor <https://python.useinstructor.com/>`_
+which sends Pydantic validation errors back to the LLM for automatic
+correction, dramatically reducing parse failures.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, TypeVar
 
+import instructor
 from anthropic import AsyncAnthropic
 from langfuse.decorators import observe
 from langfuse.openai import AsyncOpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from ira.config import Settings, get_settings
 
@@ -42,6 +46,14 @@ class LLMClient:
         self._anthropic: AsyncAnthropic | None = (
             AsyncAnthropic(api_key=anthropic_key) if anthropic_key else None
         )
+
+        self._openai_instructor = (
+            instructor.from_openai(self._openai) if self._openai else None
+        )
+        self._anthropic_instructor = (
+            instructor.from_anthropic(self._anthropic) if self._anthropic else None
+        )
+
         self._openai_model = cfg.llm.openai_model
         self._anthropic_model = cfg.llm.anthropic_model
 
@@ -63,9 +75,8 @@ class LLMClient:
     ) -> T:
         """Call an LLM and parse the response into a Pydantic model.
 
-        Uses OpenAI's ``response_format`` for structured output when the
-        provider is ``"openai"``.  For Anthropic, requests JSON and
-        validates with Pydantic.
+        Uses Instructor to handle structured output with automatic
+        validation-retry feedback for both OpenAI and Anthropic.
         """
         if provider == "openai":
             return await self._openai_structured(
@@ -92,7 +103,7 @@ class LLMClient:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> T:
-        if self._openai is None:
+        if self._openai_instructor is None:
             return response_model()
 
         resolved_model = model or self._openai_model
@@ -106,8 +117,10 @@ class LLMClient:
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                completion = await self._openai.beta.chat.completions.parse(
+                return await self._openai_instructor.chat.completions.create(
                     model=resolved_model,
+                    response_model=response_model,
+                    max_retries=2,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     timeout=120.0,
@@ -115,22 +128,9 @@ class LLMClient:
                         {"role": "system", "content": system},
                         {"role": "user", "content": user[:12_000]},
                     ],
-                    response_format=response_model,
                     **({"name": name} if name else {}),
                     **({"metadata": metadata} if metadata else {}),
                 )
-                parsed = completion.choices[0].message.parsed
-                if parsed is not None:
-                    return parsed
-                raw_content = completion.choices[0].message.content or "{}"
-                return response_model.model_validate_json(raw_content)
-            except ValidationError:
-                logger.warning(
-                    "Structured parse validation failed (attempt %d/%d)",
-                    attempt, _MAX_RETRIES,
-                )
-                last_exc = None
-                break
             except Exception as exc:
                 last_exc = exc
                 status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -166,39 +166,24 @@ class LLMClient:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> T:
-        if self._anthropic is None:
+        if self._anthropic_instructor is None:
             return response_model()
 
         resolved_model = model or self._anthropic_model
-        json_instruction = (
-            f"\n\nRespond with ONLY valid JSON matching this schema: "
-            f"{response_model.model_json_schema()}"
-        )
 
         backoff = _RETRY_BACKOFF
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                resp = await self._anthropic.messages.create(
+                return await self._anthropic_instructor.messages.create(
                     model=resolved_model,
+                    response_model=response_model,
+                    max_retries=2,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     timeout=120.0,
-                    system=system + json_instruction,
+                    system=system,
                     messages=[{"role": "user", "content": user[:12_000]}],
                 )
-                raw = resp.content[0].text
-                return response_model.model_validate_json(raw)
-            except ValidationError:
-                logger.warning("Anthropic structured validation failed")
-                try:
-                    cleaned = raw.strip()
-                    if cleaned.startswith("```"):
-                        lines = cleaned.split("\n")
-                        lines = [l for l in lines if not l.strip().startswith("```")]
-                        cleaned = "\n".join(lines)
-                    return response_model.model_validate_json(cleaned)
-                except Exception:
-                    break
             except Exception as exc:
                 status = getattr(getattr(exc, "response", None), "status_code", None)
                 if status in (429, 402):

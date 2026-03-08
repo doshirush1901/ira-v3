@@ -569,8 +569,9 @@ class DocumentIngestor:
     async def _extract_and_store_entities(self, text: str, source: str) -> None:
         """Extract entities from document text and store them in Neo4j.
 
-        Uses GLiNER for fast local extraction first, then enriches with
-        LLM-based extraction for anything GLiNER might have missed.
+        Extraction priority: GraphRAG (schema-bound, with entity resolution)
+        > legacy LLM extraction > GLiNER (fast local fallback).
+        Results from all available extractors are merged and deduplicated.
         """
         assert self._graph is not None
 
@@ -584,7 +585,7 @@ class DocumentIngestor:
         try:
             entities = await self._graph.extract_entities_from_text(text)
         except (LLMError, Exception):
-            logger.warning("LLM entity extraction failed for %s — using GLiNER results only", source)
+            logger.warning("Entity extraction failed for %s — using GLiNER results only", source)
             entities = gliner_entities
 
         entities = self._merge_entity_results(gliner_entities, entities)

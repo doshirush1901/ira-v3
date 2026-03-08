@@ -682,6 +682,30 @@ def server(
     console.print("[yellow]Server not yet implemented — use individual CLI commands for now.[/yellow]")
 
 
+@app.command()
+def mcp(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Start the MCP (Model Context Protocol) server.
+
+    Exposes Ira's tools to Claude, Cursor, and any MCP-compatible client.
+    Configure in .cursor/mcp.json to use Ira as a Cursor tool.
+    """
+    _configure_logging(verbose)
+    console.print(
+        Panel(
+            "[bold]Starting Ira MCP Server[/bold]\n\n"
+            "Tools exposed: query_ira, search_knowledge, search_crm,\n"
+            "get_pipeline_summary, draft_email, ingest_document,\n"
+            "get_agent_list, ask_agent",
+            title="Ira MCP",
+            border_style="cyan",
+        )
+    )
+    from ira.interfaces.mcp_server import main as mcp_main
+    mcp_main()
+
+
 # ── Email sub-commands ────────────────────────────────────────────────────
 
 

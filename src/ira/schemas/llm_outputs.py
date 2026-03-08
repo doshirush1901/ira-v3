@@ -340,3 +340,23 @@ class ProcedureSteps(BaseModel):
 class MachineInfo(BaseModel):
     machine_model: str = ""
     configuration: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Guardrails ────────────────────────────────────────────────────────────
+
+
+class UnsupportedClaim(BaseModel):
+    claim: str = ""
+    reason: str = ""
+
+
+class FaithfulnessResult(BaseModel):
+    faithful: bool = True
+    score: float = 1.0
+    unsupported_claims: list[UnsupportedClaim] = Field(default_factory=list)
+
+
+class ConfidentialityResult(BaseModel):
+    safe: bool = True
+    leaked_categories: list[str] = Field(default_factory=list)
+    flagged_snippets: list[str] = Field(default_factory=list)

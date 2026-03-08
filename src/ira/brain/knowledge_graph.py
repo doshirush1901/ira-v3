@@ -478,7 +478,11 @@ class KnowledgeGraph:
 
     @observe()
     async def extract_entities_from_text(self, text: str) -> dict[str, Any]:
-        """Use OpenAI to pull structured entities out of free text.
+        """Extract entities from free text, preferring GraphRAG when available.
+
+        Tries the Neo4j GraphRAG schema-bound extractor first for better
+        entity resolution and consistency.  Falls back to the legacy
+        LLM prompt approach if GraphRAG is unavailable or fails.
 
         Returns a dict with keys ``companies``, ``people``, ``machines``,
         ``relationships`` — each a list of dicts.
@@ -491,6 +495,11 @@ class KnowledgeGraph:
         }
 
         try:
+            return await self._extract_entities_graphrag(text)
+        except Exception:
+            logger.debug("GraphRAG extraction unavailable, using legacy LLM", exc_info=True)
+
+        try:
             result = await self._llm.generate_structured(
                 _EXTRACTION_SYSTEM_PROMPT,
                 text[:12_000],
@@ -501,6 +510,121 @@ class KnowledgeGraph:
         except Exception:
             logger.exception("Entity extraction failed for source text (%d chars)", len(text))
             return empty
+
+    async def _extract_entities_graphrag(self, text: str) -> dict[str, Any]:
+        """Schema-bound entity extraction using neo4j-graphrag.
+
+        Uses Pydantic-defined schemas matching Ira's existing Neo4j node
+        labels and relationship types for consistent, deduplicated output
+        with built-in entity resolution.
+        """
+        from neo4j_graphrag.experimental.components.entity_relation_extractor import (
+            LLMEntityRelationExtractor,
+        )
+        from neo4j_graphrag.experimental.components.schema import (
+            SchemaBuilder,
+            SchemaEntity,
+            SchemaRelation,
+        )
+        from neo4j_graphrag.experimental.components.types import (
+            TextChunk,
+            TextChunks,
+        )
+        from neo4j_graphrag.llm import OpenAILLM
+
+        schema_builder = SchemaBuilder()
+        schema_builder.add_entity(
+            SchemaEntity(label="Company", properties=["name", "region", "industry", "website"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Person", properties=["name", "email", "role"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Machine", properties=["model", "category", "description"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Quote", properties=["quote_id", "value", "status"])
+        )
+
+        for rel_label, source, target in [
+            ("WORKS_AT", "Person", "Company"),
+            ("INTERESTED_IN", "Company", "Machine"),
+            ("QUOTED_TO", "Quote", "Company"),
+            ("QUOTES_MACHINE", "Quote", "Machine"),
+            ("SUPPLIES", "Company", "Company"),
+            ("MANUFACTURES", "Company", "Machine"),
+            ("COMPETES_WITH", "Company", "Company"),
+            ("CONTACTED_BY", "Company", "Person"),
+            ("REFERRED_BY", "Person", "Person"),
+        ]:
+            schema_builder.add_relation(
+                SchemaRelation(label=rel_label, source_type=source, target_type=target)
+            )
+
+        schema = schema_builder.build()
+
+        from ira.config import get_settings
+        cfg = get_settings()
+        openai_key = cfg.llm.openai_api_key.get_secret_value()
+        llm = OpenAILLM(
+            model_name=cfg.llm.openai_model,
+            api_key=openai_key,
+        )
+
+        extractor = LLMEntityRelationExtractor(llm=llm, schema=schema)
+        chunks = TextChunks(chunks=[TextChunk(text=text[:12_000])])
+        graph_result = await extractor.run(chunks=chunks)
+
+        companies: list[dict[str, Any]] = []
+        people: list[dict[str, Any]] = []
+        machines: list[dict[str, Any]] = []
+        relationships: list[dict[str, Any]] = []
+
+        for node in graph_result.nodes:
+            props = node.properties or {}
+            label = node.label
+            name = normalize_entity_name(props.get("name", ""))
+
+            if label == "Company":
+                companies.append({
+                    "name": name,
+                    "region": props.get("region", ""),
+                    "industry": props.get("industry", ""),
+                    "website": props.get("website", ""),
+                })
+            elif label == "Person":
+                people.append({
+                    "name": name,
+                    "email": props.get("email", ""),
+                    "company": "",
+                    "role": props.get("role", ""),
+                })
+            elif label == "Machine":
+                machines.append({
+                    "model": props.get("model", ""),
+                    "category": props.get("category", ""),
+                    "description": props.get("description", ""),
+                })
+
+        for rel in graph_result.relationships:
+            relationships.append({
+                "from_type": rel.start_node.label if rel.start_node else "",
+                "from_key": normalize_entity_name(
+                    (rel.start_node.properties or {}).get("name", "")
+                ) if rel.start_node else "",
+                "rel": rel.type,
+                "to_type": rel.end_node.label if rel.end_node else "",
+                "to_key": normalize_entity_name(
+                    (rel.end_node.properties or {}).get("name", "")
+                ) if rel.end_node else "",
+            })
+
+        return {
+            "companies": companies,
+            "people": people,
+            "machines": machines,
+            "relationships": relationships,
+        }
 
     # ── bulk enrichment ────────────────────────────────────────────────
 

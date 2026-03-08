@@ -59,6 +59,10 @@ chonkie = "^1.5.6"
 deepeval = "^3.8.9"
 guardrails-ai = "^0.9.1"
 gliner = "^0.2.25"
+instructor = ">=1.14"
+ragas = ">=0.2"
+neo4j-graphrag = ">=1.0"
+mcp = ">=1.0"
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"
