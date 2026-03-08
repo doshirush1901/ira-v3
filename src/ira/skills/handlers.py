@@ -580,9 +580,10 @@ async def lookup_machine_spec(**kwargs: Any) -> str:
         mk_path = Path("data/machine_knowledge.json")
         if mk_path.exists():
             data = _json.loads(mk_path.read_text())
-            for m in data if isinstance(data, list) else []:
-                if machine.upper() in (m.get("model", "")).upper():
-                    return _json.dumps(m, indent=2)
+            catalog = data.get("machine_catalog", {}) if isinstance(data, dict) else {}
+            for model_key, specs in catalog.items():
+                if machine.upper() in model_key.upper():
+                    return _json.dumps({"model": model_key, **specs}, indent=2)
     except (IraError, Exception):
         logger.debug("Machine knowledge lookup failed for %s", machine, exc_info=True)
 

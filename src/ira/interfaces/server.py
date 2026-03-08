@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from contextlib import asynccontextmanager
@@ -252,6 +255,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         SK.QUOTES: quotes,
         SK.PRICING_ENGINE: pricing_engine,
         SK.RETRIEVER: retriever,
+        SK.VENDOR_DB: vendor_db,
     }
 
     pantheon.inject_services(shared_services)
@@ -860,8 +864,6 @@ _ALLOWED_EXTENSIONS = frozenset({".txt", ".pdf", ".docx", ".xlsx", ".csv", ".jso
 @app.post("/api/ingest")
 async def ingest_file(file: UploadFile) -> dict[str, Any]:
     """Upload a document for ingestion through the DigestiveSystem."""
-    import os
-
     filename = os.path.basename(file.filename or "upload")
     if ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -887,6 +889,29 @@ async def ingest_file(file: UploadFile) -> dict[str, Any]:
         source=filename,
         source_category="document_upload",
     )
+
+    # Persist to data/imports/ so Alexandros's metadata index stays current
+    imports_dir = Path("data/imports")
+    try:
+        await asyncio.to_thread(imports_dir.mkdir, parents=True, exist_ok=True)
+        dest = imports_dir / filename
+        if dest.exists():
+            stem, ext_part = os.path.splitext(filename)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+            dest = imports_dir / f"{stem}_{ts}{ext_part}"
+        await asyncio.to_thread(dest.write_bytes, content)
+
+        async def _background_index() -> None:
+            try:
+                from ira.brain.imports_metadata_index import build_index
+                await build_index(use_llm=True, force=False)
+            except Exception:
+                logger.warning("Background build_index failed", exc_info=True)
+
+        asyncio.create_task(_background_index())
+    except Exception:
+        logger.warning("Failed to save %s to imports or trigger index", filename, exc_info=True)
+
     return {
         "filename": filename,
         "chunks_created": result.get("chunks_created", 0),
