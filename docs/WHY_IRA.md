@@ -14,6 +14,37 @@ But the genius in the box doesn't know *you*. It doesn't know your company. It d
 
 **Ira is different.** It isn't a genius in a box. It's a digital nervous system for your company — a "Pantheon" of 24 AI agents, all sitting around a virtual conference table, talking to each other, reading your emails, and trying to run the show.
 
+And here's the twist: **you talk to it from your code editor.**
+
+---
+
+## The IDE Is the New Command Center
+
+Here's a thing that happened while nobody was paying attention: code editors got really good at talking to AI. Cursor, specifically, can run shell commands, make HTTP requests, follow rules, and — this is the important part — use tools via something called MCP (Model Context Protocol).
+
+So instead of building Yet Another Dashboard or Yet Another Slack Bot, we did something different. We gave Cursor 30 tools that connect directly to Ira's brain. You open your IDE, and you're sitting at the controls of a 24-agent AI system with access to your CRM, your email, your knowledge base, your production schedules, and your company's entire memory.
+
+No browser tabs. No context switching. You just... talk.
+
+```
+You:     @Ira what's the status of the Acme Packaging deal?
+
+Ira:     [Prometheus consulted]
+         Acme Packaging (Erik Janssen) — NEGOTIATION stage
+         Quote: EUR 180,000 for PF1-C thermoforming machine
+         Last contact: Feb 3 — Lars mentioned facility expansion
+         Risk: 45 days since last response from Erik
+         Suggested action: Follow up referencing the expansion plans
+
+You:     @Ira draft that follow-up
+
+Ira:     [Calliope consulted]
+         Subject: PF1 for Hamburg — quick check-in
+         ...
+```
+
+Every agent that contributed is named. Every fact traces to a real email or document. If Ira isn't sure, it says so.
+
 ---
 
 ## Use Case 1: Stop Being a Human Email Router
@@ -31,23 +62,62 @@ Connect Ira to your Gmail. When an email comes in, Ira's "Digestive System" chew
 3. **Plutus** (finance) checks the pricing engine for margin impact.
 4. **Calliope** (writer) drafts a reply — perfectly formatted, referencing past conversations.
 
-You type one command:
+You open Cursor and type:
 
-```bash
-ira email draft --to "client@example.com" --context "Give him the 5% discount but hold firm on the delivery date."
+```
+@Ira draft an email to client@example.com — give him the 5% discount but hold firm on the delivery date
 ```
 
 Calliope writes the email. You review and hit send. You've gone from being the router to being the editor-in-chief.
 
-## Use Case 2: Board Meeting in a Box
+## Use Case 2: The Agent Loop (Your AI Does Homework)
+
+Here's where it gets interesting. Simple questions get simple answers. But what about complex requests? "Prepare a quarterly business review covering sales, production, and finance." That's not a question — that's a *project*.
+
+Old-school AI would try to answer that in one shot and give you a hallucinated mess. Ira doesn't do that. It runs an **Agent Loop** — a four-phase cycle that mimics how a competent employee actually works:
+
+**Plan.** Athena (the orchestrator) breaks your request into phases. "Phase 1: Pull pipeline data from Prometheus. Phase 2: Get production status from Hephaestus. Phase 3: Financial summary from Plutus. Phase 4: Compile everything."
+
+**Execute.** Each phase runs through the assigned specialist agents, who use their tools — searching the CRM, querying the knowledge base, pulling email threads.
+
+**Observe.** After each phase, Athena reviews the results. Did we get what we needed? Do we need to re-plan? Should we ask the user a clarifying question? This is the key difference from a linear pipeline — the system *thinks about its own output*.
+
+**Compile.** Calliope (the writer) takes all the raw findings and synthesizes them into a professional report with an executive summary, data tables, and recommendations.
+
+In Cursor, it looks like this:
+
+```
+You:     @Ira prepare a quarterly business review for Q1
+
+Ira:     Planning... 4 phases identified:
+         1. Sales Pipeline Analysis (Prometheus, Tyche)
+         2. Production & Delivery Status (Hephaestus, Atlas)
+         3. Financial Summary (Plutus)
+         4. Compile Report (Calliope)
+
+         Shall I proceed?
+
+You:     Go ahead
+
+Ira:     Phase 1 complete — 12 active deals, 3 at risk
+         Phase 2 complete — 2 machines in production, 1 delayed
+         Phase 3 complete — margins healthy, one overdue payment
+         Compiling...
+
+         [Full Markdown report with executive summary, tables, and recommendations]
+```
+
+You just got a multi-department business review without scheduling a single meeting.
+
+## Use Case 3: Board Meeting in a Box
 
 Complex business problems usually require getting five department heads into a room. It takes three weeks to align their calendars. They argue for an hour. You leave with a headache and no decision.
 
 Ira has a feature literally called `/board`.
 
-You open Telegram and type:
-
-> `/board "Should we expand sales into the European market next quarter?"`
+```
+@Ira run a board meeting: "Should we expand sales into the European market next quarter?"
+```
 
 Inside Ira's brain:
 
@@ -57,19 +127,9 @@ Inside Ira's brain:
 4. **Plutus** (Finance) calculates shipping costs.
 5. They debate — agents pass context back and forth.
 
-Two minutes later, your phone buzzes. Ira hands you the "Board Meeting Minutes" — a synthesized summary with pros, cons, and action items.
+Two minutes later, Ira hands you the "Board Meeting Minutes" — a synthesized summary with pros, cons, and action items.
 
 You just held a C-suite strategy meeting while ordering a flat white.
-
-## Use Case 3: Drip Campaigns That Actually Know the Customer
-
-Marketing automation usually means blasting 1,000 people with the same "Hey [First Name], just checking in!" garbage. It's the digital equivalent of a telemarketer reading a script.
-
-Ira uses **Hermes** (Marketing) to run campaigns differently.
-
-When you tell Hermes to start a drip campaign for a specific client, Hermes doesn't pull a template. Hermes looks at the client's Lead Score in the CRM. He checks the "Relationship Warmth" — a metric Ira tracks to gauge whether the client likes you or is annoyed by you.
-
-Hermes writes a custom 3-step email sequence *specifically for that human*, based on their company's needs, and schedules it. If the client replies to step 1, the "Respiratory System" catches the reply, stops the automated sequence, and alerts you.
 
 ## Use Case 4: The Dream Cycle (Yes, the AI Sleeps)
 
@@ -87,9 +147,11 @@ At night, when no one is querying the system, Ira runs a "Dream Cycle":
 
 We are moving from the era of **"AI as a Tool"** to **"AI as an Employee,"** and eventually to **"AI as Infrastructure."**
 
-Ira v3 is a glimpse into that future. It's not perfect yet — it requires you to feed it all your company's documents (via Alexandros, the Librarian agent) before it actually knows anything useful.
+Ira v3 is a working example of that third stage. It's not a chatbot you query. It's not an assistant that waits for instructions. It's a nervous system wired into your company's data, your email, your CRM, your knowledge base, and your production schedules — accessible from the place where you already spend your day: your code editor.
 
-But once it's fed? You aren't just chatting with a bot. You are sitting at the center of a digital nervous system, orchestrating a pantheon of tireless, hyper-focused experts who never need to align their Google Calendars.
+The 30 MCP tools mean Cursor doesn't just *talk* to Ira — it can plan multi-phase tasks, execute them phase by phase, observe the results, re-plan when things change, and compile professional deliverables. It's the difference between asking someone a question and giving them a project.
+
+It's not perfect yet — it requires you to feed it all your company's documents (via Alexandros, the Librarian agent) before it actually knows anything useful. But once it's fed? You aren't just chatting with a bot. You are sitting at the center of a digital nervous system, orchestrating a pantheon of tireless, hyper-focused experts who never need to align their Google Calendars.
 
 ---
 

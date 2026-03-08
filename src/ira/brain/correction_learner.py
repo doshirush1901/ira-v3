@@ -143,6 +143,11 @@ class CorrectionLearner:
         key = name.strip().lower()
         return any(item.lower() == key for item in items)
 
+    async def on_knowledge_corrected(self, event: object) -> None:
+        """DataEventBus handler — reload learned corrections from disk."""
+        logger.info("CorrectionLearner: reloading after KNOWLEDGE_CORRECTED event")
+        self._state = await self._load()
+
     async def _load(self) -> dict:
         if self._path.exists():
             try:

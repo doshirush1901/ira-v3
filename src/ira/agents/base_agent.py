@@ -202,6 +202,17 @@ class BaseAgent(ABC):
             handler=self._tool_scrape_url,
         ))
 
+        self.register_tool(AgentTool(
+            name="check_known_entities",
+            description=(
+                "Check if a company or contact is a known entity (existing customer, "
+                "vendor, sales agent, defunct company, or sister company). Use this "
+                "BEFORE classifying any contact as a lead to avoid misclassification."
+            ),
+            parameters={"query": "Company name, contact name, or email to look up"},
+            handler=self._tool_check_known_entities,
+        ))
+
         if self._services.get(SK.EMAIL_PROCESSOR):
             self.register_tool(AgentTool(
                 name="search_emails",
@@ -238,7 +249,9 @@ class BaseAgent(ABC):
             return "No results found."
         lines = []
         for r in results:
-            lines.append(f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}")
+            chunk_id = r.get("id", "?")
+            source = r.get("source", "?")
+            lines.append(f"- [Source: {source}, Chunk: {chunk_id}] {r.get('content', '')[:400]}")
         return "\n".join(lines)
 
     async def _tool_recall_memory(self, query: str, user_id: str = "global") -> str:
@@ -853,7 +866,9 @@ class BaseAgent(ABC):
             return "(No relevant context found)"
         lines = []
         for r in kb_results:
-            lines.append(f"- [{r.get('source', 'unknown')}] {r.get('content', '')[:500]}")
+            chunk_id = r.get("id", "?")
+            source = r.get("source", "unknown")
+            lines.append(f"- [Source: {source}, Chunk: {chunk_id}] {r.get('content', '')[:500]}")
         return "\n".join(lines)
 
     def _parse_json_response(self, raw: str) -> dict[str, Any] | list[Any]:

@@ -41,6 +41,31 @@ STRATEGY:
 10. Flag stale leads and at-risk deals proactively.
 11. The deals table may be sparse — the REAL lead intelligence is in the contacts table, knowledge base, AND email threads.
 
+LEAD QUALIFICATION CHECKLIST — Before including ANY contact in a lead list:
+1. EXISTING CUSTOMER CHECK: Search for past orders, deliveries, payments, or
+   machines in production. If found → CUSTOMER, not a lead. Route spare parts
+   requests to Atlas/Asclepius. Known existing clients include: Arrdev, Pinnacle,
+   MP3/ILPA, Nagoya Jushi, KTX Japan, NCC Russia, DutchTides, Dezet, JoPlast,
+   Plastisart, Donite, Anatomic SITT, IAC Group, Thermic Energy, Jaquar.
+2. VENDOR CHECK: Ask Hera or search vendor DB. If they supply services/parts
+   TO Machinecraft → VENDOR, not a lead. Known vendors: iM Technologies (CAD
+   design), apra-plast.
+3. AGENT CHECK: Check if the contact is a Machinecraft sales agent/representative.
+   Known agents: Mikhail Zraychenko (mvzet61@mail.ru, Russia/CIS), Gerwin Pelle
+   (gerwinpelle@cncteam.nl, Netherlands/Benelux). Agents send inquiries ON BEHALF
+   of end customers. If agent → identify the END CUSTOMER, not the agent.
+4. QUOTE VERIFICATION: Only classify as PROPOSAL if there is evidence a quote
+   was actually sent — PDF attachment, explicit pricing in email body, or quote
+   number reference. Mere email discussion does NOT equal proposal sent.
+5. COMPANY VIABILITY: For leads older than 1 year, use web_search to verify the
+   company still exists before including in active lead lists.
+6. RECENCY: Leads with no interaction in 2+ years → flag as DORMANT, not active.
+7. SISTER COMPANY CHECK: TVS Motor leads belong to Formpack (sister company),
+   not Machinecraft. Do not include Formpack leads in Machinecraft pipeline.
+8. USE check_known_entities TOOL FIRST: Before classifying any contact, call the
+   check_known_entities tool to see if they are already categorised as a customer,
+   agent, vendor, or defunct company.
+
 DEAL CREATION — AUTOMATIC AND MANUAL SOURCES:
 Deals enter the CRM from three paths:
 1. Quotebuilder auto-creates a PROPOSAL-stage deal whenever it generates a

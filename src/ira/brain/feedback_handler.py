@@ -66,11 +66,13 @@ class FeedbackHandler:
         correction_store: Any | None = None,
         mem0_client: Any | None = None,
         procedural_memory: Any | None = None,
+        data_event_bus: Any | None = None,
     ) -> None:
         self._learning_hub = learning_hub
         self._correction_store = correction_store
         self._mem0_client = mem0_client
         self._procedural_memory = procedural_memory
+        self._event_bus = data_event_bus
         self._llm = get_llm_client()
         self._agent_scores: dict[str, dict[str, int]] = {}
 
@@ -156,6 +158,27 @@ class FeedbackHandler:
                         source=f"feedback:{user_id}",
                     )
                     result["correction_id"] = correction_id
+
+                    if self._event_bus is not None:
+                        try:
+                            from ira.systems.data_event_bus import (
+                                DataEvent,
+                                EventType,
+                                SourceStore,
+                            )
+                            await self._event_bus.emit(DataEvent(
+                                event_type=EventType.KNOWLEDGE_CORRECTED,
+                                entity_type="correction",
+                                entity_id=str(correction_id),
+                                payload={
+                                    "entity": previous_query[:200],
+                                    "new_value": correction_text,
+                                    "source": f"feedback:{user_id}",
+                                },
+                                source_store=SourceStore.QDRANT,
+                            ))
+                        except Exception:
+                            logger.warning("Failed to emit correction event", exc_info=True)
                 except (DatabaseError, Exception):
                     logger.exception("Correction store failed")
 

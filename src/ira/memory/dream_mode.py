@@ -66,6 +66,7 @@ class DreamMode:
         retriever: Any | None = None,
         crm: Any | None = None,
         procedural_memory: Any | None = None,
+        data_event_bus: Any | None = None,
         db_path: str = "conversations.db",
         dream_log_path: str | Path | None = None,
     ) -> None:
@@ -76,6 +77,7 @@ class DreamMode:
         self._retriever = retriever
         self._crm = crm
         self._procedural = procedural_memory
+        self._event_bus = data_event_bus
         self._db_path = db_path
         self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
@@ -645,6 +647,7 @@ class DreamMode:
                 qdrant_manager=qdrant,
                 embedding_service=embedding,
                 mem0_client=mem0_client,
+                data_event_bus=self._event_bus,
             )
             stats = await trainer.run_training()
             stage_log["stages"]["0_5_sleep_training"] = {"status": "ok", **stats}

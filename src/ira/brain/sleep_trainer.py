@@ -54,11 +54,13 @@ class SleepTrainer:
         qdrant_manager: QdrantManager,
         embedding_service: EmbeddingService,
         mem0_client: Any | None = None,
+        data_event_bus: Any | None = None,
     ) -> None:
         self._store = correction_store
         self._qdrant = qdrant_manager
         self._embeddings = embedding_service
         self._mem0 = mem0_client
+        self._event_bus = data_event_bus
         self._llm = get_llm_client()
 
     @observe()
@@ -80,6 +82,8 @@ class SleepTrainer:
 
         for c in corrections:
             await self._store.mark_processed(c["id"])
+
+        await self._emit_correction_events(corrections)
 
         stats["status"] = "completed"
         logger.info("SleepTrainer: cycle complete — %s", json.dumps(stats, default=str))
@@ -293,4 +297,31 @@ class SleepTrainer:
         except (IraError, Exception):
             logger.exception("Phase 5 (persist learned) failed")
             stats["phases"]["5_persist_learned"] = {"status": "error"}
+
+    # ── Event emission ────────────────────────────────────────────────────
+
+    async def _emit_correction_events(
+        self, corrections: list[dict[str, Any]]
+    ) -> None:
+        """Notify the DataEventBus that knowledge has been corrected."""
+        if self._event_bus is None:
+            return
+        try:
+            from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
+
+            for c in corrections:
+                await self._event_bus.emit(DataEvent(
+                    event_type=EventType.KNOWLEDGE_CORRECTED,
+                    entity_type="correction",
+                    entity_id=str(c["id"]),
+                    payload={
+                        "entity": c["entity"],
+                        "new_value": c["new_value"],
+                        "category": c["category"],
+                    },
+                    source_store=SourceStore.QDRANT,
+                ))
+            logger.info("Emitted %d KNOWLEDGE_CORRECTED events", len(corrections))
+        except (IraError, Exception):
+            logger.warning("Failed to emit correction events", exc_info=True)
 

@@ -21,7 +21,7 @@
 
 | Guide | Description |
 |:------|:------------|
-| **[Why Ira?](docs/WHY_IRA.md)** | What Ira does, why it exists, and real use cases — email intelligence, board meetings, drip campaigns, dream cycles |
+| **[Why Ira?](docs/WHY_IRA.md)** | What Ira does, why it exists, and real use cases — email intelligence, agent loop, board meetings, dream cycles |
 | **[Getting Started](docs/GETTING_STARTED.md)** | Step-by-step setup: prerequisites, installation, configuration, and first interactions |
 
 ## Table of Contents
@@ -29,6 +29,7 @@
 - [Wait, What Is This?](#wait-what-is-this)
 - [The 5-Minute Setup (Cursor + Gmail = Email Intelligence)](#the-5-minute-setup-cursor--gmail--email-intelligence)
 - [How It Actually Works](#how-it-actually-works)
+- [The Agent Loop](#the-agent-loop)
 - [The Pantheon](#the-pantheon)
 - [The Brain](#the-brain)
 - [Memory Architecture](#memory-architecture)
@@ -69,19 +70,19 @@ The best part? **You can set this up in Cursor in about 5 minutes and turn your 
 
 ## The 5-Minute Setup (Cursor + Gmail = Email Intelligence)
 
-Here's the thing nobody tells you about AI coding assistants: they can do a lot more than write code. Cursor has a shell, it can make HTTP requests, and it can follow rules. So we gave it rules.
+Here's the thing nobody tells you about AI coding assistants: they can do a lot more than write code. Cursor has a shell, it can make HTTP requests, it can follow rules, and — critically — it supports MCP (Model Context Protocol) tools. So we gave it 30 of them.
 
 When you open this repo in Cursor, three things happen automatically:
 
-1. **Cursor learns who Ira is.** The `.cursor/rules/` directory contains rules that teach Cursor how to start Ira, query it, search emails, ingest documents, and shut it down. You don't configure anything. It just works.
+1. **Cursor learns who Ira is.** The `.cursor/rules/` directory contains rules that teach Cursor how to start Ira, query it, search emails, ingest documents, and shut it down. The `.cursor/agents/ira.md` file registers Ira as a Cursor subagent with 30 MCP tools. You don't configure anything. It just works.
 
-2. **You get natural language access to your entire email history.** Say "wake up Ira" in Cursor chat. Then ask things like:
+2. **You get natural language access to your entire business.** Say "wake up Ira" in Cursor chat. Then ask things like:
    - *"@Ira find all emails from Erik at Acme Packaging"*
    - *"@Ira what's the latest on the PF1 quote for GlobalPack?"*
    - *"@Ira draft a follow-up to the vendor who hasn't replied about the servo motors"*
-   - *"@Ira what did we discuss with EuroPack last quarter?"*
+   - *"@Ira prepare a quarterly business review covering sales, production, and finance"*
 
-3. **Every answer is grounded in real data.** Ira doesn't hallucinate your email history. It searches Gmail directly, pulls the actual threads, cross-references them with your knowledge base and CRM, and gives you an answer with receipts.
+3. **Every answer is grounded in real data.** Ira doesn't hallucinate your email history. It searches Gmail directly, pulls the actual threads, cross-references them with your knowledge base and CRM, and gives you an answer with receipts. For complex requests, the Agent Loop breaks work into phases, executes them through specialist agents, and compiles professional deliverables.
 
 ### Quick Start
 
@@ -158,6 +159,41 @@ Every message — whether it comes from the CLI, Telegram, or the REST API — f
 ```
 
 Routing is a three-tier cascade: a fast **deterministic router** catches obvious intents (keywords → agent), **procedural memory** matches learned patterns, and if neither fires, **Athena** (the orchestrator agent) uses LLM reasoning to pick the right specialist. A **truth hints** cache can short-circuit the whole pipeline for common factual queries.
+
+## The Agent Loop
+
+The 11-stage pipeline handles single-turn questions. But what about complex, multi-step tasks — "prepare a quarterly business review," "analyze the European pipeline and draft a proposal," "investigate quality issues and recommend fixes"?
+
+For these, Ira uses an **Agent Loop** — an iterative Plan-Execute-Observe-Compile cycle that wraps the pipeline:
+
+```
+  Complex request
+       │
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│                        AGENT LOOP                            │
+│                                                              │
+│   1. PLAN      → Athena breaks request into phases,          │
+│                  assigns specialist agents to each            │
+│                                                              │
+│   2. EXECUTE   → Run one phase at a time through agents      │
+│                  (each agent uses the 11-stage pipeline)      │
+│                                                              │
+│   3. OBSERVE   → Athena evaluates results:                   │
+│                  continue | replan | clarify | complete       │
+│                                                              │
+│   4. COMPILE   → Calliope synthesizes all findings into      │
+│                  a professional report                        │
+│                                                              │
+│   Loop back to EXECUTE (or PLAN if replanning)               │
+└──────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  Professional deliverable with executive summary,
+  data tables, and recommendations
+```
+
+The observe step is the key differentiator: after each phase, Athena reviews results and can re-plan if new information changes the approach, request clarification from the user, or mark the task complete early. This is exposed via three MCP tools (`plan_task`, `execute_phase`, `generate_report`) and via SSE streaming at `/api/task/stream`.
 
 ## The Pantheon
 
@@ -331,6 +367,7 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 | Integrations | Google Docs, Gmail |
 | API Framework | FastAPI |
 | CLI | Typer + Rich |
+| MCP Server | FastMCP (Model Context Protocol — 30 tools for Cursor/Claude) |
 | Messaging | python-telegram-bot |
 | Reranking | Voyage Rerank (primary) + FlashRank (local fallback) |
 | Migrations | Alembic |
@@ -340,27 +377,32 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 
 ```
 ira-v3/
+├── .cursor/
+│   ├── agents/ira.md        # Cursor subagent definition (30 MCP tools)
+│   ├── rules/               # Cursor rules for Ira API, agent loop, conventions
+│   └── skills/              # Cursor skills: research, email, reports, sales pipeline
 ├── src/ira/
 │   ├── agents/              # 24 specialist agents + base_agent.py (~870 lines)
 │   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing,
 │   │                        #   entity extraction (GLiNER + LLM), guardrails (30 modules)
 │   ├── memory/              # 9 memory subsystems + dream mode + goal sweep
 │   ├── systems/             # Body systems + extended systems (20 modules)
-│   ├── interfaces/          # CLI, FastAPI server, Telegram bot, email processor,
-│   │                        #   dashboard, cursor feedback
+│   ├── interfaces/          # CLI, FastAPI server, MCP server, Telegram bot,
+│   │                        #   email processor, dashboard, cursor feedback
 │   ├── services/            # LLMClient (OpenAI + Anthropic SDK with Langfuse tracing)
 │   ├── schemas/             # Pydantic models for structured LLM outputs
 │   ├── skills/              # Skill matrix + tool handlers
 │   ├── middleware/          # Auth + request context
 │   ├── data/                # CRM models, quote models
 │   ├── pipeline.py          # 11-stage request pipeline
+│   ├── pipeline_loop.py     # Agent Loop: Plan-Execute-Observe-Compile orchestration
 │   ├── pantheon.py          # Agent orchestrator
 │   ├── config.py            # Pydantic settings (all config from env)
 │   ├── context.py           # Unified context manager
 │   └── message_bus.py       # Inter-agent messaging
-├── prompts/                 # LLM prompt templates (68 files)
+├── prompts/                 # LLM prompt templates (70 files)
 ├── scripts/                 # Operational scripts + training (shakti_train.sh)
-├── tests/                   # Test suite (23 files, ~10,600 lines)
+├── tests/                   # Test suite (24 files, ~11,200 lines)
 ├── alembic/                 # Database migrations
 ├── docs/                    # Architecture and audit documentation
 ├── SOUL.md                  # Ira's identity, voice, and behavioral boundaries
@@ -431,6 +473,11 @@ poetry run ira ask "What's the lead time for a PF1 machine?"
 poetry run uvicorn ira.interfaces.server:app --reload
 ```
 
+**MCP Server (for Cursor / Claude):**
+```bash
+poetry run ira mcp
+```
+
 **Telegram Bot:**
 ```bash
 python -m ira.interfaces.telegram_bot
@@ -453,6 +500,9 @@ ira pipeline       # Show pipeline stage timings
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|
 | POST | `/api/query` | Send a message to Ira |
+| POST | `/api/query/stream` | Send a message with SSE progress streaming |
+| POST | `/api/task/stream` | Start a complex multi-phase task (Agent Loop with SSE) |
+| POST | `/api/task/clarify` | Resume a paused task with user clarification |
 | POST | `/api/feedback` | Submit a correction |
 | GET | `/api/health` | Quick health check |
 | GET | `/api/deep-health` | Detailed service-by-service health |
@@ -465,6 +515,8 @@ ira pipeline       # Show pipeline stage timings
 | POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
 | GET | `/api/email/thread/{id}` | Fetch a full email thread by Gmail thread ID |
 | POST | `/api/email/draft` | Draft an email via Calliope |
+| POST | `/api/email/rescan` | Deep historical email scan with SSE progress |
+| GET | `/api/email/rescan` | Check status of running/last email rescan |
 | GET | `/dashboard/` | Web dashboard (browser) |
 
 ## Running Tests

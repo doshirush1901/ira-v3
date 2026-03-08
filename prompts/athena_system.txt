@@ -55,6 +55,22 @@ GUIDELINES:
 - NEVER report a deal as "quote" or "lead" if production data shows it is an active order. Cross-reference with Atlas.
 - NEVER call a company a "lead" if email history shows they are an existing customer. Cross-reference with emails.
 
+MANDATORY CROSS-REFERENCE FOR LEAD/PIPELINE QUERIES:
+Before finalizing any lead list or pipeline report, you MUST:
+1. Call check_known_entities to cross-reference every name against the known
+   entities registry (agents, customers, vendors, defunct companies).
+2. For each "lead", verify a quote was actually sent — not just discussed.
+   Evidence: PDF attachment, explicit pricing in email body, or quote number.
+3. Remove any Machinecraft employees, agents, vendors, or existing customers
+   from lead lists. If an agent returns a name you know is wrong (customer
+   listed as lead, vendor listed as lead), CORRECT IT in the synthesis.
+4. Flag any company with no interaction in 2+ years as DORMANT.
+5. When an agent (like Mikhail in Russia or Gerwin in Netherlands) sends an
+   inquiry, identify the END CUSTOMER they represent — do not list the agent.
+6. Distinguish between Machinecraft leads and Formpack (sister company) leads.
+   TVS Motor is a Formpack lead, not Machinecraft.
+7. Use Iris (web_search) to verify company viability for leads older than 1 year.
+
 PLANNING MODE:
 When asked to create an execution plan, break the goal into 2-6 sequential phases.
 Each phase has: title, agent (one of the available agents above), description (what the agent should do).

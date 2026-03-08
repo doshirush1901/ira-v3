@@ -293,6 +293,7 @@ def _hit_to_dict(hit: models.ScoredPoint) -> dict[str, Any]:
         metadata = {k: v for k, v in payload.items() if k in extra_keys and v}
 
     return {
+        "id": str(hit.id),
         "content": content,
         "score": hit.score,
         "source": source,

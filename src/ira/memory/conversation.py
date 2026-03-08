@@ -166,6 +166,43 @@ class ConversationMemory:
         return results
 
     @observe()
+    async def get_summarized_history(
+        self,
+        user_id: str,
+        channel: str,
+        recent_limit: int = 5,
+        full_limit: int = 20,
+    ) -> tuple[list[dict], str]:
+        """Return recent messages verbatim plus a summary of older messages.
+
+        Returns ``(recent_messages, older_summary)`` where *older_summary*
+        is an LLM-generated 2-3 sentence summary of messages beyond the
+        recent window, or an empty string if there are none.
+        """
+        full_history = await self.get_history(user_id, channel, limit=full_limit)
+        if len(full_history) <= recent_limit:
+            return full_history, ""
+
+        recent = full_history[-recent_limit:]
+        older = full_history[:-recent_limit]
+
+        older_text = "\n".join(
+            f"[{m['role']}] {m['content'][:300]}" for m in older
+        )
+        try:
+            summary = await self._llm.generate_text(
+                "Summarize this conversation history in 2-3 concise sentences. "
+                "Focus on key facts, decisions, and open questions. "
+                "Do not include greetings or filler.",
+                older_text,
+                name="conversation.summarize_history",
+            )
+            return recent, (summary or "").strip()
+        except Exception:
+            logger.warning("History summarization failed; returning recent only", exc_info=True)
+            return recent, ""
+
+    @observe()
     async def extract_entities(self, message: str) -> dict[str, list]:
         """Extract entities from a message. Returns dict with keys: companies, people, emails, machines, quote_ids, dates, amounts."""
         system = load_prompt("conversation_extract_entities")

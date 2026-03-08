@@ -9,9 +9,18 @@ VALID CRM CATEGORIES (include in CRM):
 - LEAD_NO_INTERACTIONS: Appears in a contact list, exhibition visitor list, or database but there is NO evidence of any two-way communication or engagement. Cold contact only.
 
 REJECT CATEGORIES (do NOT include in CRM):
-- VENDOR: Supplies materials, components, or services TO Machinecraft.
-- PARTNER: Channel partner, reseller, agent, or collaborator (e.g. FRIMO, sales agents).
-- OWN_COMPANY: Machinecraft employee or internal contact (@machinecraft.org, @machinecraft.in).
+- VENDOR: Supplies materials, components, or services TO Machinecraft. Examples:
+  iM Technologies (CAD design services), apra-plast (product management).
+  Key signals: invoices FROM them to Machinecraft, they appear in vendor payment
+  records, they provide services/parts rather than buying machines.
+- PARTNER: Channel partner, reseller, agent, or collaborator. Examples: FRIMO
+  (co-exhibitor), Mikhail Zraychenko (Russia/CIS sales agent, mvzet61@mail.ru),
+  Gerwin Pelle (Netherlands agent, gerwinpelle@cncteam.nl).
+  Key signals: they send inquiries "on behalf of" someone else, they represent
+  Machinecraft in a region, they are cc'd on customer emails but are not the buyer,
+  they negotiate pricing for a third party, they discuss commission or agency terms.
+- OWN_COMPANY: Machinecraft employee or internal contact (@machinecraft.org,
+  @machinecraft.in). Also includes Formpack (@formpack.in, sister company).
 - OTHER: Recruiters, spam, personal contacts, unrelated to Machinecraft business.
 
 CLASSIFICATION SIGNALS:

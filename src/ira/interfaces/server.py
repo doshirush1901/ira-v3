@@ -243,6 +243,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         embedding=embedding,
     )
 
+    from ira.brain.correction_learner import CorrectionLearner
+    from ira.systems.data_event_bus import EventType
+
+    correction_learner = CorrectionLearner()
+    data_event_bus.subscribe(EventType.KNOWLEDGE_CORRECTED, correction_learner.on_knowledge_corrected)
+
     _services[SK.DATA_EVENT_BUS] = data_event_bus
     _services[SK.CIRCULATORY] = circulatory
 
@@ -345,6 +351,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         musculoskeletal=musculoskeletal,
         retriever=retriever,
         crm=crm,
+        data_event_bus=data_event_bus,
     )
     await _safe_init("dream_mode", dream_mode.initialize())
 
@@ -379,6 +386,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         correction_store=correction_store,
         mem0_client=mem0_client,
         procedural_memory=procedural_memory,
+        data_event_bus=data_event_bus,
     )
     await feedback_handler.load_scores()
 

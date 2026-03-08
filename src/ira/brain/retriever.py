@@ -386,6 +386,7 @@ class UnifiedRetriever:
             original = results[original_indices[idx]]
             output.append(
                 {
+                    "id": original.get("id", ""),
                     "content": original.get("content", ""),
                     "score": item.get("relevance_score", 0.0),
                     "source": original.get("source", ""),
@@ -423,6 +424,7 @@ class UnifiedRetriever:
             meta: dict[str, Any] = item.get("meta") or item.get("metadata") or {}
             output.append(
                 {
+                    "id": meta.get("id", ""),
                     "content": item.get("text", ""),
                     "score": item.get("score", 0.0),
                     "source": meta.get("source", ""),

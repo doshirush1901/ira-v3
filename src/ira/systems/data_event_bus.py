@@ -31,6 +31,7 @@ class EventType(str, Enum):
     ENTITY_ADDED = "entity_added"
     RELATIONSHIP_DISCOVERED = "relationship_discovered"
     CHUNK_UPSERTED = "chunk_upserted"
+    KNOWLEDGE_CORRECTED = "knowledge_corrected"
 
 
 class SourceStore(str, Enum):

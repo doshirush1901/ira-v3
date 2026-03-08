@@ -68,6 +68,8 @@ class RequestPipeline:
         realtime_observer: Any | None = None,
         power_level_tracker: Any | None = None,
         redis_cache: Any | None = None,
+        episodic_memory: Any | None = None,
+        long_term_memory: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -86,6 +88,8 @@ class RequestPipeline:
         self._realtime_observer = realtime_observer
         self._power_level_tracker = power_level_tracker
         self._redis = redis_cache
+        self._episodic = episodic_memory
+        self._long_term = long_term_memory
 
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
@@ -270,6 +274,15 @@ class RequestPipeline:
             except (DatabaseError, Exception):
                 logger.exception("Coreference resolution failed")
 
+        # Summarize older history for context enrichment (keep recent 5 verbatim)
+        _history_summary = ""
+        try:
+            _recent_msgs, _history_summary = await self._conversation.get_summarized_history(
+                contact_email, channel, recent_limit=5, full_limit=20,
+            )
+        except (DatabaseError, Exception):
+            logger.debug("Summarized history not available", exc_info=True)
+
         cross_channel_history: list[dict[str, Any]] = []
         if self._unified_ctx is not None:
             try:
@@ -288,10 +301,11 @@ class RequestPipeline:
                 logger.exception("GoalManager lookup failed")
 
         logger.info(
-            "REMEMBER | history=%d msgs | cross_channel=%d | goal=%s",
+            "REMEMBER | history=%d msgs | cross_channel=%d | goal=%s | summary=%s",
             len(history),
             len(cross_channel_history),
             active_goal.goal_type.value if active_goal else "none",
+            "yes" if _history_summary else "no",
         )
 
         # ── 2.5 FAST PATH ────────────────────────────────────────────
@@ -483,6 +497,22 @@ class RequestPipeline:
                     enrichment_parts.append(f"Sales coaching:\n{guidance[:500]}")
         except (ToolExecutionError, Exception):
             logger.debug("Chiron sales guidance not available", exc_info=True)
+
+        if _history_summary:
+            enrichment_parts.append(f"Earlier conversation summary:\n{_history_summary}")
+
+        if self._episodic is not None:
+            try:
+                episodes = await self._episodic.surface_relevant_episodes(
+                    resolved_input, contact_email,
+                )
+                if episodes:
+                    ep_text = "\n".join(
+                        f"- {e.get('narrative', '')[:200]}" for e in episodes[:3]
+                    )
+                    enrichment_parts.append(f"Relevant past interactions:\n{ep_text}")
+            except (IraError, Exception):
+                logger.debug("Episodic memory enrichment not available", exc_info=True)
 
         # ── 6. EXECUTE ───────────────────────────────────────────────
         # Pass perception and enrichment for prompt context, plus live
