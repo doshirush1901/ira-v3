@@ -2,8 +2,8 @@
 
 Gathers real-time information from the web, news APIs, and external
 sources to enrich internal knowledge.
-Now operates via the ReAct loop with web-search, news-fetch, and
-internal-knowledge tools.
+Now operates via the ReAct loop with web-search, news-fetch, scrape,
+and internal-knowledge tools.
 """
 
 from __future__ import annotations
@@ -39,13 +39,6 @@ class Iris(BaseAgent):
         super()._register_default_tools()
 
         self.register_tool(AgentTool(
-            name="web_search",
-            description="Search the web for real-time information using the best available search provider.",
-            parameters={"query": "Web search query"},
-            handler=self._tool_web_search,
-        ))
-
-        self.register_tool(AgentTool(
             name="fetch_news",
             description="Fetch recent news articles related to a topic via the NewsData API.",
             parameters={"query": "News search query"},
@@ -61,15 +54,6 @@ class Iris(BaseAgent):
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
-
-    async def _tool_web_search(self, query: str) -> str:
-        results = await self.web_search(query, max_results=5)
-        if not results:
-            return "No web search results found."
-        lines = []
-        for r in results:
-            lines.append(f"- [{r['title']}]({r['url']}): {r['snippet'][:200]}")
-        return "\n".join(lines)
 
     async def _tool_fetch_news(self, query: str) -> str:
         articles = await self._fetch_news(query)

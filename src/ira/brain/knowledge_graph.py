@@ -51,9 +51,12 @@ class KnowledgeGraph:
         event_bus: Any | None = None,
     ) -> None:
         cfg = config or get_settings().neo4j
+        app_cfg = get_settings().app
         self._driver = AsyncGraphDatabase.driver(
             cfg.uri,
             auth=(cfg.user, cfg.password.get_secret_value()),
+            max_connection_pool_size=app_cfg.neo4j_max_pool_size,
+            connection_acquisition_timeout=60.0,
         )
         self._llm = get_llm_client()
         self._event_bus = event_bus

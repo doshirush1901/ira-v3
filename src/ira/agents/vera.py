@@ -2,12 +2,13 @@
 
 Verifies claims and statements against the knowledge base,
 flagging inaccuracies and providing corrections.
-Now operates via the ReAct loop with knowledge-search and
-external-verification tools.
+Now operates via the ReAct loop with knowledge-search,
+external-verification, and Guardrails-based validation tools.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -48,6 +49,29 @@ class Vera(BaseAgent):
             handler=self._tool_ask_iris,
         ))
 
+        self.register_tool(AgentTool(
+            name="validate_output",
+            description=(
+                "Run Guardrails AI validators on a text to check for PII leakage, "
+                "toxic language, and other output quality issues. Returns a validation report."
+            ),
+            parameters={"text": "The text to validate"},
+            handler=self._tool_validate_output,
+        ))
+
+        self.register_tool(AgentTool(
+            name="check_faithfulness",
+            description=(
+                "Check whether a response is faithful to its source context. "
+                "Detects unsupported claims and hallucinations."
+            ),
+            parameters={
+                "response": "The response text to check",
+                "context": "The source context documents (pipe-separated if multiple)",
+            },
+            handler=self._tool_check_faithfulness,
+        ))
+
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
@@ -69,3 +93,20 @@ class Vera(BaseAgent):
             return await iris.handle(query)
         except (ToolExecutionError, Exception) as exc:
             return f"Iris error: {exc}"
+
+    async def _tool_validate_output(self, text: str) -> str:
+        try:
+            from ira.brain.guardrails import validate_output
+            result = await validate_output(text)
+            return json.dumps(result, default=str)
+        except Exception as exc:
+            return f"Validation error: {exc}"
+
+    async def _tool_check_faithfulness(self, response: str, context: str = "") -> str:
+        try:
+            from ira.brain.guardrails import check_faithfulness
+            context_docs = [c.strip() for c in context.split("|") if c.strip()]
+            result = await check_faithfulness(response, context_docs)
+            return json.dumps(result, default=str)
+        except Exception as exc:
+            return f"Faithfulness check error: {exc}"

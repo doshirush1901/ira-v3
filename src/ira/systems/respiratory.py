@@ -38,6 +38,8 @@ class RespiratorySystem:
         drip_engine: Any | None = None,
         immune_system: Any | None = None,
         email_processor: Any | None = None,
+        goal_manager: Any | None = None,
+        bus: Any | None = None,
         inhale_hour: int = 6,
         inhale_minute: int = 0,
         exhale_hour: int = 22,
@@ -50,6 +52,8 @@ class RespiratorySystem:
         self._drip_engine = drip_engine
         self._immune_system = immune_system
         self._email_processor = email_processor
+        self._goal_manager = goal_manager
+        self._bus = bus
 
         self._inhale_hour = inhale_hour
         self._inhale_minute = inhale_minute
@@ -170,6 +174,23 @@ class RespiratorySystem:
         else:
             logger.debug("EXHALE skipping drip engine (not configured)")
 
+        if self._goal_manager is not None:
+            try:
+                stalled = await self._goal_manager.sweep_stalled_goals()
+                if stalled and self._bus is not None:
+                    for goal in stalled:
+                        await self._bus.publish("hermes", {
+                            "action": "draft_follow_up",
+                            "contact_id": goal.contact_id,
+                            "goal_type": goal.goal_type.value,
+                            "stalled_since": goal.created_at.isoformat(),
+                        })
+                summary_parts.append(f"Stalled goals: {len(stalled)} flagged for follow-up")
+            except (IraError, Exception):
+                logger.exception("EXHALE goal sweep failed")
+        else:
+            logger.debug("EXHALE skipping goal sweep (GoalManager not configured)")
+
         summary = "Ira Daily Exhale Report\n" + "\n".join(summary_parts) if summary_parts else "Ira Daily Exhale: no active subsystems"
         await self._send_telegram_summary(summary)
 
@@ -195,6 +216,16 @@ class RespiratorySystem:
                 resp.raise_for_status()
         except (IraError, Exception):
             logger.exception("Failed to send Telegram daily summary")
+
+    # ── Public CLI entry points ─────────────────────────────────────────────
+
+    async def run_inhale_cycle(self) -> None:
+        """Run a single inhale cycle on demand (CLI / Cursor use)."""
+        await self._inhale()
+
+    async def run_exhale_cycle(self) -> None:
+        """Run a single exhale cycle on demand (CLI / Cursor use)."""
+        await self._exhale()
 
     # ── BREATH TIMING ─────────────────────────────────────────────────────
 

@@ -79,7 +79,7 @@ class BaseAgent(ABC):
         self._llm = get_llm_client()
 
         self.tools: list[AgentTool] = []
-        self.max_iterations: int = 8
+        self.max_iterations: int = get_settings().app.react_max_iterations
         self.state: AgentState = AgentState.THINKING
         self._default_tools_registered: bool = False
 
@@ -181,6 +181,26 @@ class BaseAgent(ABC):
                 parameters={"agent_name": "Name of the agent (e.g. 'clio', 'prometheus')", "question": "The question to ask"},
                 handler=self._tool_ask_agent,
             ))
+
+        self.register_tool(AgentTool(
+            name="web_search",
+            description=(
+                "Search the web for real-time information. Returns titles, URLs, and snippets. "
+                "Requires at least one search API key (Tavily, Serper, or SearchAPI)."
+            ),
+            parameters={"query": "Web search query"},
+            handler=self._tool_web_search_default,
+        ))
+
+        self.register_tool(AgentTool(
+            name="scrape_url",
+            description=(
+                "Fetch a web page and return its content as clean markdown. "
+                "Use after web_search to read the full content of a result URL."
+            ),
+            parameters={"url": "The full URL to scrape"},
+            handler=self._tool_scrape_url,
+        ))
 
         if self._services.get(SK.EMAIL_PROCESSOR):
             self.register_tool(AgentTool(
@@ -362,6 +382,18 @@ class BaseAgent(ABC):
             )
         return "\n".join(lines)
 
+    async def _tool_web_search_default(self, query: str) -> str:
+        results = await self.web_search(query, max_results=5)
+        if not results:
+            return "No web search results found."
+        lines = []
+        for r in results:
+            lines.append(f"- [{r['title']}]({r['url']}): {r['snippet'][:200]}")
+        return "\n".join(lines)
+
+    async def _tool_scrape_url(self, url: str) -> str:
+        return await self.scrape_url(url)
+
     # ── ReAct loop ────────────────────────────────────────────────────────
 
     def _build_tool_descriptions(self) -> str:
@@ -423,7 +455,7 @@ class BaseAgent(ABC):
             if isinstance(parsed, dict):
                 return parsed
         except (json.JSONDecodeError, ValueError):
-            pass
+            logger.warning("Failed to parse ReAct JSON in %s", self.name, exc_info=True)
 
         return {"thought": "Could not parse structured response.", "final_answer": raw}
 
@@ -661,6 +693,33 @@ class BaseAgent(ABC):
     async def send_to(self, to_agent: str, query: str, context: dict[str, Any] | None = None) -> None:
         """Send a message to another agent via the message bus."""
         await self._bus.send(self.name, to_agent, query, context)
+
+    # ── web scraping (Crawl4AI) ─────────────────────────────────────────
+
+    async def scrape_url(self, url: str, *, max_chars: int = 8000) -> str:
+        """Fetch a URL and return its content as clean markdown via Crawl4AI."""
+        try:
+            from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+
+            config = CrawlerRunConfig(
+                word_count_threshold=50,
+                excluded_tags=["nav", "footer", "header", "aside"],
+                exclude_external_links=True,
+            )
+            async with AsyncWebCrawler() as crawler:
+                result = await crawler.arun(url=url, config=config)
+                if result.success and result.markdown_v2:
+                    text = result.markdown_v2.raw_markdown or result.markdown or ""
+                elif result.success and result.markdown:
+                    text = result.markdown
+                else:
+                    return f"Failed to scrape {url}: {result.error_message or 'unknown error'}"
+                return text[:max_chars]
+        except ImportError:
+            return "Crawl4AI not installed."
+        except Exception as exc:
+            logger.warning("scrape_url failed for %s in %s: %s", url, self.name, exc)
+            return f"Scrape error: {exc}"
 
     # ── web search ────────────────────────────────────────────────────────
 

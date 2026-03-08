@@ -537,6 +537,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ── SHUTDOWN ──────────────────────────────────────────────────────
     logger.info("Ira is going to sleep.")
 
+    try:
+        from langfuse import Langfuse
+        Langfuse().flush()
+        logger.info("Langfuse traces flushed")
+    except Exception:
+        logger.warning("Langfuse flush failed", exc_info=True)
+
     if email_poll_task is not None:
         email_poll_task.cancel()
         try:

@@ -58,6 +58,9 @@ app = typer.Typer(
 email_app = typer.Typer(help="Email drafting and learning commands.")
 app.add_typer(email_app, name="email")
 
+system_app = typer.Typer(help="System lifecycle commands (inhale/exhale).")
+app.add_typer(system_app, name="system")
+
 logger = logging.getLogger(__name__)
 
 
@@ -262,6 +265,14 @@ async def _build_pipeline(
     if nemesis is not None and hasattr(nemesis, "configure"):
         nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
 
+    redis_cache = None
+    try:
+        from ira.systems.redis_cache import RedisCache
+        redis_cache = RedisCache()
+        await redis_cache.connect()
+    except (ConfigurationError, Exception):
+        logger.info("Redis not available for CLI — pipeline state will be in-memory only")
+
     logger.info("CLI pipeline ready with feedback handler")
 
     pipeline = RequestPipeline(
@@ -277,6 +288,7 @@ async def _build_pipeline(
         endocrine=endocrine,
         crm=crm,
         unified_context=unified_context,
+        redis_cache=redis_cache,
     )
 
     return pipeline, feedback_handler
@@ -335,6 +347,7 @@ def _build_email_processor(
     )
 
 
+# Project Shakti Graduation Thresholds
 _GRAD_MIN_INTERACTIONS = 1000
 _GRAD_MIN_AVG_SCORE = 4.5
 _GRAD_MIN_PROCEDURES = 10
@@ -597,6 +610,57 @@ def feedback(
     _run(_feedback())
 
 
+@app.command(name="learn-from-cursor")
+def learn_from_cursor(
+    query: str = typer.Option(..., "--query", help="The original query sent to Ira."),
+    response: str = typer.Option(..., "--response", help="Ira's response."),
+    correction: str = typer.Option("", "--correction", help="The correct answer."),
+    feedback: str = typer.Option("", "--feedback", help="Your feedback on the response."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Teach Ira from a correction made in Cursor chat.
+
+    Feeds the correction through the FeedbackHandler pipeline: stores
+    the correction, updates procedural memory, and triggers a
+    micro-learning cycle for high-severity corrections.
+    """
+    _configure_logging(verbose)
+
+    if not correction and not feedback:
+        console.print("[red]Provide at least --correction or --feedback.[/red]")
+        raise typer.Exit(1)
+
+    async def _learn() -> None:
+        from ira.interfaces.cursor_feedback import process_cursor_feedback
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold magenta]Learning from correction..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("learning", total=None)
+            result = await process_cursor_feedback(
+                query=query,
+                response=response,
+                correction=correction,
+                feedback=feedback,
+            )
+
+        polarity = result.get("polarity", "unknown")
+        console.print(
+            Panel(
+                f"[bold]Polarity:[/bold] {polarity}\n"
+                f"[bold]Query:[/bold] {query[:100]}...\n"
+                f"[bold]Correction:[/bold] {(correction or feedback)[:200]}",
+                title="Correction Recorded",
+                border_style="magenta",
+            )
+        )
+
+    _run(_learn())
+
+
 @app.command()
 def server(
     mode: str = typer.Option("training", help="Server mode: training or operational."),
@@ -722,6 +786,163 @@ def email_learn(
         console.print(f"\n[green]Learned from {len(emails)} emails in thread {thread_id}.[/green]")
 
     _run(_learn())
+
+
+@email_app.command("sync")
+def email_sync(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Fetch and process new emails from Gmail (one-time sync).
+
+    Runs a single poll cycle — fetches new emails, classifies them via
+    Delphi, digests through the DigestiveSystem, and updates the CRM.
+    Exits when done (does not loop).
+    """
+    _configure_logging(verbose)
+
+    pantheon, shared = _build_pantheon()
+    digestive, _ingestor, _qdrant = _build_digestive()
+    email_proc = _build_email_processor(pantheon, digestive, shared)
+
+    async def _sync() -> None:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Syncing inbox..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("sync", total=None)
+            results = await email_proc.run_single_poll_cycle()
+
+        console.print(
+            f"[green]Email sync complete — {len(results)} emails processed.[/green]"
+        )
+
+    _run(_sync())
+
+
+@email_app.command("drip")
+def email_drip(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run a single cycle of the Autonomous Drip Engine.
+
+    Evaluates active campaigns, sends pending drip steps (as Gmail
+    drafts for human review), and checks for replies.
+    """
+    _configure_logging(verbose)
+
+    pantheon, shared = _build_pantheon()
+    digestive, _ingestor, _qdrant = _build_digestive()
+    email_proc = _build_email_processor(pantheon, digestive, shared)
+
+    async def _drip() -> None:
+        from ira.interfaces.email_processor import GmailDraftSender
+        from ira.systems.drip_engine import AutonomousDripEngine
+
+        crm = shared[SK.CRM]
+        await crm.create_tables()
+        quotes = shared.get(SK.QUOTES)
+
+        gmail_sender = GmailDraftSender(email_processor=email_proc)
+        drip = AutonomousDripEngine(
+            crm=crm,
+            quotes=quotes,
+            gmail=gmail_sender,
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]Running drip cycle..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("drip", total=None)
+            result = await drip.run_cycle()
+
+        eval_stats = result.get("evaluation", {})
+        sent = result.get("sent", {})
+        replies = result.get("replies", {})
+        console.print(
+            Panel(
+                f"[bold]Campaigns evaluated:[/bold] {eval_stats.get('campaigns', 0)}\n"
+                f"[bold]Steps sent:[/bold] {sent.get('sent', 0)}\n"
+                f"[bold]Replies checked:[/bold] {replies.get('checked', 0)}",
+                title="Drip Cycle Complete",
+                border_style="cyan",
+            )
+        )
+
+    _run(_drip())
+
+
+# ── System sub-commands ──────────────────────────────────────────────────
+
+
+@system_app.command("inhale")
+def system_inhale(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run a morning inhale cycle: fetch emails and ingest new documents."""
+    _configure_logging(verbose)
+
+    pantheon, shared = _build_pantheon()
+    digestive, _ingestor, _qdrant = _build_digestive()
+    email_proc = _build_email_processor(pantheon, digestive, shared)
+
+    from ira.systems.respiratory import RespiratorySystem
+
+    respiratory = RespiratorySystem(
+        email_processor=email_proc,
+    )
+
+    async def _inhale() -> None:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]Inhaling..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("inhale", total=None)
+            await respiratory.run_inhale_cycle()
+
+        console.print("[green]Inhale cycle complete.[/green]")
+
+    _run(_inhale())
+
+
+@system_app.command("exhale")
+def system_exhale(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run an evening exhale cycle: dream consolidation and reporting."""
+    _configure_logging(verbose)
+
+    pantheon, shared = _build_pantheon()
+
+    async def _exhale() -> None:
+        from ira.memory.dream_mode import DreamMode
+        from ira.memory.long_term import LongTermMemory
+
+        long_term = LongTermMemory()
+        dream_mode = DreamMode(long_term_memory=long_term)
+        await dream_mode.initialize()
+
+        respiratory = RespiratorySystem(dream_mode=dream_mode)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold magenta]Exhaling..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            progress.add_task("exhale", total=None)
+            await respiratory.run_exhale_cycle()
+
+        console.print("[green]Exhale cycle complete.[/green]")
+
+    from ira.systems.respiratory import RespiratorySystem
+    _run(_exhale())
 
 
 # ── Metadata Index ────────────────────────────────────────────────────────

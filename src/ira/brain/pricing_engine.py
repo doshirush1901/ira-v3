@@ -13,12 +13,12 @@ import json
 import logging
 from typing import Any, Protocol
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.brain.retriever import UnifiedRetriever
-from ira.config import get_settings
 from ira.data.models import Contact
 from ira.prompt_loader import load_prompt
+from ira.services.llm_client import LLMClient, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +49,16 @@ class PricingEngine:
         self,
         retriever: UnifiedRetriever,
         crm: CRMRepository | None = None,
+        *,
+        llm: LLMClient | None = None,
     ) -> None:
         self._retriever = retriever
         self._crm = crm
-
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
+        self._llm = llm or get_llm_client()
 
     # ── price estimation ─────────────────────────────────────────────────
 
+    @observe()
     async def estimate_price(
         self,
         machine_model: str,
@@ -170,6 +170,7 @@ class PricingEngine:
 
     # ── quote content generation ─────────────────────────────────────────
 
+    @observe()
     async def generate_quote_content(
         self,
         contact: Contact,
@@ -212,31 +213,6 @@ class PricingEngine:
     # ── LLM helper ───────────────────────────────────────────────────────
 
     async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in PricingEngine")
-            return "(LLM call failed)"
+        return await self._llm.generate_text(
+            system, user, temperature=0.2, name="pricing_engine",
+        )

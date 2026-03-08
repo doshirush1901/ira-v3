@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
@@ -315,6 +315,40 @@ class GoalManager:
                 else None
             ),
         )
+
+    @observe()
+    async def sweep_stalled_goals(self, stale_hours: int = 48) -> list[Goal]:
+        """Find ACTIVE goals that haven't been updated in *stale_hours*."""
+        assert self._db is not None
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=stale_hours)).isoformat()
+        cursor = await self._db.execute(
+            "SELECT id, goal_type, contact_id, status, required_slots, progress, "
+            "created_at, completed_at "
+            "FROM goals WHERE status = 'ACTIVE' AND created_at < ? "
+            "ORDER BY created_at ASC",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        stalled: list[Goal] = []
+        for row in rows:
+            stalled.append(Goal(
+                id=UUID(row[0]),
+                goal_type=GoalType(row[1]),
+                contact_id=row[2],
+                status=GoalStatus(row[3]),
+                required_slots=json.loads(row[4]),
+                progress=row[5],
+                created_at=datetime.fromisoformat(row[6].replace("Z", "+00:00")),
+                completed_at=(
+                    datetime.fromisoformat(row[7].replace("Z", "+00:00"))
+                    if row[7] else None
+                ),
+            ))
+        logger.info(
+            "Goal sweep found %d stalled goals (cutoff: %s)", len(stalled), cutoff,
+        )
+        return stalled
 
     async def abandon_goal(self, goal_id: UUID) -> None:
         assert self._db is not None

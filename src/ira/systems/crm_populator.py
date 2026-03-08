@@ -277,7 +277,6 @@ class CRMPopulator:
     async def _gather_evidence(self, contact: dict[str, Any]) -> dict[str, Any]:
         """Search the KB for order/quote documents mentioning this contact's company."""
         company = contact.get("company", "")
-        email = contact.get("email", "")
         name = contact.get("name", "")
 
         if not company and not name:
@@ -416,8 +415,6 @@ class CRMPopulator:
                         h["name"].lower(): h["value"]
                         for h in msg.get("payload", {}).get("headers", [])
                     }
-                    labels = msg.get("labelIds", [])
-
                     from_name, from_email = parseaddr(headers.get("from", ""))
                     to_name, to_email = parseaddr(headers.get("to", ""))
 

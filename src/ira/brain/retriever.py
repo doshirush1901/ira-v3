@@ -250,7 +250,7 @@ class UnifiedRetriever:
             )
             return result.entities
         except Exception:
-            logger.debug("Entity name extraction failed for graph search; using raw query")
+            logger.warning("Entity name extraction failed for graph search; using raw query", exc_info=True)
         return []
 
     async def _search_mem0(self, query: str, limit: int) -> list[dict[str, Any]]:
@@ -309,7 +309,7 @@ class UnifiedRetriever:
                 for r in results[:limit]
             ]
         except (IngestionError, Exception):
-            logger.debug("Imports fallback not available", exc_info=True)
+            logger.warning("Imports fallback not available", exc_info=True)
             return []
 
     # ── reranking ────────────────────────────────────────────────────────
@@ -409,8 +409,9 @@ class UnifiedRetriever:
         ]
 
         try:
-            reranked = self._flashrank.rerank(
-                RerankRequest(query=query, passages=passages)
+            reranked = await asyncio.to_thread(
+                self._flashrank.rerank,
+                RerankRequest(query=query, passages=passages),
             )
         except (IraError, Exception):
             logger.exception("FlashRank reranking failed; returning by original score")
@@ -452,7 +453,7 @@ class UnifiedRetriever:
                     if entity.lower() in content.lower():
                         r.setdefault("metadata", {})["competitor_mentioned"] = True
         except (IraError, Exception):
-            logger.debug("Learned corrections failed", exc_info=True)
+            logger.warning("Learned corrections overlay failed", exc_info=True)
         return results
 
     # ── LLM query decomposition ──────────────────────────────────────────

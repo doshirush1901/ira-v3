@@ -110,6 +110,7 @@ class LLMClient:
                     model=resolved_model,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    timeout=120.0,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user[:12_000]},
@@ -181,6 +182,7 @@ class LLMClient:
                     model=resolved_model,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    timeout=120.0,
                     system=system + json_instruction,
                     messages=[{"role": "user", "content": user[:12_000]}],
                 )
@@ -272,6 +274,7 @@ class LLMClient:
                     model=resolved_model,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    timeout=120.0,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user[:12_000]},
@@ -323,6 +326,7 @@ class LLMClient:
                     model=resolved_model,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    timeout=120.0,
                     system=system,
                     messages=[{"role": "user", "content": user[:12_000]}],
                 )

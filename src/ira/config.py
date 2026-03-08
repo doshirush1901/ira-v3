@@ -136,6 +136,10 @@ class AppConfig(BaseSettings):
     environment: str = "development"
     api_secret_key: SecretStr = SecretStr("")
     cors_origins: str = ""
+    react_max_iterations: int = 8
+    agent_timeout: int = 60
+    mem0_timeout: float = 15.0
+    neo4j_max_pool_size: int = 50
 
 
 class Settings(BaseSettings):

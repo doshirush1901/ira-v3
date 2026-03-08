@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".docx", ".txt", ".csv"}
+_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".docx", ".txt", ".csv", ".pptx", ".html", ".md"}
 _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_OVERLAP = 128
 _TIKTOKEN_ENCODING = "cl100k_base"
@@ -197,7 +197,28 @@ def read_xls(path: Path) -> str:
     return "\n".join(parts)
 
 
-_READERS = {
+def _read_with_docling(path: Path) -> str:
+    """Parse any supported document via Docling for high-fidelity extraction.
+
+    Handles tables, reading order, formulas, and complex layouts far better
+    than the legacy per-format readers.  Falls back to legacy readers on error.
+    """
+    try:
+        from docling.document_converter import DocumentConverter
+
+        converter = DocumentConverter()
+        result = converter.convert(str(path))
+        md = result.document.export_to_markdown()
+        if md and len(md.strip()) >= _MIN_USEFUL_CHARS:
+            return md
+    except Exception:
+        logger.debug("Docling failed for %s — falling back to legacy reader", path, exc_info=True)
+    return ""
+
+
+_DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md"}
+
+_LEGACY_READERS = {
     ".pdf": read_pdf,
     ".xlsx": read_xlsx,
     ".xls": read_xls,
@@ -208,19 +229,32 @@ _READERS = {
 }
 
 
+def _get_reader(ext: str):
+    """Return a reader function: Docling-first for supported formats, else legacy."""
+    if ext in _DOCLING_EXTENSIONS:
+        def _docling_then_legacy(path: Path) -> str:
+            text = _read_with_docling(path)
+            if text:
+                return text
+            legacy = _LEGACY_READERS.get(ext)
+            return legacy(path) if legacy else ""
+        return _docling_then_legacy
+    return _LEGACY_READERS.get(ext)
+
+
+_READERS = {ext: _get_reader(ext) or fn for ext, fn in _LEGACY_READERS.items()}
+_READERS.update({ext: _get_reader(ext) for ext in _DOCLING_EXTENSIONS if ext not in _READERS})
+
+
 # ── chunking ─────────────────────────────────────────────────────────────────
 
 
-def chunk_text(
+def _chunk_text_tiktoken(
     text: str,
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
     overlap: int = _DEFAULT_OVERLAP,
 ) -> list[str]:
-    """Split *text* into overlapping chunks measured in tokens.
-
-    Uses tiktoken's ``cl100k_base`` encoding for accurate token counts.
-    Returns raw text strings (not token IDs).
-    """
+    """Legacy fixed-size token chunking with tiktoken.  Used as fallback."""
     enc = tiktoken.get_encoding(_TIKTOKEN_ENCODING)
     tokens = enc.encode(text)
 
@@ -237,6 +271,33 @@ def chunk_text(
         start += chunk_size - overlap
 
     return chunks
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = _DEFAULT_CHUNK_SIZE,
+    overlap: int = _DEFAULT_OVERLAP,
+) -> list[str]:
+    """Split *text* into semantically coherent chunks via Chonkie.
+
+    Uses SemanticChunker when available (groups sentences by meaning),
+    falling back to the legacy fixed-size tiktoken chunker.
+    """
+    try:
+        from chonkie import SemanticChunker
+
+        chunker = SemanticChunker(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+        )
+        chunks = chunker.chunk(text)
+        result = [c.text for c in chunks if c.text.strip()]
+        if result:
+            return result
+    except Exception:
+        logger.debug("Chonkie semantic chunking failed — using tiktoken fallback", exc_info=True)
+
+    return _chunk_text_tiktoken(text, chunk_size, overlap)
 
 
 # ── category extraction ──────────────────────────────────────────────────────
@@ -342,7 +403,7 @@ class DocumentIngestor:
         if force:
             await self._qdrant.delete_by_source(str(path))
 
-        reader = _READERS.get(ext)
+        reader = _get_reader(ext) or _READERS.get(ext)
         if reader is None:
             logger.warning("No reader for extension '%s': %s", ext, path)
             return 0
@@ -506,13 +567,27 @@ class DocumentIngestor:
     # ── entity extraction ─────────────────────────────────────────────────
 
     async def _extract_and_store_entities(self, text: str, source: str) -> None:
-        """Extract entities from document text and store them in Neo4j."""
+        """Extract entities from document text and store them in Neo4j.
+
+        Uses GLiNER for fast local extraction first, then enriches with
+        LLM-based extraction for anything GLiNER might have missed.
+        """
         assert self._graph is not None
+
+        try:
+            from ira.brain.entity_extractor import extract_entities_gliner
+            gliner_entities = await asyncio.to_thread(extract_entities_gliner, text)
+        except Exception:
+            logger.debug("GLiNER extraction failed for %s — using LLM only", source)
+            gliner_entities = {"companies": [], "people": [], "machines": [], "relationships": []}
+
         try:
             entities = await self._graph.extract_entities_from_text(text)
         except (LLMError, Exception):
-            logger.exception("Entity extraction failed for %s", source)
-            return
+            logger.warning("LLM entity extraction failed for %s — using GLiNER results only", source)
+            entities = gliner_entities
+
+        entities = self._merge_entity_results(gliner_entities, entities)
 
         for company in entities.get("companies", []):
             try:
@@ -570,6 +645,26 @@ class DocumentIngestor:
             len(entities.get("machines", [])),
             rel_count,
         )
+
+    @staticmethod
+    def _merge_entity_results(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+        """Merge two entity extraction results, deduplicating by key fields."""
+        def _dedup(items: list[dict], key_field: str) -> list[dict]:
+            seen: set[str] = set()
+            out: list[dict] = []
+            for item in items:
+                k = item.get(key_field, "").lower().strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    out.append(item)
+            return out
+
+        return {
+            "companies": _dedup(a.get("companies", []) + b.get("companies", []), "name"),
+            "people": _dedup(a.get("people", []) + b.get("people", []), "name"),
+            "machines": _dedup(a.get("machines", []) + b.get("machines", []), "model"),
+            "relationships": a.get("relationships", []) + b.get("relationships", []),
+        }
 
     # ── ledger helpers ───────────────────────────────────────────────────
 

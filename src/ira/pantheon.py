@@ -39,6 +39,7 @@ from ira.agents.tyche import Tyche
 from ira.agents.vera import Vera
 from ira.agents.base_agent import BaseAgent
 from ira.brain.deterministic_router import DeterministicRouter
+from ira.config import get_settings
 from ira.exceptions import ToolExecutionError
 from ira.brain.retriever import UnifiedRetriever
 from ira.data.models import BoardMeetingMinutes
@@ -228,7 +229,7 @@ class Pantheon:
 
     # ── helpers ──────────────────────────────────────────────────────────
 
-    _AGENT_TIMEOUT = 60
+    _AGENT_TIMEOUT = get_settings().app.agent_timeout
 
     async def _gather_responses(
         self,
@@ -278,7 +279,7 @@ class Pantheon:
                     if isinstance(n, str) and n.lower() in self._agents
                 ]
         except (json.JSONDecodeError, TypeError):
-            pass
+            logger.warning("Failed to parse Athena routing response as JSON", exc_info=True)
         return []
 
     # ── skill execution ──────────────────────────────────────────────────

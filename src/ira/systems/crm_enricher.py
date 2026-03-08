@@ -258,7 +258,6 @@ class CRMEnricher:
         role_patterns = [
             r"(?:director|manager|head|chief|vp|president|ceo|cto|owner|founder|engineer|buyer|purchas)",
         ]
-        content_lower = content.lower()
         local_part = email.split("@")[0].lower()
 
         for line in content.split("\n"):
@@ -406,7 +405,6 @@ class CRMEnricher:
 
     @staticmethod
     def _extract_project_status(content: str, company: str) -> str:
-        content_lower = content.lower()
         company_lower = company.lower()
 
         for line in content.split("\n"):

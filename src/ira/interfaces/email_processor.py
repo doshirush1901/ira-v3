@@ -87,6 +87,7 @@ class EmailProcessor:
         self._pantheon = pantheon
         self._unified_ctx = unified_context
         self._service: Any | None = None
+        self._poll_lock = asyncio.Lock()
 
         if self._mode is EmailMode.OPERATIONAL:
             self._operational_email = self._google.ira_email
@@ -552,17 +553,35 @@ class EmailProcessor:
             self._mode.value,
         )
         while True:
-            try:
-                if self._mode is EmailMode.OPERATIONAL:
-                    results = await self.process_inbox()
-                else:
-                    results = await self.observe_inbox()
-                logger.info(
-                    "Poll cycle complete — %d emails processed", len(results),
-                )
-            except (IraError, Exception):
-                logger.exception("Poll cycle failed — will retry next cycle")
+            if self._poll_lock.locked():
+                logger.warning("Previous poll cycle still running, skipping")
+            else:
+                async with self._poll_lock:
+                    try:
+                        if self._mode is EmailMode.OPERATIONAL:
+                            results = await self.process_inbox()
+                        else:
+                            results = await self.observe_inbox()
+                        logger.info(
+                            "Poll cycle complete — %d emails processed",
+                            len(results),
+                        )
+                    except (IraError, Exception):
+                        logger.exception(
+                            "Poll cycle failed — will retry next cycle"
+                        )
             await asyncio.sleep(interval_seconds)
+
+    async def run_single_poll_cycle(self) -> list[dict[str, Any]]:
+        """Execute exactly one poll cycle and return results.
+
+        Unlike ``poll_inbox`` this does not loop — it processes the inbox
+        once and returns, making it suitable for CLI / on-demand use.
+        """
+        async with self._poll_lock:
+            if self._mode is EmailMode.OPERATIONAL:
+                return await self.process_inbox()
+            return await self.observe_inbox()
 
     # ── Analysis pipeline ─────────────────────────────────────────────────
 

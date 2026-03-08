@@ -11,6 +11,7 @@ body systems.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -97,10 +98,10 @@ class CirculatorySystem:
             "payload_keys": list(event.payload.keys()),
         }
         try:
-            with open(self._ledger_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, default=str) + "\n")
+            line = json.dumps(entry, default=str) + "\n"
+            await asyncio.to_thread(self._append_ledger_line, line)
         except (IraError, Exception):
-            logger.debug("Ledger write failed", exc_info=True)
+            logger.warning("Ledger write failed", exc_info=True)
 
     # ── CRM → Neo4j ─────────────────────────────────────────────────────
 
@@ -354,6 +355,10 @@ class CirculatorySystem:
 
         except (DatabaseError, Exception):
             logger.exception("Neo4j→CRM sync failed for %s", event.entity_id)
+
+    def _append_ledger_line(self, line: str) -> None:
+        with open(self._ledger_path, "a", encoding="utf-8") as f:
+            f.write(line)
 
     # ── Ledger queries ───────────────────────────────────────────────────
 

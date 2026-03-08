@@ -32,6 +32,9 @@ class IntentCategory(str, Enum):
     CASE_STUDY = "CASE_STUDY"
     QUOTE_GENERATION = "QUOTE_GENERATION"
     ARCHIVE_SEARCH = "ARCHIVE_SEARCH"
+    CONTACT_CLASSIFICATION = "CONTACT_CLASSIFICATION"
+    MEMORY_RECALL = "MEMORY_RECALL"
+    SYSTEM_TRAINING = "SYSTEM_TRAINING"
     GENERAL = "GENERAL"
 
 
@@ -47,7 +50,7 @@ class RoutingConfig:
 ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.SALES_PIPELINE: RoutingConfig(
         required_agents=("prometheus", "atlas", "clio"),
-        optional_agents=("tyche", "alexandros"),
+        optional_agents=("tyche", "alexandros", "chiron"),
         required_tools=("crm", "retriever"),
     ),
     IntentCategory.FINANCE_REVIEW: RoutingConfig(
@@ -118,6 +121,21 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.ARCHIVE_SEARCH: RoutingConfig(
         required_agents=("alexandros",),
         optional_agents=("clio",),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.CONTACT_CLASSIFICATION: RoutingConfig(
+        required_agents=("delphi",),
+        optional_agents=("clio", "prometheus"),
+        required_tools=("crm", "retriever"),
+    ),
+    IntentCategory.MEMORY_RECALL: RoutingConfig(
+        required_agents=("mnemosyne",),
+        optional_agents=("clio", "sophia"),
+        required_tools=("retriever",),
+    ),
+    IntentCategory.SYSTEM_TRAINING: RoutingConfig(
+        required_agents=("nemesis",),
+        optional_agents=("sophia", "chiron"),
         required_tools=("retriever",),
     ),
     IntentCategory.GENERAL: RoutingConfig(
@@ -255,6 +273,25 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bquote\s+PDF\b", IntentCategory.QUOTE_GENERATION, 3.0),
     (r"\bformal\s+quote\b", IntentCategory.QUOTE_GENERATION, 3.0),
     (r"\bquote\s+document\b", IntentCategory.QUOTE_GENERATION, 2.5),
+
+    # Contact classification
+    (r"\bclassif", IntentCategory.CONTACT_CLASSIFICATION, 2.0),
+    (r"\bwho\s+is\b.*\bcontact\b", IntentCategory.CONTACT_CLASSIFICATION, 2.5),
+    (r"\bcontact\s+type\b", IntentCategory.CONTACT_CLASSIFICATION, 2.5),
+    (r"\bcustomer\s+or\s+vendor\b", IntentCategory.CONTACT_CLASSIFICATION, 3.0),
+
+    # Memory recall
+    (r"\bremember\b", IntentCategory.MEMORY_RECALL, 2.0),
+    (r"\brecall\b", IntentCategory.MEMORY_RECALL, 2.0),
+    (r"\bwhat\s+did\s+(we|i|you)\s+(discuss|talk|say)\b", IntentCategory.MEMORY_RECALL, 3.0),
+    (r"\blast\s+time\b", IntentCategory.MEMORY_RECALL, 1.5),
+    (r"\bprevious\s+conversation\b", IntentCategory.MEMORY_RECALL, 3.0),
+
+    # System training / self-improvement
+    (r"\btrain\b", IntentCategory.SYSTEM_TRAINING, 2.0),
+    (r"\bself[\s-]?assess", IntentCategory.SYSTEM_TRAINING, 2.5),
+    (r"\bweak\s+area", IntentCategory.SYSTEM_TRAINING, 2.0),
+    (r"\bimprove\s+yourself\b", IntentCategory.SYSTEM_TRAINING, 2.5),
 
     # Archive / document search
     (r"\barchive\b", IntentCategory.ARCHIVE_SEARCH, 3.0),

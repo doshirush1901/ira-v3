@@ -13,11 +13,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.brain.retriever import UnifiedRetriever
-from ira.config import get_settings
 from ira.prompt_loader import load_prompt
+from ira.services.llm_client import LLMClient, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +46,14 @@ class MachineIntelligence:
         retriever: UnifiedRetriever,
         *,
         knowledge_path: Path = _KNOWLEDGE_FILE,
+        llm: LLMClient | None = None,
     ) -> None:
         self._retriever = retriever
+        self._llm = llm or get_llm_client()
 
         data = _load_knowledge(knowledge_path)
         self.machine_catalog: dict[str, dict[str, Any]] = data.get("machine_catalog", {})
         self.truth_hints: dict[str, str] = data.get("truth_hints", {})
-
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
 
     # ── spec lookup ──────────────────────────────────────────────────────
 
@@ -87,6 +85,7 @@ class MachineIntelligence:
 
     # ── recommendation ───────────────────────────────────────────────────
 
+    @observe()
     async def recommend_machine(
         self,
         requirements: dict[str, Any],
@@ -119,6 +118,7 @@ class MachineIntelligence:
 
     # ── comparison ───────────────────────────────────────────────────────
 
+    @observe()
     async def compare_machines(self, model_a: str, model_b: str) -> str:
         """Return a Markdown comparison table for two machine models."""
         specs_a = await self.get_machine_specs(model_a)
@@ -151,31 +151,6 @@ class MachineIntelligence:
         return "\n".join(parts)
 
     async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured — cannot generate response)"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in MachineIntelligence")
-            return "(LLM call failed)"
+        return await self._llm.generate_text(
+            system, user, temperature=0.2, name="machine_intelligence",
+        )

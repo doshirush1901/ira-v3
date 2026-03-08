@@ -20,6 +20,7 @@ class LongTermMemory:
         cfg = config or get_settings().memory
         self._api_key = cfg.api_key.get_secret_value()
         self._base_url = "https://api.mem0.ai"
+        self._timeout = get_settings().app.mem0_timeout
         self._headers = {
             "Authorization": f"Token {self._api_key}",
             "Content-Type": "application/json",
@@ -35,7 +36,7 @@ class LongTermMemory:
             logger.warning("Mem0 API key not configured; skipping memory store")
             return []
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     f"{self._base_url}/v1/memories/",
                     headers=self._headers,
@@ -61,7 +62,7 @@ class LongTermMemory:
         if not self._api_key:
             return []
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     f"{self._base_url}/v1/memories/search/",
                     headers=self._headers,

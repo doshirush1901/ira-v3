@@ -84,9 +84,59 @@ class RequestPipeline:
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
         self._recent_messages: dict[str, tuple[str, float]] = {}
+        self._state_lock = asyncio.Lock()
         self._request_semaphore = asyncio.Semaphore(3)
 
+        self._load_pending_clarifications()
+
     _REQUEST_TIMEOUT = 240
+    _CLARIFICATION_REDIS_KEY = "ira:pending_clarifications"
+
+    def _load_pending_clarifications(self) -> None:
+        """Restore pending clarifications from Redis on startup."""
+        if self._redis is None:
+            return
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return
+        except RuntimeError:
+            return
+
+    async def _persist_clarification(self, sender_id: str, data: dict[str, Any]) -> None:
+        """Store a pending clarification in Redis for cross-invocation persistence."""
+        if self._redis is None:
+            return
+        try:
+            import json as _json
+            await self._redis.hset(
+                self._CLARIFICATION_REDIS_KEY, sender_id, _json.dumps(data),
+            )
+        except Exception:
+            logger.warning("Failed to persist clarification to Redis", exc_info=True)
+
+    async def _pop_clarification(self, sender_id: str) -> dict[str, Any] | None:
+        """Pop a pending clarification from both memory and Redis."""
+        async with self._state_lock:
+            result = self._pending_clarifications.pop(sender_id, None)
+        if result is not None:
+            if self._redis is not None:
+                try:
+                    await self._redis.hdel(self._CLARIFICATION_REDIS_KEY, sender_id)
+                except Exception:
+                    logger.warning("Failed to remove clarification from Redis", exc_info=True)
+            return result
+        if self._redis is not None:
+            try:
+                import json as _json
+                raw = await self._redis.hget(self._CLARIFICATION_REDIS_KEY, sender_id)
+                if raw:
+                    await self._redis.hdel(self._CLARIFICATION_REDIS_KEY, sender_id)
+                    return _json.loads(raw)
+            except Exception:
+                logger.warning("Failed to load clarification from Redis", exc_info=True)
+        return None
 
     # ── Public entry point ────────────────────────────────────────────────
 
@@ -133,7 +183,7 @@ class RequestPipeline:
         trace: dict[str, Any] = {"channel": channel, "sender_id": sender_id}
 
         # ── 0. CLARIFICATION RESUME ───────────────────────────────────
-        pending = self._pending_clarifications.pop(sender_id, None)
+        pending = await self._pop_clarification(sender_id)
         if pending is not None:
             pass  # handled below
 
@@ -394,11 +444,14 @@ class RequestPipeline:
         _CLARIFY_PREFIX = "[CLARIFY]"
         if raw_response.startswith(_CLARIFY_PREFIX):
             clarification_q = raw_response[len(_CLARIFY_PREFIX):].strip()
-            self._pending_clarifications[sender_id] = {
+            clarification_data = {
                 "agent_name": agents_used[0] if agents_used else "athena",
                 "original_query": resolved_input,
                 "clarification_question": clarification_q,
             }
+            async with self._state_lock:
+                self._pending_clarifications[sender_id] = clarification_data
+            await self._persist_clarification(sender_id, clarification_data)
             logger.info("CLARIFY | stored pending for %s (sender=%s)", contact_email, sender_id)
             shaped = await self._voice.shape_response(clarification_q, channel)
             return shaped, agents_used
