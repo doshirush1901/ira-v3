@@ -38,6 +38,8 @@ data/machine_knowledge.json
 # ──────────────────────────────────────────────
 dream_log.json
 uv.lock
+*.pdf
+.deepeval/
 
 # ──────────────────────────────────────────────
 # Internal planning docs (not for public repo)

@@ -31,4 +31,4 @@ USER ira
 
 EXPOSE 8000
 
-CMD ["uvicorn", "ira.interfaces.server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "ira.interfaces.server:app", "--host", "0.0.0.0", "--port", "8000", "--limit-concurrency", "5", "--timeout-keep-alive", "30"]
