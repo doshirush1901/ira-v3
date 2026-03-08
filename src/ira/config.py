@@ -63,13 +63,6 @@ class MemoryConfig(BaseSettings):
     api_key: SecretStr = SecretStr("")
 
 
-class TelegramConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TELEGRAM_", **_COMMON)
-
-    bot_token: SecretStr = SecretStr("")
-    admin_chat_id: str = ""
-
-
 class GoogleConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GOOGLE_", **_COMMON)
 
@@ -82,6 +75,10 @@ class GoogleConfig(BaseSettings):
     email_mode: EmailMode = Field(
         default=EmailMode.TRAINING,
         validation_alias="IRA_EMAIL_MODE",
+    )
+    email_poll_enabled: bool = Field(
+        default=False,
+        validation_alias="IRA_EMAIL_POLL",
     )
 
 
@@ -141,6 +138,8 @@ class AppConfig(BaseSettings):
     mem0_timeout: float = 15.0
     neo4j_max_pool_size: int = 50
 
+    max_delegation_depth: int = 5
+
     faithfulness_threshold: float = 0.6
     faithfulness_hard_threshold: float = 0.3
     confidence_floor: float = 0.3
@@ -163,7 +162,6 @@ class Settings(BaseSettings):
     pdfco: PdfCoConfig = PdfCoConfig()
     document_ai: DocumentAIConfig = DocumentAIConfig()
     redis: RedisConfig = RedisConfig()
-    telegram: TelegramConfig = TelegramConfig()
     google: GoogleConfig = GoogleConfig()
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
     search: SearchConfig = SearchConfig()

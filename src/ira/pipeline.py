@@ -100,11 +100,11 @@ class RequestPipeline:
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
         self._recent_messages: dict[str, tuple[str, float]] = {}
         self._state_lock = asyncio.Lock()
-        self._request_semaphore = asyncio.Semaphore(3)
+        self._request_semaphore = asyncio.Semaphore(5)
 
         self._load_pending_clarifications()
 
-    _REQUEST_TIMEOUT = 240
+    _REQUEST_TIMEOUT = 360
     _CLARIFICATION_REDIS_KEY = "ira:pending_clarifications"
 
     def _load_pending_clarifications(self) -> None:
@@ -704,7 +704,15 @@ class RequestPipeline:
                     _state == KnowledgeState.UNCERTAIN
                     and _conf < _assess_cfg.confidence_floor
                 )
-                if _is_unknown or _is_low_uncertain:
+
+                _agents_did_work = len(agents_used) > 1 or (
+                    agents_used and agents_used[0] not in ("athena", "timeout")
+                )
+                _response_has_substance = len(raw_response) > 200
+
+                if (_is_unknown or _is_low_uncertain) and not (
+                    _agents_did_work and _response_has_substance
+                ):
                     raw_response = (
                         "I don't have reliable information to answer this "
                         "question accurately. I'd recommend checking with "
@@ -713,6 +721,14 @@ class RequestPipeline:
                     logger.info(
                         "CONFIDENCE FLOOR | state=%s confidence=%.2f — "
                         "replaced response with honest 'I don't know'",
+                        _state, _conf,
+                    )
+                elif (_is_unknown or _is_low_uncertain) and _agents_did_work:
+                    raw_response = confidence_prefix + raw_response
+                    logger.info(
+                        "CONFIDENCE FLOOR | state=%s confidence=%.2f — "
+                        "agents provided substantive response, prefixing "
+                        "instead of replacing",
                         _state, _conf,
                     )
                 elif _state == KnowledgeState.CONFLICTING:

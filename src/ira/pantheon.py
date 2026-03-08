@@ -165,8 +165,9 @@ class Pantheon:
                 if on_progress:
                     await on_progress({"type": "agent_started", "agent": agent_names[0], "role": getattr(agent, "role", "")})
                 result = await agent.handle(query, ctx)
+                result = result or "(No output)"
                 if on_progress:
-                    await on_progress({"type": "agent_done", "agent": agent_names[0], "preview": result[:200]})
+                    await on_progress({"type": "agent_done", "agent": agent_names[0], "preview": str(result)[:200]})
                 return result
 
         responses = await self._gather_responses(agent_names, query, ctx, on_progress)
@@ -176,9 +177,16 @@ class Pantheon:
 
         if on_progress:
             await on_progress({"type": "synthesizing", "agent": "athena"})
-        return await self._athena.handle(
-            query, {"agent_responses": responses},
-        )
+        try:
+            return await asyncio.wait_for(
+                self._athena.handle(query, {"agent_responses": responses}),
+                timeout=self._SYNTHESIS_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", self._SYNTHESIS_TIMEOUT)
+            return "\n\n---\n\n".join(
+                f"**{name}:** {resp}" for name, resp in responses.items()
+            )
 
     async def _dispatch_athena(
         self,
@@ -207,9 +215,16 @@ class Pantheon:
 
         if on_progress:
             await on_progress({"type": "synthesizing", "agent": "athena"})
-        return await self._athena.handle(
-            query, {"agent_responses": responses},
-        )
+        try:
+            return await asyncio.wait_for(
+                self._athena.handle(query, {"agent_responses": responses}),
+                timeout=self._SYNTHESIS_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", self._SYNTHESIS_TIMEOUT)
+            return "\n\n---\n\n".join(
+                f"**{name}:** {resp}" for name, resp in responses.items()
+            )
 
     # ── board meeting mode ───────────────────────────────────────────────
 
@@ -242,6 +257,7 @@ class Pantheon:
     # ── helpers ──────────────────────────────────────────────────────────
 
     _AGENT_TIMEOUT = get_settings().app.agent_timeout
+    _SYNTHESIS_TIMEOUT = 90
 
     async def _gather_responses(
         self,
@@ -250,7 +266,7 @@ class Pantheon:
         context: dict[str, Any],
         on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, str]:
-        """Run agents sequentially and collect their responses.
+        """Run agents concurrently and collect their responses.
 
         Each agent gets a per-agent timeout to prevent runaway execution.
         An optional *on_progress* callback receives ``agent_started`` and
@@ -263,27 +279,39 @@ class Pantheon:
             ctx["_on_progress"] = on_progress
 
         responses: dict[str, str] = {}
-        for name in agent_names:
+
+        async def _run_agent(name: str) -> tuple[str, str]:
             agent = self._agents.get(name)
             if not agent:
-                responses[name] = f"(Agent '{name}' not found)"
-                continue
+                return name, f"(Agent '{name}' not found)"
             if on_progress:
                 await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
             try:
                 response = await asyncio.wait_for(
-                    agent.handle(query, ctx),
+                    agent.handle(query, {**ctx}),
                     timeout=self._AGENT_TIMEOUT,
                 )
-                responses[name] = response
+                result = name, response
             except asyncio.TimeoutError:
                 logger.warning("Agent '%s' timed out after %ds", name, self._AGENT_TIMEOUT)
-                responses[name] = f"(Agent '{name}' timed out after {self._AGENT_TIMEOUT}s)"
+                result = name, f"(Agent '{name}' timed out after {self._AGENT_TIMEOUT}s)"
             except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed", name)
-                responses[name] = f"(Agent '{name}' encountered an error)"
+                result = name, f"(Agent '{name}' encountered an error)"
             if on_progress:
-                await on_progress({"type": "agent_done", "agent": name, "preview": responses[name][:200]})
+                await on_progress({"type": "agent_done", "agent": result[0], "preview": result[1][:200]})
+            return result
+
+        results = await asyncio.gather(
+            *[_run_agent(name) for name in agent_names],
+            return_exceptions=True,
+        )
+        for item in results:
+            if isinstance(item, BaseException):
+                logger.exception("Agent gather failed: %s", item)
+                continue
+            name, resp = item
+            responses[name] = resp
         return responses
 
     def _parse_agent_list(self, routing_response: str) -> list[str]:

@@ -241,7 +241,7 @@ class AgentLoop:
                     "type": "agent_done",
                     "phase_id": phase.id,
                     "agent": agent_name,
-                    "preview": agent_responses[agent_name][:200],
+                    "preview": str(agent_responses.get(agent_name) or "")[:200],
                 })
 
         # Store results
@@ -361,7 +361,7 @@ RULES:
             await on_progress({"type": "replanning", "reason": trigger_result.decision_reason})
 
         completed_summary = "\n".join(
-            f"Phase {p.id} ({p.title}): {p.result[:300]}"
+            f"Phase {p.id} ({p.title}): {str(p.result or '')[:300]}"
             for p in plan.completed_phases
         )
 

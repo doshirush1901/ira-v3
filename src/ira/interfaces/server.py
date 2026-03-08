@@ -539,10 +539,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _services["respiratory"] = respiratory
 
     # ── Email polling background task ─────────────────────────────────
-    email_poll_task = asyncio.create_task(email_processor.poll_inbox())
-    logger.info(
-        "Email polling started (mode=%s)", settings.google.email_mode.value,
-    )
+    if settings.google.email_poll_enabled:
+        email_poll_task = asyncio.create_task(email_processor.poll_inbox())
+        logger.info(
+            "Email polling started (mode=%s)", settings.google.email_mode.value,
+        )
+    else:
+        logger.info("Email polling disabled (IRA_EMAIL_POLL=false)")
 
     # ── Immune startup validation ─────────────────────────────────────
     try:

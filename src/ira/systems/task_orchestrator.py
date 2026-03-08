@@ -178,7 +178,7 @@ class TaskOrchestrator:
         accumulated: dict[int, dict[str, Any]] = {}
         for idx, phase in enumerate(plan.phases):
             context_summary = self._build_phase_context(accumulated)
-            result = await self._execute_phase(idx, phase, context_summary, on_progress)
+            result = await self._execute_phase(idx, phase, context_summary, on_progress, goal=goal)
             accumulated[idx] = {"title": phase.title, "agent": phase.agent, "result": result}
             state["phase_results"][str(idx)] = result
             await self._save_state(task_id, state)
@@ -262,6 +262,8 @@ class TaskOrchestrator:
         phase: TaskPlanPhase,
         context_from_previous: str,
         on_progress: ProgressCallback | None,
+        *,
+        goal: str = "",
     ) -> str:
         """Run a single phase through the assigned agent."""
         await self._emit(
@@ -275,11 +277,13 @@ class TaskOrchestrator:
             logger.warning("Phase %d: agent '%s' not found", phase_id, phase.agent)
         else:
             task_prompt = phase.description
-            if context_from_previous:
+            if goal:
                 task_prompt = (
-                    f"{phase.description}\n\n"
-                    f"Context from previous phases:\n{context_from_previous}"
+                    f"OVERALL TASK GOAL:\n{goal}\n\n"
+                    f"YOUR PHASE ASSIGNMENT:\n{phase.description}"
                 )
+            if context_from_previous:
+                task_prompt += f"\n\nContext from previous phases:\n{context_from_previous}"
 
             try:
                 result = await asyncio.wait_for(
@@ -293,9 +297,10 @@ class TaskOrchestrator:
                 result = f"(Agent '{phase.agent}' error: {exc})"
                 logger.exception("Phase %d: agent '%s' failed", phase_id, phase.agent)
 
+        result = result or f"(Agent '{phase.agent}' returned no output)"
         await self._emit(
             on_progress, "phase_done",
-            phase_id=phase_id, agent=phase.agent, preview=result[:300],
+            phase_id=phase_id, agent=phase.agent, preview=str(result)[:300],
         )
         return result
 
@@ -361,7 +366,8 @@ class TaskOrchestrator:
             return ""
         parts = []
         for info in accumulated.values():
-            parts.append(f"[{info['title']} — {info['agent']}]: {info['result'][:1000]}")
+            result = str(info.get("result") or "")
+            parts.append(f"[{info['title']} — {info['agent']}]: {result[:1000]}")
         return "\n\n".join(parts)
 
     async def _save_state(self, task_id: str, state: dict[str, Any]) -> None:
