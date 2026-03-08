@@ -86,9 +86,10 @@ coverage.xml
 scripts/migrate_neo4j.py
 
 # ──────────────────────────────────────────────
-# Board meetings (private business data)
+# Board meetings & reports (private business data)
 # ──────────────────────────────────────────────
 data/board_meetings/
+docs/*.txt
 
 # ──────────────────────────────────────────────
 # IDE workspace config
