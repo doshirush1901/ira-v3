@@ -152,17 +152,21 @@ class Pantheon:
             agent_names,
         )
 
+        ctx = {**context}
+        if on_progress:
+            ctx["_on_progress"] = on_progress
+
         if len(agent_names) == 1:
             agent = self._agents.get(agent_names[0])
             if agent:
                 if on_progress:
                     await on_progress({"type": "agent_started", "agent": agent_names[0], "role": getattr(agent, "role", "")})
-                result = await agent.handle(query, context)
+                result = await agent.handle(query, ctx)
                 if on_progress:
                     await on_progress({"type": "agent_done", "agent": agent_names[0], "preview": result[:200]})
                 return result
 
-        responses = await self._gather_responses(agent_names, query, context, on_progress)
+        responses = await self._gather_responses(agent_names, query, ctx, on_progress)
 
         if len(responses) == 1:
             return next(iter(responses.values()))
@@ -183,13 +187,18 @@ class Pantheon:
         logger.info("LLM routing via Athena")
         if on_progress:
             await on_progress({"type": "routing", "agent": "athena"})
-        routing_response = await self._athena.handle(query, context)
+
+        ctx = {**context}
+        if on_progress:
+            ctx["_on_progress"] = on_progress
+
+        routing_response = await self._athena.handle(query, ctx)
 
         agent_names = self._parse_agent_list(routing_response)
         if not agent_names:
             return routing_response
 
-        responses = await self._gather_responses(agent_names, query, context, on_progress)
+        responses = await self._gather_responses(agent_names, query, ctx, on_progress)
         if len(responses) == 1:
             return next(iter(responses.values()))
 
@@ -242,8 +251,14 @@ class Pantheon:
 
         Each agent gets a per-agent timeout to prevent runaway execution.
         An optional *on_progress* callback receives ``agent_started`` and
-        ``agent_done`` events for live streaming.
+        ``agent_done`` events for live streaming.  The callback is also
+        threaded into agent context as ``_on_progress`` so the ReAct loop
+        can emit ``tool_called`` and ``agent_thinking`` events.
         """
+        ctx = {**context}
+        if on_progress and "_on_progress" not in ctx:
+            ctx["_on_progress"] = on_progress
+
         responses: dict[str, str] = {}
         for name in agent_names:
             agent = self._agents.get(name)
@@ -254,7 +269,7 @@ class Pantheon:
                 await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
             try:
                 response = await asyncio.wait_for(
-                    agent.handle(query, context),
+                    agent.handle(query, ctx),
                     timeout=self._AGENT_TIMEOUT,
                 )
                 responses[name] = response

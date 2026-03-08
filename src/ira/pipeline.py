@@ -1,4 +1,4 @@
-"""Master request-processing pipeline — 11 steps from raw input to shaped response.
+"""Master request-processing pipeline — from raw input to shaped response.
 
 Every inbound message, regardless of channel, flows through
 :func:`RequestPipeline.process_request`.  The pipeline is intentionally
@@ -7,10 +7,16 @@ linear so that each step can be individually logged, timed, and tested.
 Steps
 -----
 1. **PERCEIVE** — SensorySystem resolves identity, emotional state, history.
-2. **REMEMBER** — ConversationMemory, RelationshipMemory, GoalManager.
+2. **REMEMBER** — ConversationMemory, coreference resolution, goals.
+2.5. **FAST PATH** — Regex classifier for greetings, identity, thanks, farewells.
+     Matched queries skip stages 3-8 and return in 1-3 seconds.
+2.7. **SPHINX GATE** — Sphinx evaluates query clarity.  Vague queries get
+     clarifying questions returned immediately via ``[CLARIFY]`` prefix.
 3. **ROUTE (Fast)** — DeterministicRouter for keyword-matched intents.
+3.5. **TRUTH HINTS** — Canned answers for known factual questions.
 4. **ROUTE (Procedure)** — ProceduralMemory for learned response patterns.
 5. **ROUTE (LLM)** — Athena for open-ended LLM-based routing.
+5.5. **ENRICH CONTEXT** — AdaptiveStyle, RealTimeObserver, Endocrine, etc.
 6. **EXECUTE** — Routed agent(s) produce a raw response.
 7. **ASSESS** — Metacognition evaluates confidence and adds caveats.
 8. **REFLECT** — InnerVoice surfaces optional reflections.
@@ -229,6 +235,9 @@ class RequestPipeline:
                     logger.exception("Clarification resume failed")
 
         # ── 1. PERCEIVE ───────────────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "perceiving"})
+
         from ira.systems.sensory import PerceptionEvent
 
         event = PerceptionEvent(
@@ -245,10 +254,9 @@ class RequestPipeline:
         logger.info("PERCEIVE | %s | %s", channel, contact_email)
 
         # ── 2. REMEMBER ──────────────────────────────────────────────
-        # Fetch minimal history for coreference resolution and the LEARN
-        # step.  Agents query memory dynamically via their injected
-        # services and ReAct tools — we no longer pre-fetch relationship
-        # or goal snapshots for the agent context.
+        if on_progress:
+            await on_progress({"type": "remembering"})
+
         history = await self._conversation.get_history(
             contact_email, channel, limit=20,
         )
@@ -286,7 +294,79 @@ class RequestPipeline:
             active_goal.goal_type.value if active_goal else "none",
         )
 
+        # ── 2.5 FAST PATH ────────────────────────────────────────────
+        from ira.brain.fast_path import classify as _fp_classify, generate as _fp_generate
+
+        _fast_result = _fp_classify(resolved_input)
+        if _fast_result.matched:
+            if on_progress:
+                await on_progress({"type": "fast_path", "category": _fast_result.category.value if _fast_result.category else None})
+            _fp_response = _fast_result.response
+            if _fp_response is None:
+                _fp_response = await _fp_generate(resolved_input, _fast_result.category)
+            logger.info("FAST PATH | category=%s", _fast_result.category)
+
+            if on_progress:
+                await on_progress({"type": "shaping"})
+            shaped = await self._voice.shape_response(_fp_response, channel)
+
+            await self._learn(
+                contact_email=contact_email,
+                channel=channel,
+                raw_input=raw_input,
+                raw_response=_fp_response,
+                route_method="fast_path",
+                agents_used=["fast_path"],
+                active_goal=active_goal,
+                resolved_input=resolved_input,
+            )
+
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.info("RETURN (fast) | %s | %.0fms", contact_email, elapsed_ms)
+            self._recent_messages[_fingerprint] = (shaped, _now)
+            if self._redis is not None and self._redis.available:
+                await self._redis.dedup_store(_fingerprint, shaped, ttl_seconds=300)
+            return shaped, ["fast_path"]
+
+        # ── 2.7 SPHINX GATE ──────────────────────────────────────────
+        _SPHINX_TIMEOUT = 15
+        try:
+            sphinx = self._pantheon.get_agent("sphinx")
+            if sphinx is not None:
+                if on_progress:
+                    await on_progress({"type": "sphinx_checking"})
+                _sphinx_verdict = await asyncio.wait_for(
+                    sphinx.handle(resolved_input, {"channel": channel, "sender_id": sender_id}),
+                    timeout=_SPHINX_TIMEOUT,
+                )
+                _CLARIFY_TAG = "[CLARIFY]"
+                _CLEAR_TAG = "[CLEAR]"
+                if _sphinx_verdict.startswith(_CLARIFY_TAG):
+                    clarification_q = _sphinx_verdict[len(_CLARIFY_TAG):].strip()
+                    if on_progress:
+                        await on_progress({"type": "sphinx_clarifying", "questions": clarification_q[:300]})
+                    clarification_data = {
+                        "agent_name": "sphinx",
+                        "original_query": resolved_input,
+                        "clarification_question": clarification_q,
+                    }
+                    async with self._state_lock:
+                        self._pending_clarifications[sender_id] = clarification_data
+                    await self._persist_clarification(sender_id, clarification_data)
+                    logger.info("SPHINX CLARIFY | stored pending for %s", contact_email)
+                    shaped = await self._voice.shape_response(clarification_q, channel)
+                    return shaped, ["sphinx"]
+                elif _sphinx_verdict.startswith(_CLEAR_TAG):
+                    logger.info("SPHINX CLEAR | query is actionable")
+        except asyncio.TimeoutError:
+            logger.warning("Sphinx gate timed out after %ds — proceeding", _SPHINX_TIMEOUT)
+        except (IraError, Exception):
+            logger.debug("Sphinx gate failed (non-critical)", exc_info=True)
+
         # ── 3. ROUTE (Fast) ──────────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "routing", "method": "checking"})
+
         routing = self._router.route(resolved_input)
         route_method: str | None = None
         agent_names: list[str] = []
@@ -336,6 +416,9 @@ class RequestPipeline:
             logger.info("ROUTE LLM | delegating to Athena")
 
         # ── 5.5 ENRICH CONTEXT ─────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "enriching"})
+
         enrichment_parts: list[str] = []
 
         try:
@@ -457,6 +540,9 @@ class RequestPipeline:
             return shaped, agents_used
 
         # ── 7. ASSESS ────────────────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "assessing"})
+
         confidence_prefix = ""
         if self._metacognition is not None:
             try:
@@ -480,6 +566,9 @@ class RequestPipeline:
                 logger.exception("Metacognition assessment failed")
 
         # ── 8. REFLECT ───────────────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "reflecting"})
+
         reflection_text = ""
         if self._inner_voice is not None:
             try:
@@ -493,6 +582,9 @@ class RequestPipeline:
                 logger.exception("InnerVoice reflection failed")
 
         # ── 9. SHAPE ─────────────────────────────────────────────────
+        if on_progress:
+            await on_progress({"type": "shaping"})
+
         full_response = confidence_prefix + raw_response + reflection_text
 
         recipient = Contact(

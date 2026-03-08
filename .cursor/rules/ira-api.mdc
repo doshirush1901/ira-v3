@@ -75,7 +75,36 @@ Tell the user which services are healthy, degraded, or unavailable.
 
 ## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
 
-When the user mentions @Ira and asks a question, POST to the running server:
+When the user mentions @Ira and asks a question, use the **streaming endpoint** for live progress:
+
+```bash
+curl -s -N -X POST http://localhost:8000/api/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"query": "<user question>", "user_id": "rushabh_doshi"}'
+```
+
+This returns Server-Sent Events (SSE). Parse the output and display progress to the user as it arrives:
+
+- `event: perceiving` — "Perceiving input..."
+- `event: remembering` — "Recalling context..."
+- `event: fast_path` — "Fast path matched: <category>" (query answered in 1-3s)
+- `event: sphinx_checking` — "Checking query clarity..."
+- `event: sphinx_clarifying` — Ira is asking clarifying questions
+- `event: routing` — "Routing query..."
+- `event: agent_started` — "Consulting <agent> (<role>)..."
+- `event: tool_called` — "<agent> is using <tool>..."
+- `event: agent_thinking` — "<agent> is thinking (iteration <n>)..."
+- `event: agent_done` — "<agent> finished"
+- `event: synthesizing` — "Athena is synthesizing responses..."
+- `event: enriching` — "Enriching context..."
+- `event: assessing` — "Assessing confidence..."
+- `event: reflecting` — "Reflecting..."
+- `event: shaping` — "Shaping response..."
+- `event: final_answer` — The final response JSON: `{"response": "...", "agents_consulted": [...]}`
+
+Display each progress event as a brief status line, then format the `final_answer` response as clean Markdown.
+
+**Fallback:** If the streaming endpoint fails or the user prefers non-streaming, use the regular endpoint:
 
 ```bash
 curl -s -X POST http://localhost:8000/api/query \
@@ -83,10 +112,25 @@ curl -s -X POST http://localhost:8000/api/query \
   -d '{"query": "<user question>", "user_id": "rushabh_doshi"}'
 ```
 
-The response JSON has `{"response": "...", "agents_consulted": [...]}`.
-- Format `response` as clean Markdown for the user.
-- Mention which agents were consulted if the list is non-empty.
 - If connection is refused, tell the user to start Ira first (see section 1).
+
+## 2b. Complex Tasks ("@Ira do a full analysis...", "@Ira prepare a proposal...")
+
+For complex multi-step tasks (research, analysis, proposals, reports), use the **Task Loop** instead of a single query. See `.cursor/rules/ira-task-loop.mdc` for the full protocol.
+
+Quick reference:
+
+```bash
+# Start a task (returns SSE stream)
+curl -s -N -X POST http://localhost:8000/api/task/stream \
+  -H "Content-Type: application/json" \
+  -d '{"goal": "<complex request>", "user_id": "rushabh_doshi", "output_format": "markdown"}'
+
+# Resume after clarification
+curl -s -N -X POST http://localhost:8000/api/task/clarify \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": "<task_id from stream>", "answer": "<user answer>"}'
+```
 
 ## 3. Feedback / Corrections ("that's wrong", "actually it's...")
 

@@ -423,6 +423,133 @@ class TestUnifiedRetriever:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+class TestFastPath:
+    """Tests for the fast-path classifier (greetings, identity, etc.)."""
+
+    def test_greeting_hi(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Hi")
+        assert result.matched is True
+        assert result.category == FastPathCategory.GREETING
+        assert result.response is not None
+
+    def test_greeting_hello(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Hello!")
+        assert result.matched is True
+        assert result.category == FastPathCategory.GREETING
+
+    def test_greeting_good_morning(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Good morning")
+        assert result.matched is True
+        assert result.category == FastPathCategory.GREETING
+
+    def test_farewell_bye(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Bye!")
+        assert result.matched is True
+        assert result.category == FastPathCategory.FAREWELL
+        assert result.response is not None
+
+    def test_farewell_take_care(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Take care")
+        assert result.matched is True
+        assert result.category == FastPathCategory.FAREWELL
+
+    def test_thanks_thank_you(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Thank you!")
+        assert result.matched is True
+        assert result.category == FastPathCategory.THANKS
+        assert result.response is not None
+
+    def test_thanks_thx(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("thx")
+        assert result.matched is True
+        assert result.category == FastPathCategory.THANKS
+
+    def test_identity_who_are_you(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Who are you?")
+        assert result.matched is True
+        assert result.category == FastPathCategory.IDENTITY
+        assert result.response is None  # needs LLM call
+
+    def test_identity_what_is_ira(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("What is Ira?")
+        assert result.matched is True
+        assert result.category == FastPathCategory.IDENTITY
+
+    def test_identity_introduce_yourself(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("Introduce yourself")
+        assert result.matched is True
+        assert result.category == FastPathCategory.IDENTITY
+
+    def test_simple_chat_how_are_you(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("How are you?")
+        assert result.matched is True
+        assert result.category == FastPathCategory.SIMPLE_CHAT
+        assert result.response is not None
+
+    def test_simple_chat_you_there(self):
+        from ira.brain.fast_path import FastPathCategory, classify
+        result = classify("You there?")
+        assert result.matched is True
+        assert result.category == FastPathCategory.SIMPLE_CHAT
+
+    def test_no_match_business_query(self):
+        from ira.brain.fast_path import classify
+        result = classify("What's the lead time for a PF1?")
+        assert result.matched is False
+
+    def test_no_match_complex_question(self):
+        from ira.brain.fast_path import classify
+        result = classify("Show me the sales pipeline and all active deals")
+        assert result.matched is False
+
+    def test_no_match_empty_string(self):
+        from ira.brain.fast_path import classify
+        result = classify("")
+        assert result.matched is False
+
+    def test_no_match_long_text(self):
+        from ira.brain.fast_path import classify
+        result = classify("x" * 250)
+        assert result.matched is False
+
+    @pytest.mark.asyncio
+    async def test_generate_identity(self):
+        from unittest.mock import AsyncMock, patch
+        from ira.brain.fast_path import FastPathCategory, generate
+
+        with patch("ira.brain.fast_path.get_llm_client") as mock_get:
+            mock_llm = AsyncMock()
+            mock_llm.generate_text_with_fallback = AsyncMock(
+                return_value="I'm Ira, the AI running Machinecraft."
+            )
+            mock_get.return_value = mock_llm
+            result = await generate("Who are you?", FastPathCategory.IDENTITY)
+
+        assert "Ira" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_canned_greeting(self):
+        from ira.brain.fast_path import FastPathCategory, generate
+        result = await generate("Hi", FastPathCategory.GREETING)
+        assert len(result) > 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5. DeterministicRouter
+# ═════════════════════════════════════════════════════════════════════════════
+
+
 class TestDeterministicRouter:
 
     @pytest.mark.parametrize(

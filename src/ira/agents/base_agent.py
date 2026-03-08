@@ -499,6 +499,7 @@ class BaseAgent(ABC):
         context: dict[str, Any] | None = None,
         *,
         system_prompt: str = "",
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> str:
         """Execute the ReAct (Reason-Act-Observe) loop.
 
@@ -518,7 +519,11 @@ class BaseAgent(ABC):
         system_prompt:
             The agent-specific system prompt to prepend to the ReAct
             protocol.  If empty, a minimal default is used.
+        on_progress:
+            Optional async callback for streaming progress events.
         """
+        _progress = on_progress or (context or {}).get("_on_progress")
+
         if context and "services" in context:
             for key, svc in context["services"].items():
                 if svc is not None and key not in self._services:
@@ -541,6 +546,9 @@ class BaseAgent(ABC):
 
         for iteration in range(self.max_iterations):
             self.state = AgentState.THINKING
+            if _progress:
+                await _progress({"type": "agent_thinking", "agent": self.name, "iteration": iteration + 1})
+
             decision = await self._reason(agent_prompt, query, context, scratchpad)
 
             thought = decision.get("thought", "")
@@ -566,6 +574,13 @@ class BaseAgent(ABC):
                 "%s [iter %d] calling tool '%s'",
                 self.name, iteration + 1, tool_name,
             )
+            if _progress:
+                await _progress({
+                    "type": "tool_called",
+                    "agent": self.name,
+                    "tool": tool_name,
+                    "iteration": iteration + 1,
+                })
             observation = await self._execute_tool(tool_name, tool_input)
 
             self.state = AgentState.OBSERVING
