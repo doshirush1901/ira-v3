@@ -107,8 +107,13 @@ def _read_pdf_document_ai(path: Path) -> str:
             return ""
 
         import asyncio
+        import concurrent.futures
 
         svc = DocumentAIService()
+
+        async def _ocr() -> str:
+            await svc.connect()
+            return await svc.extract_text(path.read_bytes())
 
         loop = None
         try:
@@ -117,13 +122,14 @@ def _read_pdf_document_ai(path: Path) -> str:
             pass
 
         if loop and loop.is_running():
-            return ""
-
-        async def _ocr() -> str:
-            await svc.connect()
-            return await svc.extract_text(path.read_bytes())
-
-        return asyncio.run(_ocr())
+            future = asyncio.run_coroutine_threadsafe(_ocr(), loop)
+            try:
+                return future.result(timeout=120)
+            except (concurrent.futures.TimeoutError, Exception):
+                logger.warning("Document AI OCR timed out for %s", path)
+                return ""
+        else:
+            return asyncio.run(_ocr())
     except Exception:
         logger.warning("Document AI OCR fallback failed for %s", path, exc_info=True)
         return ""

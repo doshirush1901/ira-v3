@@ -38,6 +38,13 @@ class PricingLearner:
         self._qdrant = qdrant_manager
         self._quotes = quotes_manager
         self._index: dict[str, Any] = json.loads(json.dumps(_EMPTY_INDEX))
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Load the price index from disk. Call before first use."""
+        self._index = await self._load_index()
+        self._initialized = True
+        logger.info("PricingLearner initialised with %d models", len(self._index.get("models", {})))
 
     # ── persistence ───────────────────────────────────────────────────────
 
@@ -68,6 +75,8 @@ class PricingLearner:
 
     async def learn_from_quotes(self) -> dict[str, Any]:
         """Scan the quotes database, extract prices, and update the index."""
+        if not self._initialized:
+            await self.initialize()
         if self._quotes is None:
             logger.debug("No quotes manager; skipping quote-based learning")
             return {"status": "skipped", "reason": "no quotes manager"}

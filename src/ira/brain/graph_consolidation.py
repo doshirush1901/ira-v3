@@ -118,9 +118,11 @@ class GraphConsolidation:
             try:
                 result = await self._graph._run_cypher_write(
                     """
-                    MATCH (a) WHERE (a.name = $a OR a.email = $a OR a.model = $a)
+                    MATCH (a) WHERE (a.name = $a OR a.email = $a OR a.model = $a
+                                     OR a.source = $a)
                                     AND size(labels(a)) > 0
-                    MATCH (b) WHERE (b.name = $b OR b.email = $b OR b.model = $b)
+                    MATCH (b) WHERE (b.name = $b OR b.email = $b OR b.model = $b
+                                     OR b.source = $b)
                                     AND size(labels(b)) > 0
                     WITH a, b LIMIT 1
                     MERGE (a)-[r:CO_RELEVANT]-(b)
@@ -187,6 +189,7 @@ class GraphConsolidation:
                 MATCH (n)
                 WHERE n.name IS NOT NULL AND size(labels(n)) > 0
                       AND NOT n.name IN $active
+                      AND NOT COALESCE(n.source, '') IN $active
                 SET n.stale = true, n.stale_since = $now
                 RETURN count(n) AS decayed
                 """,

@@ -192,17 +192,19 @@ class FeedbackHandler:
 
             if self._mem0_client is not None:
                 try:
-                    self._mem0_client.add(
-                        [
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"Correction: {correction_text} "
-                                    f"(original query: {previous_query})"
-                                ),
-                            }
-                        ],
-                        user_id=user_id or "global",
+                    import asyncio as _aio
+                    _mem0_messages = [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Correction: {correction_text} "
+                                f"(original query: {previous_query})"
+                            ),
+                        }
+                    ]
+                    _mem0_uid = user_id or "global"
+                    await _aio.to_thread(
+                        lambda: self._mem0_client.add(_mem0_messages, user_id=_mem0_uid)
                     )
                 except (DatabaseError, Exception):
                     logger.exception("Mem0 correction storage failed")

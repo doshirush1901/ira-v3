@@ -257,10 +257,8 @@ class UnifiedRetriever:
         if self._mem0 is None:
             return []
         try:
-            raw = self._mem0.search(
-                query,
-                user_id="global",
-                top_k=limit,
+            raw = await asyncio.to_thread(
+                lambda: self._mem0.search(query, user_id="global", top_k=limit)
             )
             memories = raw.get("results", raw) if isinstance(raw, dict) else raw
             return [
@@ -282,9 +280,9 @@ class UnifiedRetriever:
         try:
             from ira.brain.graph_consolidation import GraphConsolidation
             gc = GraphConsolidation(knowledge_graph=self._graph)
-            chunks = [r.get("content", "")[:100] for r in results[:10]]
-            sources = [r.get("source_type", "") for r in results[:10]]
-            await gc.log_retrieval(query, chunks, sources)
+            source_ids = [r.get("source", r.get("id", ""))[:200] for r in results[:10]]
+            source_types = [r.get("source_type", "") for r in results[:10]]
+            await gc.log_retrieval(query, source_ids, source_types)
         except (DatabaseError, Exception):
             logger.warning("Retrieval logging failed", exc_info=True)
 

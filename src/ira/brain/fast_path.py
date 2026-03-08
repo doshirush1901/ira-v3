@@ -156,7 +156,7 @@ def classify(query: str) -> FastPathResult:
             category=FastPathCategory.THANKS,
         )
 
-    if _IDENTITY_PATTERNS.search(text):
+    if _IDENTITY_PATTERNS.search(text) and len(text) < 60:
         return FastPathResult(
             matched=True,
             response=None,

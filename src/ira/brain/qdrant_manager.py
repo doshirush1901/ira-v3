@@ -249,6 +249,26 @@ class QdrantManager:
             logger.exception("Failed to delete points for source '%s'", source)
             raise
 
+    # ── payload updates ─────────────────────────────────────────────────
+
+    async def set_payload(
+        self,
+        point_id: str,
+        payload: dict[str, Any],
+        collection: str | None = None,
+    ) -> None:
+        """Update payload fields on an existing point without re-embedding."""
+        col = collection or self._default_collection
+        try:
+            await self._client.set_payload(
+                collection_name=col,
+                payload=payload,
+                points=[point_id],
+            )
+        except (DatabaseError, Exception):
+            logger.warning("set_payload failed for point %s", point_id, exc_info=True)
+            raise
+
     # ── cleanup ──────────────────────────────────────────────────────────
 
     async def close(self) -> None:

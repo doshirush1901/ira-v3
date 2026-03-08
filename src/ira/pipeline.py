@@ -553,6 +553,23 @@ class RequestPipeline:
         trace["agents"] = agents_used
         logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
 
+        # ── 6.3 GAP RESOLUTION ───────────────────────────────────────
+        gapper = self._pantheon.get_agent("gapper")
+        if gapper is not None:
+            try:
+                from ira.agents.gapper import detect_gaps
+                gaps = detect_gaps(raw_response)
+                if gaps:
+                    if on_progress:
+                        await on_progress({"type": "gap_resolving", "gaps": len(gaps)})
+                    logger.info("GAP RESOLVE | %d gaps detected, invoking Gapper", len(gaps))
+                    resolved = await gapper.resolve_gaps(raw_response, resolved_input)
+                    if resolved and resolved != raw_response:
+                        raw_response = resolved
+                        agents_used.append("gapper")
+            except Exception:
+                logger.exception("Gapper resolution failed, continuing with original response")
+
         # ── 6.5 CLARIFICATION CHECK ──────────────────────────────────
         _CLARIFY_PREFIX = "[CLARIFY]"
         if raw_response.startswith(_CLARIFY_PREFIX):

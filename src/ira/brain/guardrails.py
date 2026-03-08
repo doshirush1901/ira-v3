@@ -15,6 +15,7 @@ deterministic, fast validation checks.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -99,7 +100,7 @@ async def validate_output(text: str) -> dict[str, Any]:
         return {"valid": True, "issues": [], "sanitized": text}
 
     try:
-        result = guard.validate(text)
+        result = await asyncio.to_thread(guard.validate, text)
         issues = []
 
         if result.validation_passed is False:

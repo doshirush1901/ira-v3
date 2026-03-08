@@ -34,7 +34,7 @@ from ira.services.llm_client import get_llm_client
 logger = logging.getLogger(__name__)
 
 _GUIDANCE_PATH = Path("data/brain/training_guidance.json")
-_LEARNED_PATH = Path("data/brain/learned_corrections.json")
+_LEARNED_PATH = Path("data/brain/sleep_trainer_ledger.json")
 
 _TRUTH_HINT_SYSTEM = (
     "You are a knowledge-correction analyst. Given a list of corrections, "
@@ -135,13 +135,21 @@ class SleepTrainer:
                 for hit in stale_hits:
                     if hit.get("score", 0) < 0.6:
                         continue
-                    # Qdrant doesn't support partial payload updates through our
-                    # manager, so we re-upsert the point with _superseded metadata.
-                    existing_meta = hit.get("metadata", {})
-                    existing_meta["_superseded"] = True
-                    existing_meta["superseded_by"] = correction["id"]
-                    existing_meta["superseded_at"] = datetime.now(timezone.utc).isoformat()
-                    flagged += 1
+                    point_id = hit.get("id")
+                    if not point_id:
+                        continue
+                    try:
+                        await self._qdrant.set_payload(point_id, {
+                            "metadata": {
+                                **hit.get("metadata", {}),
+                                "_superseded": True,
+                                "superseded_by": correction["id"],
+                                "superseded_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        })
+                        flagged += 1
+                    except (DatabaseError, Exception):
+                        logger.debug("Failed to flag stale point %s", point_id, exc_info=True)
 
             for hint in hints:
                 answer = hint.get("answer", "")

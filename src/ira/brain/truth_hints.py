@@ -29,6 +29,7 @@ _MATCH_THRESHOLD = 3
 _PATTERN_WEIGHT = 5
 _KEYWORD_WEIGHT = 1
 _PRICING_STALENESS_DAYS = 90
+_GENERAL_STALENESS_DAYS = 180
 
 _PRICING_KEYWORDS = frozenset({
     "price", "pricing", "cost", "quote", "discount", "margin",
@@ -91,6 +92,8 @@ class TruthHintsEngine:
 
         for hint in self._all_hints():
             if self._is_stale_pricing(hint, query_lower):
+                continue
+            if self._is_stale_learned(hint):
                 continue
 
             score = self._score(hint, query, query_lower)
@@ -159,14 +162,18 @@ class TruthHintsEngine:
 
     @staticmethod
     def _is_stale_pricing(hint: dict[str, Any], query_lower: str) -> bool:
-        """Skip pricing hints older than the staleness window."""
+        """Skip pricing hints older than the staleness window.
+
+        Manual hints (without ``created_at``) are treated as curated and
+        never stale.  Only learned hints with a timestamp are age-checked.
+        """
         is_pricing = any(kw in query_lower for kw in _PRICING_KEYWORDS)
         if not is_pricing:
             return False
 
-        created = hint.get("created_at")
+        created = hint.get("created_at") or hint.get("added_at")
         if not created:
-            return True
+            return False
         try:
             ts = datetime.fromisoformat(created)
             if ts.tzinfo is None:
@@ -174,7 +181,25 @@ class TruthHintsEngine:
             age_days = (datetime.now(timezone.utc) - ts).days
             return age_days > _PRICING_STALENESS_DAYS
         except (ValueError, TypeError):
-            return True
+            return False
+
+    @staticmethod
+    def _is_stale_learned(hint: dict[str, Any]) -> bool:
+        """Expire learned hints (with ``added_at``) older than the general window.
+
+        Manual hints (without timestamps) are never expired.
+        """
+        added = hint.get("added_at")
+        if not added:
+            return False
+        try:
+            ts = datetime.fromisoformat(added)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - ts).days
+            return age_days > _GENERAL_STALENESS_DAYS
+        except (ValueError, TypeError):
+            return False
 
     async def _persist_learned(self) -> None:
         self._learned_path.parent.mkdir(parents=True, exist_ok=True)

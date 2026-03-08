@@ -180,13 +180,21 @@ class KnowledgeDiscovery:
                 if not content:
                     continue
 
+                entity = fact.get("entity", "")
+                if entity and await self._contradicts_existing(entity, content):
+                    logger.warning(
+                        "Discovery skipped contradicting fact for '%s': %s",
+                        entity, content[:80],
+                    )
+                    continue
+
                 item = KnowledgeItem(
                     source=f"discovery:{filepath}",
                     source_category=fact.get("category", "discovered").lower(),
                     content=content,
                     metadata={
                         "discovery_source": filepath,
-                        "entity": fact.get("entity", ""),
+                        "entity": entity,
                         "gap_type": gap.get("gap_type", ""),
                         "original_query": query[:200],
                     },
@@ -203,4 +211,33 @@ class KnowledgeDiscovery:
             query[:60],
         )
         return discovered
+
+    async def _contradicts_existing(self, entity: str, new_content: str) -> bool:
+        """Check if new content contradicts existing KB entries for an entity.
+
+        Returns True if a contradiction is detected, False otherwise.
+        Errs on the side of allowing the upsert (returns False on failure).
+        """
+        try:
+            existing = await self._qdrant.search(entity, limit=3)
+            if not existing:
+                return False
+
+            existing_text = " | ".join(
+                r.get("content", "")[:200] for r in existing if r.get("score", 0) > 0.6
+            )
+            if not existing_text:
+                return False
+
+            verdict = await self._llm.generate_text(
+                "You are a fact-checker. Given EXISTING facts and a NEW fact about "
+                "the same entity, determine if the NEW fact contradicts the EXISTING "
+                "facts. Reply with only YES or NO.",
+                f"Entity: {entity}\nEXISTING: {existing_text}\nNEW: {new_content[:300]}",
+                name="discovery.contradiction_check",
+            )
+            return verdict.strip().upper().startswith("YES")
+        except (IraError, Exception):
+            logger.debug("Contradiction check failed; allowing upsert", exc_info=True)
+            return False
 

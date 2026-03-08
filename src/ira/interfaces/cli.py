@@ -845,32 +845,47 @@ def email_sync(
     _run(_sync())
 
 
+_MC_SALES_QUERY = (
+    "{from:machinecraft.org OR from:machinecraft.in "
+    "OR to:machinecraft.org OR to:machinecraft.in "
+    "OR subject:machinecraft OR subject:thermoform OR subject:vacuum form "
+    "OR subject:PF1 OR subject:PF2 OR subject:ATF "
+    "OR subject:quote OR subject:proposal OR subject:pricing "
+    "OR subject:order OR subject:delivery OR subject:inquiry}"
+)
+
+
 @email_app.command("rescan")
 def email_rescan(
     after: str = typer.Option("2023/03/08", "--after", help="Start date YYYY/MM/DD (inclusive)."),
     before: str = typer.Option("2026/03/08", "--before", help="End date YYYY/MM/DD (exclusive)."),
+    query: str = typer.Option(
+        _MC_SALES_QUERY, "--query", "-q",
+        help="Gmail search query to narrow the scan. Default: Machinecraft machine sales only.",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify but don't write to CRM/Qdrant."),
     resume: bool = typer.Option(False, "--resume", help="Resume from last checkpoint."),
     throttle: float = typer.Option(0.1, "--throttle", help="Seconds between message fetches."),
     skip_crm: bool = typer.Option(False, "--skip-crm-populate", help="Skip the CRM population phase."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Deep-scan historical Gmail and build sales intelligence.
+    """Deep-scan historical Gmail and build Machinecraft sales intelligence.
 
-    Scans your entire mailbox within the date range, digests every
-    business-relevant email through the full pipeline (Delphi
-    classification, DigestiveSystem protein extraction, Neo4j entity
-    graph, CRM contact/deal creation), then runs CRM population to
-    classify all discovered contacts.
+    By default, scans ONLY emails related to Machinecraft machine sales:
+    emails sent/received by machinecraft.org, or containing machine model
+    names (PF1, PF2, ATF), or sales keywords (quote, proposal, pricing,
+    order, delivery, inquiry).
+
+    Use --query "" to scan all emails (much slower).
 
     Phase 1: Deep email scan (fetch, classify, digest, CRM interactions)
     Phase 2: CRM population (classify contacts, insert eligible ones)
-    Phase 3: Summary report
+    Phase 3: Sales intelligence report (4 categories)
 
     Examples::
 
-        ira email rescan --after 2023/01/01 --before 2026/03/08
-        ira email rescan --dry-run --after 2024/01/01
+        ira email rescan --after 2025/01/01 --before 2026/03/09
+        ira email rescan --query "" --after 2024/01/01   # scan everything
         ira email rescan --resume
     """
     _configure_logging(verbose)
@@ -883,13 +898,15 @@ def email_rescan(
         crm = shared[SK.CRM]
         await crm.create_tables()
 
+        query_label = query[:80] + "..." if len(query) > 80 else query
         console.print(Panel(
             f"[bold]Date range:[/bold]  {after} → {before}\n"
+            f"[bold]Query:[/bold]       {query_label or '[dim]all emails[/dim]'}\n"
             f"[bold]Mode:[/bold]        {'[yellow]DRY RUN[/yellow]' if dry_run else '[green]LIVE[/green]'}\n"
             f"[bold]Resume:[/bold]      {'yes' if resume else 'no'}\n"
             f"[bold]Throttle:[/bold]    {throttle}s between messages\n"
             f"[bold]CRM populate:[/bold] {'skip' if skip_crm else 'yes'}",
-            title="Deep Mailbox Rescan",
+            title="Deep Mailbox Rescan — Machinecraft Sales",
             border_style="blue",
         ))
 
@@ -940,6 +957,7 @@ def email_rescan(
                 dry_run=dry_run,
                 progress_callback=on_progress,
                 artemis=artemis,
+                gmail_query=query,
             )
 
         scan_table = Table(title="Phase 1: Email Scan Results")

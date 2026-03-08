@@ -763,3 +763,191 @@ class TestGoalManagerSweep:
 
         stalled = await goal_manager.sweep_stalled_goals(stale_hours=48)
         assert len(stalled) == 0
+
+
+# ── WP2: Cross-Agent Memory Consistency Tests ─────────────────────────────────
+
+
+class TestSleepTrainerEventEmission:
+    """Verify SleepTrainer emits KNOWLEDGE_CORRECTED events."""
+
+    @pytest.mark.asyncio
+    async def test_emits_events_after_training(self):
+        from ira.brain.sleep_trainer import SleepTrainer
+        from ira.schemas.llm_outputs import TruthHint, TruthHints
+
+        store = MagicMock()
+        store.get_pending_corrections = AsyncMock(return_value=[
+            {"id": 1, "entity": "PF1", "category": "SPECS", "severity": "HIGH",
+             "old_value": "400T", "new_value": "500T", "source": "test", "created_at": "2025-01-01"},
+        ])
+        store.mark_processed = AsyncMock()
+
+        qdrant = MagicMock()
+        qdrant.search = AsyncMock(return_value=[])
+        qdrant.upsert_items = AsyncMock()
+
+        embedding = MagicMock()
+        event_bus = MagicMock()
+        event_bus.emit = AsyncMock()
+
+        mock_llm = _mock_llm_client()
+        mock_llm.generate_structured = AsyncMock(
+            return_value=TruthHints(hints=[TruthHint(pattern="PF1 capacity", answer="500T", entity="PF1", category="SPECS")])
+        )
+
+        with patch("ira.brain.sleep_trainer.get_llm_client", return_value=mock_llm):
+            trainer = SleepTrainer(
+                correction_store=store,
+                qdrant_manager=qdrant,
+                embedding_service=embedding,
+                data_event_bus=event_bus,
+            )
+            stats = await trainer.run_training()
+
+        assert stats["status"] == "completed"
+        event_bus.emit.assert_called()
+        emitted_event = event_bus.emit.call_args[0][0]
+        assert emitted_event.event_type.value == "knowledge_corrected"
+
+    @pytest.mark.asyncio
+    async def test_no_event_without_bus(self):
+        from ira.brain.sleep_trainer import SleepTrainer
+
+        store = MagicMock()
+        store.get_pending_corrections = AsyncMock(return_value=[])
+
+        qdrant = MagicMock()
+        embedding = MagicMock()
+
+        with patch("ira.brain.sleep_trainer.get_llm_client", return_value=_mock_llm_client()):
+            trainer = SleepTrainer(
+                correction_store=store,
+                qdrant_manager=qdrant,
+                embedding_service=embedding,
+                data_event_bus=None,
+            )
+            stats = await trainer.run_training()
+
+        assert stats["status"] == "no_corrections"
+
+
+class TestFeedbackHandlerEventEmission:
+    """Verify FeedbackHandler emits KNOWLEDGE_CORRECTED on negative feedback."""
+
+    @pytest.mark.asyncio
+    async def test_emits_event_on_correction(self):
+        from ira.brain.feedback_handler import FeedbackHandler
+
+        store = MagicMock()
+        store.add_correction = AsyncMock(return_value=42)
+        event_bus = MagicMock()
+        event_bus.emit = AsyncMock()
+
+        mock_llm = _mock_llm_client()
+        with patch("ira.brain.feedback_handler.get_llm_client", return_value=mock_llm):
+            handler = FeedbackHandler(
+                correction_store=store,
+                data_event_bus=event_bus,
+            )
+
+        result = await handler.process_feedback(
+            message="That's wrong, it's 500T not 400T",
+            previous_query="PF1 capacity",
+            previous_response="The PF1 has 400T capacity",
+            agents_used=["clio"],
+        )
+
+        assert result["polarity"] == "negative"
+        event_bus.emit.assert_called()
+
+
+class TestCorrectionLearnerReload:
+    """Verify CorrectionLearner reloads on KNOWLEDGE_CORRECTED event."""
+
+    @pytest.mark.asyncio
+    async def test_on_knowledge_corrected_reloads(self, tmp_path):
+        from ira.brain.correction_learner import CorrectionLearner
+
+        data_path = tmp_path / "learned.json"
+        data_path.write_text(json.dumps({
+            "competitors": ["CompX"],
+            "customers": [],
+            "prospects": [],
+            "entity_corrections": {},
+            "price_corrections": [],
+        }))
+
+        learner = CorrectionLearner(data_path=data_path)
+        learner._state = await learner._load()
+        assert learner.is_competitor("CompX")
+
+        data_path.write_text(json.dumps({
+            "competitors": ["CompX", "CompY"],
+            "customers": [],
+            "prospects": [],
+            "entity_corrections": {},
+            "price_corrections": [],
+        }))
+
+        event = MagicMock()
+        await learner.on_knowledge_corrected(event)
+        assert learner.is_competitor("CompY")
+
+
+# ── WP3: Hierarchical Memory Tests ───────────────────────────────────────────
+
+
+class TestConversationSummarizedHistory:
+    """Verify get_summarized_history returns recent + summary."""
+
+    @pytest.mark.asyncio
+    async def test_returns_recent_and_summary(self, tmp_path):
+        from ira.memory.conversation import ConversationMemory
+
+        db_path = str(tmp_path / "conv_test.db")
+        mock_llm = _mock_llm_client()
+        mock_llm.generate_text = AsyncMock(return_value="User discussed PF1 pricing and delivery.")
+
+        with patch("ira.memory.conversation.get_llm_client", return_value=mock_llm):
+            conv = ConversationMemory(db_path=db_path)
+            await conv.initialize()
+
+        for i in range(10):
+            await conv.add_message("user@test.com", "CLI", "user", f"Message {i}")
+            await conv.add_message("user@test.com", "CLI", "assistant", f"Response {i}")
+
+        with patch("ira.memory.conversation.get_llm_client", return_value=mock_llm):
+            conv._llm = mock_llm
+            recent, summary = await conv.get_summarized_history(
+                "user@test.com", "CLI", recent_limit=3, full_limit=20,
+            )
+
+        assert len(recent) == 3
+        assert summary != ""
+        assert "PF1" in summary
+
+        await conv.close()
+
+    @pytest.mark.asyncio
+    async def test_short_history_returns_empty_summary(self, tmp_path):
+        from ira.memory.conversation import ConversationMemory
+
+        db_path = str(tmp_path / "conv_test2.db")
+        mock_llm = _mock_llm_client()
+
+        with patch("ira.memory.conversation.get_llm_client", return_value=mock_llm):
+            conv = ConversationMemory(db_path=db_path)
+            await conv.initialize()
+
+        await conv.add_message("user@test.com", "CLI", "user", "Hello")
+        await conv.add_message("user@test.com", "CLI", "assistant", "Hi there")
+
+        recent, summary = await conv.get_summarized_history(
+            "user@test.com", "CLI", recent_limit=5,
+        )
+
+        assert len(recent) == 2
+        assert summary == ""
+
+        await conv.close()

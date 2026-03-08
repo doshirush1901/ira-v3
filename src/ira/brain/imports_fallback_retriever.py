@@ -348,6 +348,8 @@ async def queue_for_deferred_ingestion(
     Uses atomic write (temp file + rename) to prevent corruption.
     """
     def _write() -> None:
+        import fcntl
+
         DEFERRED_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
         entry = json.dumps({
             "filepath": filepath,
@@ -358,24 +360,30 @@ async def queue_for_deferred_ingestion(
             "status": "pending",
         })
 
-        existing = ""
-        if DEFERRED_QUEUE_PATH.exists():
-            existing = DEFERRED_QUEUE_PATH.read_text()
+        lock_path = DEFERRED_QUEUE_PATH.with_suffix(".lock")
+        with open(lock_path, "w") as lock_f:
+            fcntl.flock(lock_f, fcntl.LOCK_EX)
+            try:
+                existing = ""
+                if DEFERRED_QUEUE_PATH.exists():
+                    existing = DEFERRED_QUEUE_PATH.read_text()
 
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w") as f:
-                if existing:
-                    f.write(existing)
-                    if not existing.endswith("\n"):
-                        f.write("\n")
-                f.write(entry + "\n")
-            os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
-        except (IraError, Exception):
-            os.unlink(tmp_path)
-            raise
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=str(DEFERRED_QUEUE_PATH.parent), suffix=".tmp",
+                )
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        if existing:
+                            f.write(existing)
+                            if not existing.endswith("\n"):
+                                f.write("\n")
+                        f.write(entry + "\n")
+                    os.replace(tmp_path, str(DEFERRED_QUEUE_PATH))
+                except (IraError, Exception):
+                    os.unlink(tmp_path)
+                    raise
+            finally:
+                fcntl.flock(lock_f, fcntl.LOCK_UN)
 
     try:
         await asyncio.to_thread(_write)

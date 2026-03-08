@@ -165,14 +165,24 @@ def _compile(patterns: Sequence[tuple[str, IntentCategory, float]]) -> list[_Pat
 
 
 _PATTERNS: list[_Pattern] = _compile([
-    # Sales / pipeline
+    # Sales / pipeline / order book
     (r"\bpipeline\b", IntentCategory.SALES_PIPELINE, 2.0),
+    (r"\bsales\b", IntentCategory.SALES_PIPELINE, 1.5),
     (r"\bdeals?\b", IntentCategory.SALES_PIPELINE, 1.5),
     (r"\bleads?\b", IntentCategory.SALES_PIPELINE, 1.5),
     (r"\bcrm\b", IntentCategory.SALES_PIPELINE, 2.0),
     (r"\bsales\s+funnel\b", IntentCategory.SALES_PIPELINE, 2.0),
     (r"\bconversion\s+rate\b", IntentCategory.SALES_PIPELINE, 1.5),
     (r"\bwin\s+rate\b", IntentCategory.SALES_PIPELINE, 1.5),
+    (r"\border\s*book\b", IntentCategory.SALES_PIPELINE, 3.0),
+    (r"\bhot\s+leads?\b", IntentCategory.SALES_PIPELINE, 3.0),
+    (r"\bproposals?\s+sent\b", IntentCategory.SALES_PIPELINE, 2.5),
+    (r"\bquotes?\s+sent\b", IntentCategory.SALES_PIPELINE, 2.5),
+    (r"\bmissed\s+leads?\b", IntentCategory.SALES_PIPELINE, 3.0),
+    (r"\bclient\s*list\b", IntentCategory.SALES_PIPELINE, 2.5),
+    (r"\bcustomer\s*list\b", IntentCategory.SALES_PIPELINE, 2.5),
+    (r"\bactive\s+orders?\b", IntentCategory.SALES_PIPELINE, 2.5),
+    (r"\bin\s+production\b", IntentCategory.SALES_PIPELINE, 1.5),
 
     # Quote / pricing — checked before machine specs so that queries
     # mentioning both a model name and a pricing keyword route here.
@@ -224,11 +234,16 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bnewsletter\b", IntentCategory.MARKETING_CAMPAIGN, 2.0),
     (r"\bemail\s+blast\b", IntentCategory.MARKETING_CAMPAIGN, 1.5),
 
-    # Customer service
+    # Customer service / email
     (r"\bcomplaint\b", IntentCategory.CUSTOMER_SERVICE, 2.0),
     (r"\bsupport\s+ticket\b", IntentCategory.CUSTOMER_SERVICE, 2.0),
     (r"\bwarranty\b", IntentCategory.CUSTOMER_SERVICE, 1.5),
     (r"\bafter[\s-]?sales\b", IntentCategory.CUSTOMER_SERVICE, 2.0),
+    (r"\bemail\s+(from|to|about|thread)\b", IntentCategory.CUSTOMER_SERVICE, 3.0),
+    (r"\bfind\s+emails?\b", IntentCategory.CUSTOMER_SERVICE, 3.0),
+    (r"\bpull\s+up\s+emails?\b", IntentCategory.CUSTOMER_SERVICE, 3.0),
+    (r"\blast\s+email\b", IntentCategory.CUSTOMER_SERVICE, 2.5),
+    (r"\binbox\b", IntentCategory.CUSTOMER_SERVICE, 1.5),
 
     # Research
     (r"\bresearch\b", IntentCategory.RESEARCH, 1.5),
@@ -245,12 +260,24 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bstock\b", IntentCategory.VENDOR_PROCUREMENT, 1.0),
     (r"\bpart\s+number\b", IntentCategory.VENDOR_PROCUREMENT, 2.0),
 
-    # Project management
+    # Project management / delivery / order status
     (r"\bproject\b", IntentCategory.PROJECT_MANAGEMENT, 1.5),
     (r"\blogbook\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
     (r"\bmilestone\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
     (r"\bdelivery\s+schedule\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
     (r"\bpayment\s+alert\b", IntentCategory.PROJECT_MANAGEMENT, 2.0),
+    (r"\bdelivery\s+(date|status|time)", IntentCategory.PROJECT_MANAGEMENT, 3.0),
+    (r"\border\s+status\b", IntentCategory.PROJECT_MANAGEMENT, 3.0),
+    (r"\bwhen\s+(is|will)\s+.+\s+(ship|deliver|dispatch)", IntentCategory.PROJECT_MANAGEMENT, 3.0),
+    (r"\bshipping\s+date\b", IntentCategory.PROJECT_MANAGEMENT, 2.5),
+    (r"\bdispatch\b", IntentCategory.PROJECT_MANAGEMENT, 1.5),
+
+    # Payment / invoice (routes to finance)
+    (r"\bpayment\s+status\b", IntentCategory.FINANCE_REVIEW, 3.0),
+    (r"\binvoice\b", IntentCategory.FINANCE_REVIEW, 2.5),
+    (r"\bpayment\s+(due|overdue|received|pending)\b", IntentCategory.FINANCE_REVIEW, 3.0),
+    (r"\b(AR|AP)\s+(aging|status|overdue)\b", IntentCategory.FINANCE_REVIEW, 3.0),
+    (r"\baccounts?\s+(receivable|payable)\b", IntentCategory.FINANCE_REVIEW, 2.5),
 
     # Quality management
     (r"\bpunch\s*list\b", IntentCategory.QUALITY_MANAGEMENT, 3.0),

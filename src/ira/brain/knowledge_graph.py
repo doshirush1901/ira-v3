@@ -691,14 +691,14 @@ class KnowledgeGraph:
 
     async def graph_stats(self) -> dict[str, Any]:
         """Return summary statistics about the graph."""
-        rows = await self._read("MATCH (n) RETURN count(n) AS nodes")
-        nodes = rows[0]["nodes"] if rows else 0
-        rows = await self._read("MATCH ()-[r]->() RETURN count(r) AS rels")
-        rels = rows[0]["rels"] if rows else 0
-        rows = await self._read(
+        node_rows = await self._read("MATCH (n) RETURN count(n) AS nodes")
+        nodes = node_rows[0]["nodes"] if node_rows else 0
+        rel_rows = await self._read("MATCH ()-[r]->() RETURN count(r) AS rels")
+        rels = rel_rows[0]["rels"] if rel_rows else 0
+        orphan_rows = await self._read(
             "MATCH (n) WHERE NOT (n)--() RETURN count(n) AS orphans"
         )
-        orphans = rows[0]["orphans"] if rows else 0
+        orphans = orphan_rows[0]["orphans"] if orphan_rows else 0
 
         label_rows = await self._read(
             "CALL db.labels() YIELD label "
