@@ -78,7 +78,7 @@ class DreamMode:
         crm: Any | None = None,
         procedural_memory: Any | None = None,
         data_event_bus: Any | None = None,
-        db_path: str = "conversations.db",
+        db_path: str = "data/conversations.db",
         dream_log_path: str | Path | None = None,
     ) -> None:
         self._long_term = long_term
@@ -976,7 +976,7 @@ async def build_dream_mode(
     crm: Any | None = None,
     procedural_memory: Any | None = None,
     data_event_bus: Any | None = None,
-    db_path: str = "conversations.db",
+    db_path: str = "data/conversations.db",
     dream_log_path: str | Path | None = None,
 ) -> DreamMode:
     """Build a fully-wired DreamMode instance with all optional dependencies.

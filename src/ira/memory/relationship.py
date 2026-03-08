@@ -44,7 +44,7 @@ class Relationship(BaseModel):
 class RelationshipMemory:
     def __init__(
         self,
-        db_path: str = "relationships.db",
+        db_path: str = "data/relationships.db",
     ) -> None:
         self._db_path = db_path
         self._llm = get_llm_client()

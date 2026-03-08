@@ -127,7 +127,7 @@ _EXTRACT_SYSTEM_PROMPT = load_prompt("goal_extract_slots")
 class GoalManager:
     def __init__(
         self,
-        db_path: str = "goals.db",
+        db_path: str = "data/goals.db",
     ) -> None:
         self._db_path = db_path
         self._llm = get_llm_client()

@@ -23,7 +23,7 @@ _ASSESS_SYSTEM_PROMPT = load_prompt("assess_knowledge")
 class Metacognition:
     def __init__(
         self,
-        db_path: str = "conversations.db",
+        db_path: str = "data/conversations.db",
     ) -> None:
         self._db_path = db_path
         self._llm = get_llm_client()

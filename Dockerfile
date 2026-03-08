@@ -13,6 +13,10 @@ RUN poetry install --no-dev --no-root
 # ── final image ───────────────────────────────────────────────────────────
 FROM python:3.11-slim-bullseye
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 1000 ira && \
     useradd --uid 1000 --gid ira --create-home ira
 
@@ -25,10 +29,16 @@ COPY src/ src/
 COPY prompts/ prompts/
 COPY alembic/ alembic/
 COPY alembic.ini .
+COPY scripts/entrypoint.sh .
 
-RUN chown -R ira:ira /app
+RUN mkdir -p /app/data/brain /app/data/imports /app/data/quotes /app/data/reports \
+    && chmod +x /app/entrypoint.sh \
+    && chown -R ira:ira /app
+
 USER ira
-
 EXPOSE 8000
 
-CMD ["uvicorn", "ira.interfaces.server:app", "--host", "0.0.0.0", "--port", "8000", "--limit-concurrency", "5", "--timeout-keep-alive", "30"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+ENTRYPOINT ["./entrypoint.sh"]

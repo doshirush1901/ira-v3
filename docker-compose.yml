@@ -72,6 +72,25 @@ services:
         limits:
           memory: 1G
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ira-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
   ira-app:
     build:
       context: .
@@ -85,12 +104,15 @@ services:
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-ira}:${POSTGRES_PASSWORD:-ira}@postgres:5432/${POSTGRES_DB:-ira_crm}"
       QDRANT_URL: "http://qdrant:6333"
       NEO4J_URI: "bolt://neo4j:7687"
+      REDIS_URL: "redis://redis:6379/0"
     depends_on:
       qdrant:
         condition: service_healthy
       neo4j:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - ira-network
@@ -109,6 +131,7 @@ volumes:
   qdrant_data:
   neo4j_data:
   postgres_data:
+  redis_data:
 
 networks:
   ira-network:

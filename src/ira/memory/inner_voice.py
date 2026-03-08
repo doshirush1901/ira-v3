@@ -49,7 +49,7 @@ _REFLECT_SYSTEM_TEMPLATE = load_prompt("inner_voice_reflect")
 class InnerVoice:
     def __init__(
         self,
-        db_path: str = "conversations.db",
+        db_path: str = "data/conversations.db",
         surface_probability: float = 0.1,
     ) -> None:
         self._db_path = db_path

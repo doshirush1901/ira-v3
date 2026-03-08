@@ -191,7 +191,7 @@ _ADJUSTMENTS: dict[tuple[EmotionalState, str], dict[str, Any]] = {
 class EmotionalIntelligence:
     def __init__(
         self,
-        db_path: str = "conversations.db",
+        db_path: str = "data/conversations.db",
     ) -> None:
         self._db_path = db_path
         self._llm = get_llm_client()

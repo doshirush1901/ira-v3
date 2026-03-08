@@ -27,7 +27,7 @@ class EpisodicMemory:
     def __init__(
         self,
         long_term: LongTermMemory,
-        db_path: str = "conversations.db",
+        db_path: str = "data/conversations.db",
     ) -> None:
         self._long_term = long_term
         self._db_path = db_path
