@@ -1,0 +1,114 @@
+{
+  "questions": [
+    {
+      "question": "What is the capacity of the PF1 machine?",
+      "ground_truth": "The PF1 has a capacity of 500 tonnes.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
+      ]
+    },
+    {
+      "question": "What is the lead time for a PF1?",
+      "ground_truth": "The standard lead time for a PF1 is 16-20 weeks from order confirmation.",
+      "contexts": [
+        "PF1 lead time: 16-20 weeks (standard), 12-14 weeks (expedited)"
+      ]
+    },
+    {
+      "question": "Who is the primary contact at Dutch Tides?",
+      "ground_truth": "Jaap van der Berg is the CEO and primary contact at Dutch Tides BV.",
+      "contexts": [
+        "Contact: Jaap van der Berg, CEO, Dutch Tides BV, jaap@dutch-tides.com"
+      ]
+    },
+    {
+      "question": "What was the value of the Dutch Tides quote?",
+      "ground_truth": "The Dutch Tides quote (Q-2024-089) was for 2x PF1 machines valued at EUR 450,000.",
+      "contexts": [
+        "Quote Q-2024-089: Dutch Tides BV, 2x PF1, EUR 450,000, status: proposal sent"
+      ]
+    },
+    {
+      "question": "What was our revenue last quarter?",
+      "ground_truth": "Q3 2025 revenue was EUR 2.3 million, up 15% quarter-over-quarter.",
+      "contexts": [
+        "Q3 2025 Revenue: EUR 2,300,000 (+15% QoQ)",
+        "Major deals closed: Dutch Tides BV (EUR 450K), Norsk Hydro (EUR 380K)"
+      ]
+    },
+    {
+      "question": "What is the base price of a PF1?",
+      "ground_truth": "The PF1 base price is EUR 225,000 for the standard configuration.",
+      "contexts": [
+        "PF1 base price: EUR 225,000 (standard configuration)",
+        "PF1 with automation package: EUR 285,000"
+      ]
+    },
+    {
+      "question": "What power supply does the PF1 require?",
+      "ground_truth": "The PF1 requires a 3-phase 400V power supply.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
+      ]
+    },
+    {
+      "question": "What machines does Machinecraft manufacture?",
+      "ground_truth": "Machinecraft manufactures thermoforming, panel forming, and packaging machines including the PF1 and PF2 models.",
+      "contexts": [
+        "Machinecraft is an industrial machinery company specialising in thermoforming, panel forming, and packaging machines.",
+        "Product line: PF1 (precision forming), PF2 (high-volume forming), TF series (thermoforming)"
+      ]
+    },
+    {
+      "question": "What is the working area of the PF1?",
+      "ground_truth": "The PF1 has a working area of 2000x1500mm.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
+      ]
+    },
+    {
+      "question": "What deals did Norsk Hydro close?",
+      "ground_truth": "Norsk Hydro closed a deal worth EUR 380,000.",
+      "contexts": [
+        "Major deals closed: Dutch Tides BV (EUR 450K), Norsk Hydro (EUR 380K)",
+        "Norsk Hydro: 1x TF-3000 thermoforming line, EUR 380,000, delivered Q3 2025"
+      ]
+    },
+    {
+      "question": "What is the cycle time of the PF1?",
+      "ground_truth": "The PF1 has a cycle time of 12 seconds.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
+      ]
+    },
+    {
+      "question": "How much does the PF1 weigh?",
+      "ground_truth": "The PF1 weighs approximately 8,500 kg.",
+      "contexts": [
+        "PF1 Specifications: Capacity 500T, Working area 2000x1500mm, Cycle time 12s, Power 3-phase 400V, Weight 8500kg"
+      ]
+    },
+    {
+      "question": "What is the expedited lead time for a PF1?",
+      "ground_truth": "The expedited lead time for a PF1 is 12-14 weeks.",
+      "contexts": [
+        "PF1 lead time: 16-20 weeks (standard), 12-14 weeks (expedited)"
+      ]
+    },
+    {
+      "question": "What is the price of a PF1 with automation?",
+      "ground_truth": "The PF1 with automation package costs EUR 285,000.",
+      "contexts": [
+        "PF1 base price: EUR 225,000 (standard configuration)",
+        "PF1 with automation package: EUR 285,000"
+      ]
+    },
+    {
+      "question": "What is Jaap van der Berg's email?",
+      "ground_truth": "Jaap van der Berg's email is jaap@dutch-tides.com.",
+      "contexts": [
+        "Contact: Jaap van der Berg, CEO, Dutch Tides BV, jaap@dutch-tides.com"
+      ]
+    }
+  ]
+}

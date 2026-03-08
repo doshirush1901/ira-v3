@@ -28,6 +28,16 @@ prompts:
     raw: "file://prompts/calliope_system.txt\n\n---\nUser query: {{query}}"
   - id: plutus
     raw: "file://prompts/plutus_system.txt\n\n---\nUser query: {{query}}"
+  - id: hephaestus
+    raw: "file://prompts/hephaestus_system.txt\n\n---\nUser query: {{query}}"
+  - id: atlas
+    raw: "file://prompts/atlas_system.txt\n\n---\nUser query: {{query}}"
+  - id: hermes
+    raw: "file://prompts/hermes_system.txt\n\n---\nUser query: {{query}}"
+  - id: hera
+    raw: "file://prompts/hera_system.txt\n\n---\nUser query: {{query}}"
+  - id: quotebuilder
+    raw: "file://prompts/quotebuilder_system.txt\n\n---\nUser query: {{query}}"
 
 tests:
   # ── Athena (routing) ──────────────────────────────────────────────────
@@ -146,3 +156,118 @@ tests:
         value: ["system prompt", "You are Prometheus", "CRITICAL:", "TOOLS:"]
     options:
       provider: athena
+
+  # ── Hephaestus (production) ────────────────────────────────────────
+  - description: "Hephaestus looks up machine specs"
+    vars:
+      query: "What are the specifications of the PF1?"
+    assert:
+      - type: llm-rubric
+        value: "Response should search for machine specifications or technical data"
+      - type: contains-any
+        value: ["search", "spec", "PF1", "machine", "tool_to_use", "lookup"]
+    options:
+      provider: hephaestus
+
+  - description: "Hephaestus estimates production time"
+    vars:
+      query: "How long does it take to build a PF2?"
+    assert:
+      - type: llm-rubric
+        value: "Response should look up production schedules or estimate manufacturing time"
+      - type: contains-any
+        value: ["production", "time", "schedule", "build", "search", "tool_to_use"]
+    options:
+      provider: hephaestus
+
+  # ── Atlas (project management) ─────────────────────────────────────
+  - description: "Atlas checks project status"
+    vars:
+      query: "What's the status of the Dutch Tides project?"
+    assert:
+      - type: llm-rubric
+        value: "Response should search for project status or milestone data"
+      - type: contains-any
+        value: ["project", "status", "milestone", "search", "tool_to_use"]
+    options:
+      provider: atlas
+
+  - description: "Atlas finds overdue milestones"
+    vars:
+      query: "Are there any overdue milestones?"
+    assert:
+      - type: llm-rubric
+        value: "Response should check for overdue milestones or project deadlines"
+      - type: contains-any
+        value: ["overdue", "milestone", "deadline", "search", "tool_to_use"]
+    options:
+      provider: atlas
+
+  # ── Hermes (marketing) ─────────────────────────────────────────────
+  - description: "Hermes plans a drip campaign"
+    vars:
+      query: "Create a drip campaign for European packaging companies"
+    assert:
+      - type: llm-rubric
+        value: "Response should plan a multi-step email campaign or outreach sequence"
+      - type: contains-any
+        value: ["campaign", "drip", "email", "sequence", "outreach", "tool_to_use"]
+    options:
+      provider: hermes
+
+  - description: "Hermes searches market research"
+    vars:
+      query: "What's the market size for thermoforming in MENA?"
+    assert:
+      - type: llm-rubric
+        value: "Response should search for market research data or industry intelligence"
+      - type: contains-any
+        value: ["market", "research", "search", "MENA", "tool_to_use"]
+    options:
+      provider: hermes
+
+  # ── Hera (procurement) ─────────────────────────────────────────────
+  - description: "Hera checks vendor status"
+    vars:
+      query: "What's the status of our hydraulic cylinder supplier?"
+    assert:
+      - type: llm-rubric
+        value: "Response should look up vendor information or supply chain data"
+      - type: contains-any
+        value: ["vendor", "supplier", "search", "status", "tool_to_use"]
+    options:
+      provider: hera
+
+  - description: "Hera checks component lead times"
+    vars:
+      query: "What's the lead time for servo motors?"
+    assert:
+      - type: llm-rubric
+        value: "Response should search for component lead time or procurement data"
+      - type: contains-any
+        value: ["lead time", "component", "search", "servo", "tool_to_use"]
+    options:
+      provider: hera
+
+  # ── Quotebuilder (quotes) ──────────────────────────────────────────
+  - description: "Quotebuilder generates a quote"
+    vars:
+      query: "Generate a quote for 1x PF1 for Norsk Hydro"
+    assert:
+      - type: llm-rubric
+        value: "Response should look up machine specs and pricing to build a formal quote"
+      - type: contains-any
+        value: ["quote", "PF1", "price", "search", "tool_to_use", "spec"]
+    options:
+      provider: quotebuilder
+
+  - description: "Quotebuilder searches past quotes"
+    vars:
+      query: "What quotes have we sent to Dutch Tides?"
+    assert:
+      - type: llm-rubric
+        value: "Response should search for historical quotes or quote records"
+      - type: contains-any
+        value: ["quote", "search", "Dutch Tides", "tool_to_use", "past"]
+    options:
+      provider: quotebuilder
