@@ -412,7 +412,7 @@ class DigestiveSystem:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     json=payload,

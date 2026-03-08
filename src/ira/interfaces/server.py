@@ -733,17 +733,23 @@ async def deep_health_check() -> dict[str, Any]:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     "https://api.mem0.ai/v2/memories/search/",
-                    json={"query": "health", "user_id": "health_check"},
+                    json={"query": "health", "filters": {"user_id": "health_check"}},
                     headers={"Authorization": f"Token {mem0_key}"},
                 )
                 checks["mem0"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}
         except (ConfigurationError, Exception) as exc:
             checks["mem0"] = {"status": "unhealthy", "detail": str(exc)}
 
-    all_healthy = all(
-        (v.get("status") in ("healthy", "ok") if isinstance(v, dict) else True)
-        for v in checks.values()
-    )
+    _OK_STATUSES = {"healthy", "ok", "connected"}
+
+    def _is_ok(v: Any) -> bool:
+        if not isinstance(v, dict):
+            return True
+        if "status" in v:
+            return v["status"] in _OK_STATUSES
+        return all(_is_ok(sub) for sub in v.values())
+
+    all_healthy = all(_is_ok(v) for v in checks.values())
     return {"status": "ok" if all_healthy else "degraded", "services": checks}
 
 

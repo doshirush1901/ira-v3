@@ -135,6 +135,7 @@ async def run_ingestion_cycle(
     # Shared services — thread-safe for concurrent use
     embedding = EmbeddingService()
     qdrant = QdrantManager(embedding_service=embedding)
+    await qdrant.ensure_collection()
     graph = KnowledgeGraph()
     ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
     digestive = DigestiveSystem(

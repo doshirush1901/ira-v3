@@ -19,7 +19,10 @@ data/brain/
 data/qdrant/
 data/neo4j/
 data/postgres/
+data/redis/
 data/qdrant_locked/
+data/quotes/
+data/quote_references/
 data/ingested_files.db
 data/machine_knowledge.json
 

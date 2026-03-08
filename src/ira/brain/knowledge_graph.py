@@ -503,7 +503,7 @@ class KnowledgeGraph:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     json=payload,
@@ -513,7 +513,7 @@ class KnowledgeGraph:
                 content = resp.json()["choices"][0]["message"]["content"]
                 return json.loads(content)
         except (httpx.HTTPError, json.JSONDecodeError, KeyError):
-            logger.exception("Entity extraction failed")
+            logger.exception("Entity extraction failed for source text (%d chars)", len(text))
             return empty
 
     # ── bulk enrichment ────────────────────────────────────────────────
