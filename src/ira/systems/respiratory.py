@@ -44,8 +44,6 @@ class RespiratorySystem:
         inhale_minute: int = 0,
         exhale_hour: int = 22,
         exhale_minute: int = 0,
-        dream_hour: int = 3,
-        dream_minute: int = 0,
         heartbeat_interval_seconds: int = 300,
     ) -> None:
         self._dream_mode = dream_mode
@@ -59,8 +57,6 @@ class RespiratorySystem:
         self._inhale_minute = inhale_minute
         self._exhale_hour = exhale_hour
         self._exhale_minute = exhale_minute
-        self._dream_hour = dream_hour
-        self._dream_minute = dream_minute
         self._heartbeat_interval = heartbeat_interval_seconds
 
         self._scheduler = AsyncIOScheduler()
@@ -75,7 +71,7 @@ class RespiratorySystem:
     async def _heartbeat_loop(self) -> None:
         while True:
             try:
-                vitals = self._collect_vitals()
+                vitals = await self._collect_vitals()
                 logger.info(
                     "HEARTBEAT | %s | vitals=%s",
                     datetime.now(timezone.utc).isoformat(),
@@ -87,14 +83,15 @@ class RespiratorySystem:
                 logger.exception("Heartbeat iteration failed")
             await asyncio.sleep(self._heartbeat_interval)
 
-    def _collect_vitals(self) -> dict[str, Any]:
+    async def _collect_vitals(self) -> dict[str, Any]:
         usage = resource.getrusage(resource.RUSAGE_SELF)
         divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
         memory_mb = usage.ru_maxrss / divisor
 
         avg_breath: float = 0.0
-        if self._breath_durations:
-            avg_breath = sum(self._breath_durations) / len(self._breath_durations)
+        async with self._breath_lock:
+            if self._breath_durations:
+                avg_breath = sum(self._breath_durations) / len(self._breath_durations)
 
         return {
             "memory_mb": round(memory_mb, 1),
@@ -134,7 +131,7 @@ class RespiratorySystem:
     # ── DREAM ─────────────────────────────────────────────────────────────
 
     async def _dream(self) -> None:
-        """Run the nightly DreamMode consolidation cycle (scheduled at 3 AM)."""
+        """Run the DreamMode consolidation cycle (on-demand only)."""
         if self._dream_mode is None:
             logger.debug("DREAM skipping (DreamMode not configured)")
             return
@@ -229,12 +226,6 @@ class RespiratorySystem:
             self._exhale,
             CronTrigger(hour=self._exhale_hour, minute=self._exhale_minute),
             id="exhale",
-            replace_existing=True,
-        )
-        self._scheduler.add_job(
-            self._dream,
-            CronTrigger(hour=self._dream_hour, minute=self._dream_minute),
-            id="dream",
             replace_existing=True,
         )
         self._scheduler.start()
