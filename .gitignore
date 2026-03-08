@@ -15,9 +15,7 @@ Neo4j-*.txt
 # Company data (documents, brain state, DBs)
 # ──────────────────────────────────────────────
 data/imports/
-data/brain/*
-!data/brain/known_entities.json
-!data/brain/correction_ledger.json
+data/brain/
 data/qdrant/
 data/neo4j/
 data/postgres/
