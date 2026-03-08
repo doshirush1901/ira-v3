@@ -748,6 +748,32 @@ class RequestPipeline:
         except (DatabaseError, Exception):
             logger.exception("ConversationMemory recording failed")
 
+        # Durable fact extraction into long-term semantic memory
+        if self._long_term is not None:
+            try:
+                from ira.services.llm_client import get_llm_client
+                _fact_llm = get_llm_client()
+                _facts_raw = await _fact_llm.generate_text(
+                    "Extract durable facts from this exchange — preferences, "
+                    "decisions, business context about the contact. Return one "
+                    "fact per line. Return NONE if no durable facts exist.",
+                    f"Contact: {contact_email}\nUser: {raw_input[:500]}\n"
+                    f"Assistant: {raw_response[:500]}",
+                    name="pipeline.extract_facts",
+                )
+                if _facts_raw and _facts_raw.strip().upper() != "NONE":
+                    for fact_line in _facts_raw.strip().splitlines():
+                        fact = fact_line.strip().lstrip("- ")
+                        if fact and len(fact) > 10:
+                            await self._long_term.store_fact(
+                                fact,
+                                source=f"conversation:{contact_email}",
+                                confidence=0.7,
+                            )
+                    logger.debug("LEARN | extracted durable facts for %s", contact_email)
+            except (LLMError, Exception):
+                logger.debug("Fact extraction failed (non-critical)", exc_info=True)
+
         # CRM interaction log
         if self._crm is not None:
             try:

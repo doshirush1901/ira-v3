@@ -15,6 +15,7 @@ from typing import Any, Callable, Awaitable
 
 from ira.agents.alexandros import Alexandros
 from ira.agents.arachne import Arachne
+from ira.agents.artemis import Artemis
 from ira.agents.asclepius import Asclepius
 from ira.agents.athena import Athena
 from ira.agents.atlas import Atlas
@@ -53,7 +54,7 @@ _AGENT_CLASSES: list[type[BaseAgent]] = [
     Athena, Clio, Prometheus, Plutus, Hermes, Hephaestus, Themis,
     Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
     Nemesis, Arachne, Alexandros, Hera, Atlas, Asclepius, Chiron,
-    Cadmus, Quotebuilder,
+    Cadmus, Quotebuilder, Artemis,
 ]
 
 
