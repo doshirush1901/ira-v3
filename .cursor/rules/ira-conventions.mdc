@@ -1,0 +1,44 @@
+---
+description: Code conventions for the Ira v3 codebase
+globs: src/ira/**/*.py
+alwaysApply: false
+---
+
+# Ira Code Conventions
+
+## Agent Development
+
+- Every agent inherits from `BaseAgent` and implements `async def handle(self, query: str, context: dict | None = None) -> str`.
+- Agents should call `await self.run(query, context)` to enter the ReAct loop. Only bypass this for deterministic fast-path logic.
+- Register custom tools in `_register_tools()` using `self.register_tool(AgentTool(...))`.
+- Agent names are lowercase (e.g. `"clio"`, `"prometheus"`). The `name` class attribute must match the filename without `.py`.
+- System prompts live in `prompts/{agent_name}_system.txt`.
+
+## LLM Calls
+
+- Use the centralised `LLMClient` in `src/ira/services/llm_client.py`. Do not use raw `httpx` for LLM calls.
+- For structured JSON responses, use `generate_structured()` with a Pydantic model from `src/ira/schemas/llm_outputs.py`.
+- For plain text responses, use `generate_text()` or `generate_text_with_fallback()`.
+- Import `AsyncOpenAI` from `langfuse.openai`, not from `openai` directly.
+- Add `@observe()` from `langfuse.decorators` to major public methods for tracing.
+- Embeddings go through `EmbeddingService` which calls the Voyage AI API via `httpx`.
+
+## Memory Access
+
+- Agents access memory through ReAct tools (`recall_memory`, `store_memory`, `get_conversation_history`, `check_relationship`, `check_goals`, `recall_episodes`).
+- These tools are auto-registered by `BaseAgent._register_default_tools()` when the corresponding service is present in `self._services`.
+- Direct memory access in `handle()` is reserved for specialised agents (Mnemosyne, Nemesis).
+
+## Imports and Style
+
+- Use `from __future__ import annotations` at the top of every module.
+- Use stdlib `logging` (not structlog). Get a logger with `logger = logging.getLogger(__name__)`.
+- Type hints are required on all public functions.
+- Async functions use `async def` / `await`. Do not use `asyncio.run()` inside async code.
+
+## Testing
+
+- Tests live in `tests/`. Use `pytest` with `pytest-asyncio`.
+- Mock external services (LLM calls, Qdrant, Neo4j, Mem0) in tests.
+- Mock `LLMClient.generate_structured` and `LLMClient.generate_text` (not raw httpx).
+- Return Pydantic model instances (e.g. `ReActDecision`) from mocks, not JSON strings.

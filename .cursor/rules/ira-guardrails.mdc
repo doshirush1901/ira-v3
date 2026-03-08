@@ -1,0 +1,33 @@
+---
+description: Guardrails for AI assistants editing the Ira v3 codebase
+globs: src/ira/**/*.py
+alwaysApply: false
+---
+
+# Ira Guardrails
+
+## LLM Calls
+
+- NEVER use raw `httpx` or `aiohttp` for LLM calls. Always use `get_llm_client()` from `ira.services.llm_client`.
+- NEVER import `openai` directly. Always use `from langfuse.openai import AsyncOpenAI`.
+- Always add `@observe()` from `langfuse.decorators` to major pipeline and agent methods.
+- All `create()` calls on OpenAI and Anthropic SDKs must include `timeout=120.0`.
+
+## Autonomy Level
+
+- Ira is a Level 3.5 agent. She can draft emails and sweep goals autonomously but always requires human approval before sending.
+- Background polling loops must have an on-demand CLI equivalent (e.g. `ira email sync`, `ira system inhale`).
+- In-memory state that must survive across CLI invocations should be persisted to Redis.
+
+## Architecture
+
+- The 24-agent pantheon is intentional. Don't collapse agents. Each has bounded responsibility.
+- The biological metaphor (body systems) is real. Don't merge body systems.
+- All prompts live in `prompts/` as `.txt` files. Use `load_prompt()`, never inline strings.
+- Memory is a first-class citizen. If an agent learns something useful, store it.
+- Configuration values belong in `src/ira/config.py`, not hardcoded in modules.
+
+## Error Handling
+
+- Never use `except Exception: pass`. At minimum use `logger.warning()` with `exc_info=True`.
+- Never swallow errors at `logger.debug` level for failures that affect correctness.

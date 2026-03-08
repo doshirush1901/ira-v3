@@ -247,7 +247,7 @@ Ira doesn't just generate text — it *knows things*. The brain is a multi-backe
     └──────────────────────────────────┘
 ```
 
-All three backends are searched **in parallel**, results are **reranked** with Voyage Rerank (FlashRank as local fallback), and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive. Redis caches responses and deduplicates repeated queries. The **entity extractor** (GLiNER) identifies contacts, companies, and machines in queries for entity-aware routing. **Guardrails** validate inputs and check outputs for safety before they reach the user.
+All three backends are searched **in parallel**, results are **reranked** with Voyage Rerank (FlashRank as local fallback), and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive. Redis caches responses and deduplicates repeated queries. The **entity extractor** (GLiNER for local zero-shot NER, complemented by LLM extraction) identifies contacts, companies, and machines in queries for entity-aware routing. **Guardrails AI** validates outputs for PII and toxicity (via Vera), while **Google Cloud DLP** handles broader PII redaction for NDA-safe content (via Cadmus).
 
 ## Memory Architecture
 
@@ -322,10 +322,10 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 | Relational Database | PostgreSQL (CRM via asyncpg) |
 | Cache | Redis (response dedup, stream persistence) |
 | Memory | Mem0 + SQLite |
-| NER / Entity Extraction | GLiNER (local, zero-shot) |
+| NER / Entity Extraction | GLiNER (local, zero-shot) + LLM (complementary) |
 | Document Processing | Docling + Chonkie (chunking), Google Document AI, PDF.co |
 | Web Crawling | crawl4ai |
-| Input/Output Safety | guardrails-ai |
+| Input/Output Safety | guardrails-ai (Vera) + Google Cloud DLP (Cadmus/NDA) |
 | Evaluation | deepeval + promptfoo |
 | Privacy | Google Cloud DLP (PII redaction) |
 | Integrations | Google Docs, Gmail |
@@ -343,7 +343,7 @@ ira-v3/
 ├── src/ira/
 │   ├── agents/              # 24 specialist agents + base_agent.py (~870 lines)
 │   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing,
-│   │                        #   entity extraction (GLiNER), guardrails (30 modules)
+│   │                        #   entity extraction (GLiNER + LLM), guardrails (30 modules)
 │   ├── memory/              # 9 memory subsystems + dream mode + goal sweep
 │   ├── systems/             # Body systems + extended systems (20 modules)
 │   ├── interfaces/          # CLI, FastAPI server, Telegram bot, email processor,

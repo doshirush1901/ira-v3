@@ -1,0 +1,170 @@
+---
+description: Complete Ira lifecycle — startup, querying, feedback, ingestion, shutdown
+globs: 
+alwaysApply: true
+---
+
+# Ira — Cursor Integration
+
+Ira is the Machinecraft AI Pantheon: a full agentic system with CRM, knowledge graph, 20+ specialist agents, memory systems, and email processing. This rule covers the complete lifecycle.
+
+## 1. Starting Ira ("wake up Ira", "start Ira", "activate Ira")
+
+When the user asks to start/activate/wake Ira, run these steps **in order** using the Shell tool. Stop and report if any step fails.
+
+### Step A — Docker Desktop
+
+Check if Docker is running. If not, open it and wait:
+
+```bash
+docker info > /dev/null 2>&1 || open -a Docker
+```
+
+Then poll until the daemon is ready (up to 30s):
+
+```bash
+for i in $(seq 1 15); do docker info > /dev/null 2>&1 && echo "Docker ready" && break || sleep 2; done
+```
+
+### Step B — Database containers
+
+```bash
+cd /Users/rushabhdoshi/Desktop/ira-v3
+docker compose -f docker-compose.local.yml up -d
+```
+
+Verify all 4 containers (postgres, qdrant, neo4j, redis) are running:
+
+```bash
+docker compose -f docker-compose.local.yml ps --format "table {{.Name}}\t{{.Status}}"
+```
+
+### Step C — Start the Ira API server
+
+Check if the server is already running first:
+
+```bash
+curl -s --max-time 2 http://localhost:8000/api/health > /dev/null 2>&1 && echo "ALREADY_RUNNING" || echo "NOT_RUNNING"
+```
+
+If NOT_RUNNING, start uvicorn in a **background terminal** (block_until_ms: 0):
+
+```bash
+cd /Users/rushabhdoshi/Desktop/ira-v3 && poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
+```
+
+### Step D — Wait for healthy
+
+Poll the health endpoint until Ira is fully booted (can take 30-60s):
+
+```bash
+for i in $(seq 1 30); do
+  resp=$(curl -s --max-time 3 http://localhost:8000/api/health 2>/dev/null)
+  if echo "$resp" | grep -q '"status"'; then echo "Ira is awake"; break; fi
+  sleep 2
+done
+```
+
+Then run a deep health check and report the result:
+
+```bash
+curl -s http://localhost:8000/api/deep-health | python3 -m json.tool
+```
+
+Tell the user which services are healthy, degraded, or unavailable.
+
+## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
+
+When the user mentions @Ira and asks a question, POST to the running server:
+
+```bash
+curl -s -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "<user question>", "user_id": "rushabh_doshi"}'
+```
+
+The response JSON has `{"response": "...", "agents_consulted": [...]}`.
+- Format `response` as clean Markdown for the user.
+- Mention which agents were consulted if the list is non-empty.
+- If connection is refused, tell the user to start Ira first (see section 1).
+
+## 3. Feedback / Corrections ("that's wrong", "actually it's...")
+
+When the user corrects a previous Ira response:
+
+```bash
+curl -s -X POST http://localhost:8000/api/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "correction": "<the correction text>",
+    "previous_query": "<the original question>",
+    "previous_response": "<the original answer>",
+    "user_id": "rushabh_doshi",
+    "severity": "HIGH"
+  }'
+```
+
+## 4. Email Search ("find emails from...", "pull up emails about...")
+
+When the user asks to find, search, or pull up emails from a person or about a topic, use the email search endpoint directly for fast, precise results:
+
+```bash
+curl -s -X POST http://localhost:8000/api/email/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from_address": "<sender email or domain, e.g. jaap@dutch-tides.com>",
+    "subject": "<optional subject keyword>",
+    "after": "<optional YYYY/MM/DD>",
+    "before": "<optional YYYY/MM/DD>",
+    "query": "<optional free-form Gmail query>",
+    "max_results": 10
+  }'
+```
+
+To read a full thread after finding an email, use the thread_id from the search result:
+
+```bash
+curl -s http://localhost:8000/api/email/thread/<thread_id> | python3 -m json.tool
+```
+
+For complex email questions (context, history, what to reply), prefer routing through /api/query — agents now have search_emails and read_email_thread tools and will use Gmail directly.
+
+## 5. Ingesting Files ("learn this file", "ingest this")
+
+Upload a file into Ira's knowledge base:
+
+```bash
+curl -s -X POST http://localhost:8000/api/ingest \
+  -F "file=@<absolute path to the file>"
+```
+
+## 6. Other Endpoints
+
+- **Sales pipeline:** `curl -s http://localhost:8000/api/pipeline | python3 -m json.tool`
+- **List agents:** `curl -s http://localhost:8000/api/agents | python3 -m json.tool`
+- **Board meeting:** `curl -s -X POST http://localhost:8000/api/board-meeting -H "Content-Type: application/json" -d '{"topic": "<topic>"}'`
+- **Dream report:** `curl -s http://localhost:8000/api/dream-report | python3 -m json.tool`
+- **Re-OCR scanned PDFs:** `curl -s -X POST http://localhost:8000/api/reingest-scanned -H "Content-Type: application/json" -d '{}' | python3 -m json.tool`
+- **Email draft:** `curl -s -X POST http://localhost:8000/api/email/draft -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "context": "<instructions>"}'`
+- **Dashboard:** Open http://localhost:8000/dashboard/ in a browser.
+
+## 7. Stopping Ira ("stop Ira", "shut down Ira")
+
+Kill the uvicorn process (triggers graceful shutdown of all subsystems):
+
+```bash
+pkill -f "uvicorn ira.interfaces.server:app" && echo "Ira shut down"
+```
+
+Optionally stop the database containers too:
+
+```bash
+cd /Users/rushabhdoshi/Desktop/ira-v3 && docker compose -f docker-compose.local.yml down
+```
+
+## Important Rules
+
+- **Never fabricate Ira's responses.** Always execute the curl command and return the real result.
+- If API_SECRET_KEY is set in .env, add `-H "Authorization: Bearer <key>"` to all curl commands.
+- The server working directory must be the ira-v3 project root so .env is loaded.
+- Email mode defaults to TRAINING (reads inbox, creates drafts, does not send). The user must set `IRA_EMAIL_MODE=OPERATIONAL` in .env and restart to enable live sending.

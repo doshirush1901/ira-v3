@@ -1,0 +1,33 @@
+---
+description: Conventions for LLM prompt template files in prompts/
+globs: prompts/**/*.txt
+alwaysApply: false
+---
+
+# Prompt File Conventions
+
+## Naming
+
+- Agent system prompts: `{agent_name}_system.txt` (e.g. `clio_system.txt`)
+- Task-specific prompts: `{module_or_task}.txt` (e.g. `extract_entities.txt`, `dream_insight.txt`)
+- Prompts are loaded via `ira.prompt_loader.load_prompt("name_without_extension")`
+
+## Template Variables
+
+- Use `{variable_name}` for Python `.format()` substitution
+- Common variables: `{query}`, `{context}`, `{history}`, `{contact_id}`
+- Document all variables in a comment block at the top of the file if the prompt uses substitution
+
+## Content Guidelines
+
+- System prompts define the agent's identity, role, constraints, and output format
+- Task prompts are stateless instructions for a single LLM call
+- Keep prompts under 2000 tokens where possible
+- Use Markdown formatting within prompts for structure (headers, lists, bold)
+- Never embed API keys, file paths, or environment-specific values in prompts
+
+## Relationship to Agents
+
+- Every agent in `src/ira/agents/` must have a `prompts/{name}_system.txt`
+- Brain modules that call the LLM should use `load_prompt()` rather than inline strings
+- When adding a new LLM-calling module, create a corresponding prompt file

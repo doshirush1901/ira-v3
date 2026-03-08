@@ -49,8 +49,8 @@ class RoutingConfig:
 
 ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.SALES_PIPELINE: RoutingConfig(
-        required_agents=("prometheus", "atlas", "clio"),
-        optional_agents=("tyche", "alexandros", "chiron"),
+        required_agents=("prometheus", "atlas", "clio", "chiron"),
+        optional_agents=("tyche", "alexandros"),
         required_tools=("crm", "retriever"),
     ),
     IntentCategory.FINANCE_REVIEW: RoutingConfig(
@@ -129,13 +129,13 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
         required_tools=("crm", "retriever"),
     ),
     IntentCategory.MEMORY_RECALL: RoutingConfig(
-        required_agents=("mnemosyne",),
-        optional_agents=("clio", "sophia"),
+        required_agents=("mnemosyne", "sophia"),
+        optional_agents=("clio",),
         required_tools=("retriever",),
     ),
     IntentCategory.SYSTEM_TRAINING: RoutingConfig(
-        required_agents=("nemesis",),
-        optional_agents=("sophia", "chiron"),
+        required_agents=("nemesis", "sophia", "chiron"),
+        optional_agents=(),
         required_tools=("retriever",),
     ),
     IntentCategory.GENERAL: RoutingConfig(

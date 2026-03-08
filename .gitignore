@@ -94,6 +94,7 @@ data/board_meetings/
 docs/*.txt
 
 # ──────────────────────────────────────────────
-# IDE workspace config
+# IDE workspace config (keep .cursor/rules/ tracked)
 # ──────────────────────────────────────────────
-.cursor/
+.cursor/*
+!.cursor/rules/

@@ -1,0 +1,32 @@
+---
+description: Ira project direction, priorities, and what we will not do
+globs: 
+alwaysApply: true
+---
+
+# Ira — Vision (Summary)
+
+## Current Priorities (in order)
+
+1. **Reliability.** Fix silent failures, add retries, improve error messages.
+2. **Retrieval quality.** Better chunking, smarter query decomposition, tune reranking.
+3. **Email workflow.** End-to-end email processing with human-in-the-loop approval.
+4. **Testing.** Increase coverage for body systems, memory, and the pipeline.
+5. **Observability.** Dashboard for pipeline metrics and agent performance.
+
+## What We Will Not Do
+
+- Generalize Ira into a platform for other businesses.
+- Add consumer-facing features.
+- Replace the three-tier routing with a single large-context LLM.
+- Add agents without clear, non-overlapping domain boundaries.
+- Adopt heavy frameworks (LangChain, LlamaIndex, CrewAI).
+
+## Architectural Principles
+
+- The pantheon model (24 bounded agents) is intentional — debuggable, testable, extensible.
+- The biological metaphor enforces separation of concerns.
+- Memory compounds value over time — never shortcut it.
+- Prompts are configuration, not code.
+
+For the full document, see [VISION.md](../../VISION.md).
