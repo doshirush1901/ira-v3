@@ -2,6 +2,7 @@
 """Send the board meeting report email directly (not as draft)."""
 
 import base64
+import os
 import sys
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 REPORT_PATH = Path("data/board_meetings/20260307_012540_tim_urban_report_clean.html")
-TO = "rushabh@machinecraft.org"
+TO = os.environ.get("BOARD_RECIPIENT", "founder@example.com")
 SUBJECT = "Your AI Board of Directors Just Had Their First Meeting"
 
 SCOPES = [

@@ -58,9 +58,8 @@ Pay special attention to:
 - Emails containing words like "quote", "offer", "proposal", "pricing"
 - Follow-up emails on existing quote threads — classify as FOLLOW_UP, not GENERAL_INQUIRY
 - Outbound emails from Machinecraft sending quotes — these are QUOTE_REQUEST (outbound)
-- Emails from agents/resellers negotiating on behalf of end customers (e.g. Mikhail for Domani-Spa)
+- Emails from agents/resellers negotiating on behalf of end customers
 
-Past mistake: Emails about PF1-XL-3020 for Minini Plastic Italy and PF1-XL-5028
-for Extalon Germany were processed but never became CRM deals because classification
-signals were not strong enough. Every proposal-related email MUST be classified with
-a deal-creating intent.
+Past mistake: Emails about specific machine models for active leads were processed
+but never became CRM deals because classification signals were not strong enough.
+Every proposal-related email MUST be classified with a deal-creating intent.

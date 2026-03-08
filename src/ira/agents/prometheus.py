@@ -88,7 +88,7 @@ class Prometheus(BaseAgent):
             ))
             self.register_tool(AgentTool(
                 name="get_active_leads",
-                description="List contacts classified as LEAD_WITH_INTERACTIONS — these are the active sales opportunities that need follow-up (e.g. Minini Plastic Italy, Extalon Germany, RAD Global, Durotherm, etc.). THIS IS YOUR MOST IMPORTANT TOOL. There are 200+ active leads.",
+                description="List contacts classified as LEAD_WITH_INTERACTIONS — these are the active sales opportunities that need follow-up. THIS IS YOUR MOST IMPORTANT TOOL. There are 200+ active leads.",
                 parameters={"limit": "Max leads to return (default 50)"},
                 handler=self._tool_get_active_leads,
             ))

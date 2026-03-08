@@ -94,6 +94,11 @@ data/board_meetings/
 docs/*.txt
 
 # ──────────────────────────────────────────────
+# Scratch / upgrade workspaces
+# ──────────────────────────────────────────────
+ira-v3-upgrade/
+
+# ──────────────────────────────────────────────
 # IDE workspace config (keep .cursor/rules/ tracked)
 # ──────────────────────────────────────────────
 .cursor/*

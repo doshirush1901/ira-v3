@@ -3,13 +3,14 @@
 
 Runs a board meeting across all agents, rewrites the synthesis in
 Tim Urban's Wait But Why style, and creates a Gmail draft to
-rushabh@machinecraft.org.
+the BOARD_RECIPIENT (from env, defaults to founder@example.com).
 """
 
 import asyncio
 import base64
 import json
 import logging
+import os
 import sys
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -286,7 +287,7 @@ async def main():
     draft = await create_gmail_draft(
         html_body=tim_urban_html,
         subject=subject,
-        to="rushabh@machinecraft.org",
+        to=os.environ.get("BOARD_RECIPIENT", "founder@example.com"),
     )
 
     print(f"\n{'=' * 60}")
