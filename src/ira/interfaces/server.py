@@ -470,6 +470,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         musculoskeletal=musculoskeletal,
         unified_context=unified_context,
         redis_cache=redis_cache,
+        episodic_memory=episodic,
+        long_term_memory=long_term,
     )
     _services["pipeline"] = request_pipeline
 
@@ -794,6 +796,7 @@ async def feedback(req: FeedbackRequest) -> FeedbackResponse:
         previous_response=req.previous_response,
         agents_used=[],
         user_id=user_id,
+        severity=req.severity,
     )
 
     return FeedbackResponse(

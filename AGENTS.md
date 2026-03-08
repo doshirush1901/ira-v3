@@ -41,6 +41,7 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 | **Athena** | Orchestrator | Routes requests, delegates, synthesizes multi-agent responses |
 | **Alexandros** | Librarian | Raw document archive (data/imports/), fallback when KB is empty |
 | **Arachne** | Content Scheduler | Newsletter assembly, content calendar, LinkedIn scheduling |
+| **Artemis** | Lead Hunter | Mailbox intelligence, historical email scanning, customer journey mapping, missed lead detection; works with Alexandros for seed data |
 | **Asclepius** | Quality | Punch lists, FAT/installation tracking, quality dashboards |
 | **Atlas** | Project Manager | Project logbook, production schedules, payment milestones |
 | **Cadmus** | CMO / Case Studies | Case studies, LinkedIn posts, NDA-safe content |

@@ -17,6 +17,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 import httpx
@@ -141,11 +142,11 @@ class BaseAgent(ABC):
         if self._services.get(SK.CONVERSATION_MEMORY):
             self.register_tool(AgentTool(
                 name="get_conversation_history",
-                description="Retrieve recent conversation history for a user.",
+                description="Retrieve recent conversation history for a user. Returns the last 5 messages by default. Use recall_episodes for older context.",
                 parameters={
                     "user_id": "User ID",
                     "channel": "Channel (default 'CLI')",
-                    "limit": "Max messages (default 20)",
+                    "limit": "Max messages (default 5)",
                 },
                 handler=self._tool_get_conversation_history,
             ))
@@ -270,7 +271,7 @@ class BaseAgent(ABC):
         return f"Stored. ({len(result)} memory entries affected)"
 
     async def _tool_get_conversation_history(
-        self, user_id: str, channel: str = "CLI", limit: str = "20",
+        self, user_id: str, channel: str = "CLI", limit: str = "5",
     ) -> str:
         conv = self._services[SK.CONVERSATION_MEMORY]
         history = await conv.get_history(user_id, channel, limit=int(limit))
@@ -406,6 +407,58 @@ class BaseAgent(ABC):
 
     async def _tool_scrape_url(self, url: str) -> str:
         return await self.scrape_url(url)
+
+    _KNOWN_ENTITIES_PATH = Path("data/brain/known_entities.json")
+
+    async def _tool_check_known_entities(self, query: str) -> str:
+        """Check if a company/contact matches a known entity."""
+        try:
+            if not self._KNOWN_ENTITIES_PATH.exists():
+                return "Known entities registry not found."
+            raw = await asyncio.to_thread(self._KNOWN_ENTITIES_PATH.read_text)
+            data = json.loads(raw)
+        except (json.JSONDecodeError, OSError) as exc:
+            return f"Error reading known entities: {exc}"
+
+        query_lower = query.lower()
+        matches: list[str] = []
+
+        for agent in data.get("agents", []):
+            if query_lower in agent.get("name", "").lower() or query_lower in agent.get("email", "").lower():
+                matches.append(
+                    f"AGENT: {agent['name']} ({agent.get('email', '')}) — "
+                    f"Region: {agent.get('region', '?')}. {agent.get('note', '')}"
+                )
+
+        for cust in data.get("existing_customers", []):
+            if query_lower in cust.get("name", "").lower() or query_lower in cust.get("email", "").lower():
+                matches.append(
+                    f"EXISTING CUSTOMER: {cust['name']} — "
+                    f"Machine: {cust.get('machine', '?')}. {cust.get('note', '')}"
+                )
+
+        for vendor in data.get("vendors", []):
+            if query_lower in vendor.get("name", "").lower() or query_lower in vendor.get("email", "").lower():
+                matches.append(
+                    f"VENDOR: {vendor['name']} — "
+                    f"Service: {vendor.get('service', '?')}. {vendor.get('note', '')}"
+                )
+
+        for defunct in data.get("defunct_companies", []):
+            if query_lower in defunct.get("name", "").lower():
+                matches.append(
+                    f"DEFUNCT COMPANY: {defunct['name']} — {defunct.get('note', '')}"
+                )
+
+        for sister in data.get("sister_companies", []):
+            if query_lower in sister.get("name", "").lower() or query_lower in sister.get("domain", "").lower():
+                matches.append(
+                    f"SISTER COMPANY: {sister['name']} — {sister.get('note', '')}"
+                )
+
+        if not matches:
+            return f"No known entity match for '{query}'. Proceed with normal classification."
+        return "\n".join(matches)
 
     # ── ReAct loop ────────────────────────────────────────────────────────
 
