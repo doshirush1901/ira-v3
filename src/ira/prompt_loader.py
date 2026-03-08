@@ -60,7 +60,7 @@ def load_soul_preamble() -> str:
 
     for line in text.splitlines():
         if line.startswith("## ") and any(
-            keyword in line for keyword in ("Identity", "Voice", "Behavioral Boundaries")
+            keyword in line for keyword in ("Identity", "Philosophical Foundation", "Voice", "Behavioral Boundaries")
         ):
             if current and capture:
                 sections.append("\n".join(current))
