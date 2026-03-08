@@ -420,7 +420,10 @@ class Alexandros(BaseAgent):
         total = len(files)
 
         if total == 0:
-            return "Alexandros: Archive is empty. Run `ira index-imports` to build the metadata index."
+            return (
+                "Alexandros: Archive is empty. Files uploaded via /api/ingest are indexed "
+                "automatically. For files added directly to data/imports/, run `ira index-imports`."
+            )
 
         by_folder: dict[str, int] = {}
         by_type: dict[str, int] = {}

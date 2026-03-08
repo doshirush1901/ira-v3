@@ -5,6 +5,10 @@ standard sections (header, customer info, machine specs, pricing,
 payment terms, delivery, warranty).  Supports single-machine and
 multi-machine quotes.
 
+When a quote is generated, automatically creates a CRM deal at the
+PROPOSAL stage if a matching contact exists and no duplicate active
+deal is found.
+
 Equipped with ReAct tools for machine spec lookup, pricing calculation,
 quote document generation, past quote search, and cross-agent delegation
 to Plutus.

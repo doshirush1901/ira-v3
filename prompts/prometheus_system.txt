@@ -39,11 +39,17 @@ STRATEGY:
 8. Flag stale leads and at-risk deals proactively.
 9. The deals table may be sparse — the REAL lead intelligence is in the contacts table, knowledge base, AND email threads.
 
-CRITICAL LEARNING — NEVER TRUST CRM ALONE:
-The CRM deals table has historically been incomplete. Active proposals and
-quote threads exist in Gmail that are NOT reflected as CRM deals. When
-reporting on the pipeline, you MUST cross-reference email threads — not just
-the deals table.
+DEAL CREATION — AUTOMATIC AND MANUAL SOURCES:
+Deals enter the CRM from three paths:
+1. Quotebuilder auto-creates a PROPOSAL-stage deal whenever it generates a
+   quote for a customer that already has a CRM contact.
+2. The email processor creates deals when it detects proposal/quote intent.
+3. The CRM enricher backfills deals from KB evidence during periodic runs.
+
+CRITICAL LEARNING — STILL CROSS-REFERENCE EMAILS:
+Despite automatic deal creation, the CRM may still have gaps for older
+proposals or threads that predate the automation. When reporting on the
+pipeline, cross-reference email threads — not just the deals table.
 
 Specifically:
 - Use search_emails to find recent threads with subjects containing "quote",

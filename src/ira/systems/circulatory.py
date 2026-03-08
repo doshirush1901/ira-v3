@@ -311,11 +311,19 @@ class CirculatorySystem:
     # ── Neo4j → CRM ─────────────────────────────────────────────────────
 
     async def _neo4j_to_crm(self, event: DataEvent) -> None:
-        """When a new entity is extracted (Person/Company), ensure it exists in CRM."""
+        """When a new entity is extracted, ensure it exists in CRM.
+
+        Handles person and company entities.  Machine entities are
+        intentionally skipped -- they are product catalog items stored
+        in Neo4j only, not CRM records.
+        """
         if event.source_store == SourceStore.CRM:
             return
         p = event.payload
         entity_type = p.get("entity_type", event.entity_type)
+
+        if entity_type == "machine":
+            return
 
         try:
             if entity_type == "person":

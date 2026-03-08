@@ -183,7 +183,7 @@ Twenty-four agents. Each with a name from Greek mythology, a specific role, and 
 | **Calliope** | Writer | Drafts and polishes emails, proposals, reports |
 | **Vera** | Fact Checker | Verifies claims against the knowledge base |
 | **Sphinx** | Gatekeeper | Catches vague queries, asks clarifying questions |
-| **Quotebuilder** | Quote Builder | Generates structured quotes with specs and pricing |
+| **Quotebuilder** | Quote Builder | Generates structured quotes with specs and pricing; auto-creates CRM deals |
 | **Mnemosyne** | Memory Keeper | Long-term memory storage and retrieval |
 | **Nemesis** | Trainer | Correction ingestion, adversarial testing, sleep training |
 | **Iris** | Intelligence | Web search, news monitoring, company research |

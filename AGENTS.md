@@ -55,7 +55,7 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 | **Nemesis** | Trainer | Corrections, adversarial training, sleep training cycles |
 | **Plutus** | Finance | Pricing, revenue, margins, budgets, quote analytics |
 | **Prometheus** | Sales | CRM pipeline, deals, conversion rates, sales strategy |
-| **Quotebuilder** | Quotes | Structured formal quotes with specs, pricing, delivery |
+| **Quotebuilder** | Quotes | Structured formal quotes with specs, pricing, delivery; auto-creates CRM deals |
 | **Sophia** | Reflector | Post-interaction reflection, pattern detection, quality scoring |
 | **Sphinx** | Gatekeeper | Detects vague queries, generates clarifying questions |
 | **Themis** | HR | Employees, headcount, policies, salary data |

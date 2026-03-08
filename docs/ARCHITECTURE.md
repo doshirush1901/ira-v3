@@ -112,7 +112,7 @@ ReAct tools that depend on memory, CRM, and other shared services.
 | Nemesis | Trainer | ingest_correction, run_training, create_adversarial_scenario |
 | Plutus | Finance | estimate_price, get_quote, search_financial_docs |
 | Prometheus | Sales | search_contacts, get_deal, get_pipeline_summary |
-| Quotebuilder | Quote Builder | lookup_machine_specs, calculate_pricing, generate_quote_document |
+| Quotebuilder | Quote Builder | lookup_machine_specs, calculate_pricing, generate_quote_document; auto-creates CRM deals |
 | Sophia | Reflector | get_correction_history, suggest_improvement |
 | Sphinx | Gatekeeper | analyze_query, suggest_clarifications |
 | Themis | HR | lookup_employee, search_hr_policies, generate_org_chart |
