@@ -75,7 +75,7 @@ docker compose -f docker-compose.local.yml up -d
 alembic upgrade head
 
 # Run the server
-poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000
+poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
 
 # Interactive CLI
 poetry run ira chat

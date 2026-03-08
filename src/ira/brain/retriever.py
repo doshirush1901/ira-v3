@@ -259,7 +259,7 @@ class UnifiedRetriever:
         try:
             raw = self._mem0.search(
                 query,
-                filters={"user_id": "global"},
+                user_id="global",
                 top_k=limit,
             )
             memories = raw.get("results", raw) if isinstance(raw, dict) else raw
@@ -334,6 +334,8 @@ class UnifiedRetriever:
 
         return await self._flashrank_rerank(query, results, limit)
 
+    _MAX_DOC_CHARS = 8000
+
     async def _voyage_rerank(
         self,
         query: str,
@@ -341,14 +343,23 @@ class UnifiedRetriever:
         limit: int,
     ) -> list[dict[str, Any]]:
         """Rerank via the Voyage AI Rerank API."""
-        documents = [r.get("content", "") for r in results]
+        filtered: list[tuple[int, str]] = []
+        for i, r in enumerate(results):
+            doc = r.get("content", "").strip()
+            if doc:
+                filtered.append((i, doc[:self._MAX_DOC_CHARS]))
+
+        if not filtered:
+            return await self._flashrank_rerank(query, results, limit)
+
+        original_indices, documents = zip(*filtered)
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 _VOYAGE_RERANK_URL,
                 json={
                     "query": query,
-                    "documents": documents,
+                    "documents": list(documents),
                     "model": self._voyage_rerank_model,
                     "top_k": limit,
                 },
@@ -365,7 +376,7 @@ class UnifiedRetriever:
         output: list[dict[str, Any]] = []
         for item in ranked_items:
             idx = item["index"]
-            original = results[idx]
+            original = results[original_indices[idx]]
             output.append(
                 {
                     "content": original.get("content", ""),

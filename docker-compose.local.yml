@@ -5,6 +5,7 @@ services:
       - "6333:6333"
     volumes:
       - ./data/qdrant:/qdrant/storage
+    mem_limit: 1g
     networks:
       - ira-network
 
@@ -19,6 +20,7 @@ services:
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
     volumes:
       - ./data/neo4j:/data
+    mem_limit: 2g
     networks:
       - ira-network
 
@@ -32,6 +34,7 @@ services:
       POSTGRES_DB: ira_crm
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    mem_limit: 512m
     networks:
       - ira-network
 
@@ -41,6 +44,7 @@ services:
       - "6379:6379"
     volumes:
       - ./data/redis:/data
+    mem_limit: 256m
     networks:
       - ira-network
 

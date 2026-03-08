@@ -573,7 +573,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Ira — Machinecraft AI Pantheon",
-    version="3.0.0",
+    version="3.2.0",
     lifespan=lifespan,
     dependencies=[Depends(require_api_key)],
 )

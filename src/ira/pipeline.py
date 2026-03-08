@@ -84,6 +84,9 @@ class RequestPipeline:
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
         self._recent_messages: dict[str, tuple[str, float]] = {}
+        self._request_semaphore = asyncio.Semaphore(3)
+
+    _REQUEST_TIMEOUT = 120
 
     # ── Public entry point ────────────────────────────────────────────────
 
@@ -94,6 +97,35 @@ class RequestPipeline:
         channel: str,
         sender_id: str,
         metadata: dict[str, Any] | None = None,
+        on_progress: Any | None = None,
+    ) -> tuple[str, list[str]]:
+        """Run the full 11-step pipeline with concurrency and timeout guards."""
+        async with self._request_semaphore:
+            try:
+                return await asyncio.wait_for(
+                    self._process_request_inner(
+                        raw_input, channel, sender_id, metadata, on_progress,
+                    ),
+                    timeout=self._REQUEST_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Pipeline timed out after %ds for sender=%s",
+                    self._REQUEST_TIMEOUT, sender_id,
+                )
+                return (
+                    f"I'm sorry, the request timed out after {self._REQUEST_TIMEOUT} seconds. "
+                    "Please try a simpler question or ask about one topic at a time.",
+                    ["timeout"],
+                )
+
+    async def _process_request_inner(
+        self,
+        raw_input: str,
+        channel: str,
+        sender_id: str,
+        metadata: dict[str, Any] | None = None,
+        on_progress: Any | None = None,
     ) -> tuple[str, list[str]]:
         """Run the full 11-step pipeline and return ``(shaped_response, agents_used)``."""
         t0 = time.monotonic()
@@ -346,10 +378,12 @@ class RequestPipeline:
             agents_used = ["truth_hints"]
         elif route_method in ("deterministic", "procedural"):
             raw_response, agents_used = await self._execute_routed(
-                agent_names, resolved_input, context,
+                agent_names, resolved_input, context, on_progress,
             )
         else:
-            raw_response = await self._pantheon.process(resolved_input, context)
+            raw_response = await self._pantheon.process(
+                resolved_input, context, on_progress=on_progress,
+            )
             agents_used = ["athena"]
 
         trace["route"] = route_method
@@ -461,13 +495,16 @@ class RequestPipeline:
 
     # ── Execution helpers ─────────────────────────────────────────────────
 
+    _AGENT_TIMEOUT = 60
+
     async def _execute_routed(
         self,
         agent_names: list[str],
         query: str,
         context: dict[str, Any],
+        on_progress: Any | None = None,
     ) -> tuple[str, list[str]]:
-        """Execute one or more agents by name, returning (response, names_used)."""
+        """Execute one or more agents sequentially, returning (response, names_used)."""
         used: list[str] = []
         responses: dict[str, str] = {}
 
@@ -476,23 +513,36 @@ class RequestPipeline:
             if agent is None:
                 logger.warning("Agent '%s' not found — skipping", name)
                 continue
+            if on_progress:
+                await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
             try:
-                resp = await agent.handle(query, context)
+                resp = await asyncio.wait_for(
+                    agent.handle(query, context),
+                    timeout=self._AGENT_TIMEOUT,
+                )
                 responses[name] = resp
+                used.append(name)
+            except asyncio.TimeoutError:
+                logger.warning("Agent '%s' timed out after %ds", name, self._AGENT_TIMEOUT)
+                responses[name] = f"(Agent '{name}' timed out after {self._AGENT_TIMEOUT}s)"
                 used.append(name)
             except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed during execution", name)
                 responses[name] = f"(Agent '{name}' encountered an error)"
                 used.append(name)
+            if on_progress:
+                await on_progress({"type": "agent_done", "agent": name, "preview": responses[name][:200]})
 
         if not responses:
-            return await self._pantheon.process(query, context), ["athena"]
+            return await self._pantheon.process(query, context, on_progress=on_progress), ["athena"]
 
         if len(responses) == 1:
             return next(iter(responses.values())), used
 
         athena = self._pantheon.get_agent("athena")
         if athena is not None:
+            if on_progress:
+                await on_progress({"type": "synthesizing", "agent": "athena"})
             synthesised = await athena.handle(
                 query, {"agent_responses": responses},
             )

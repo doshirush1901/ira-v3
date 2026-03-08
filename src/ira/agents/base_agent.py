@@ -300,7 +300,10 @@ class BaseAgent(ABC):
         if agent is None:
             return f"Agent '{agent_name}' not found."
         try:
-            return await agent.handle(question, {"_delegation_depth": depth + 1})
+            return await agent.handle(question, {
+                "services": {"_delegation_depth": depth + 1},
+                "_delegation_depth": depth + 1,
+            })
         except (ToolExecutionError, Exception) as exc:
             logger.warning("Delegation to '%s' failed in %s: %s", agent_name, self.name, exc)
             return f"Agent '{agent_name}' error: {exc}"
