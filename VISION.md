@@ -21,17 +21,19 @@ but by routing to specialists who each own their domain.
 - 11-stage request pipeline (perceive → remember → route → execute → learn)
 - Three-tier routing: deterministic → procedural memory → LLM
 - Hybrid retrieval across Qdrant (vectors), Neo4j (graph), and Mem0 (memory)
+- Graph-vector stitching — force-fetches Qdrant chunks for graph entities
+- Contextual retrieval — document-level summaries prepended to every chunk
+- Semantic chunking via Chonkie with Voyage AI embeddings + table preservation
 - Nine memory subsystems including dream mode for overnight consolidation
 - Body-system metaphor for subsystem organization
-- REST API and CLI interfaces
+- REST API, CLI, MCP server (35+ tools), and Next.js web UI
 - CRM with companies, contacts, deals, and quotes in PostgreSQL
 - Drip campaign engine with 7-stage sequences
-- Document ingestion pipeline (PDF, DOCX, Excel)
+- Document ingestion pipeline (PDF, DOCX, Excel) via Docling + Chonkie
+- Configurable delegation depth (default 5, via `AppConfig.max_delegation_depth`)
 
 ### What needs work
 
-- **Retrieval quality.** Reranking helps but the chunking strategy needs
-  tuning. Some queries return irrelevant results from Qdrant.
 - **Agent tool reliability.** Some tools fail silently or return empty results
   without the agent retrying or falling back.
 - **Email processing.** The digestive system handles ingestion but the
@@ -50,14 +52,14 @@ In order:
 
 1. **Reliability.** Fix silent failures, add retries, improve error messages.
    Ira should never return "I don't know" when the answer is in the KB.
-2. **Retrieval quality.** Better chunking, smarter query decomposition,
-   tune reranking weights across Qdrant/Neo4j/Mem0.
-3. **Email workflow.** End-to-end email processing from inbox to sent folder,
+2. **Email workflow.** End-to-end email processing from inbox to sent folder,
    with human-in-the-loop approval.
-4. **Testing.** Increase coverage for body systems, memory, and the pipeline.
+3. **Testing.** Increase coverage for body systems, memory, and the pipeline.
    Add integration tests that exercise the full request flow.
-5. **Observability.** Dashboard for pipeline metrics, agent performance, and
+4. **Observability.** Dashboard for pipeline metrics, agent performance, and
    system health trends.
+5. **Web UI polish.** Authentication, conversation history persistence, and
+   mobile-responsive layout for the Next.js frontend.
 
 ## Architectural Principles
 

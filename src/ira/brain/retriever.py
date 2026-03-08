@@ -108,8 +108,80 @@ class UnifiedRetriever:
         if not merged:
             return await self._imports_fallback(query, limit)
 
+        merged = await self._stitch_graph_to_vectors(merged)
+
         await self._log_retrieval(query, merged)
         return await self._rerank(query, merged, limit)
+
+    # ── graph-vector stitching ───────────────────────────────────────────
+
+    async def _stitch_graph_to_vectors(
+        self,
+        merged_results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Force-fetch Qdrant chunks for entities the graph knows about.
+
+        When Neo4j returns a Quote or Machine node the metadata carries an
+        identifier (``quote_id``, ``model``) but no document text.  If the
+        initial Qdrant fan-out didn't happen to retrieve the matching PDF
+        chunk the LLM is left to guess — causing hallucinated prices and
+        specs.
+
+        This method scans the merged results for graph nodes, extracts
+        their identifiers, runs targeted Qdrant searches for each one
+        concurrently, deduplicates against content already present, and
+        appends the new chunks tagged ``qdrant_stitched``.
+        """
+        graph_items = [
+            r for r in merged_results
+            if r.get("source_type") == "neo4j"
+        ]
+        if not graph_items:
+            return merged_results
+
+        existing_contents: set[str] = {
+            r.get("content", "")[:200] for r in merged_results
+        }
+
+        identifiers: set[str] = set()
+        for r in graph_items:
+            meta = r.get("metadata", {})
+            if not isinstance(meta, dict):
+                continue
+            for key in ("quote_id", "model"):
+                val = str(meta.get(key, "")).strip()
+                if val:
+                    identifiers.add(val)
+
+        if not identifiers:
+            return merged_results
+
+        stitch_tasks = [
+            self._qdrant.hybrid_search(eid, limit=3)
+            for eid in list(identifiers)[:10]
+        ]
+        all_results = await asyncio.gather(*stitch_tasks, return_exceptions=True)
+
+        new_chunks: list[dict[str, Any]] = []
+        for result_set in all_results:
+            if isinstance(result_set, BaseException):
+                logger.debug("Graph-vector stitch search failed: %s", result_set)
+                continue
+            for r in result_set:
+                content_key = r.get("content", "")[:200]
+                if content_key not in existing_contents:
+                    existing_contents.add(content_key)
+                    r["source_type"] = "qdrant_stitched"
+                    new_chunks.append(r)
+
+        if new_chunks:
+            logger.info(
+                "Graph-vector stitch added %d Qdrant chunks for identifiers: %s",
+                len(new_chunks), list(identifiers)[:5],
+            )
+            merged_results.extend(new_chunks)
+
+        return merged_results
 
     # ── query decomposition ──────────────────────────────────────────────
 

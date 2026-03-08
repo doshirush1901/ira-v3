@@ -740,6 +740,51 @@ async def find_company_quotes(company_name: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# CORRECTION TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def submit_correction(
+    entity: str,
+    wrong_value: str,
+    correct_value: str,
+    category: str = "GENERAL",
+) -> str:
+    """Submit a factual correction so Nemesis can train Ira during Dream Mode.
+
+    Use this when Ira gets a fact wrong — pricing, specs, customer info, etc.
+    Valid categories: PRICING, SPECS, CUSTOMER, COMPETITOR, GENERAL.
+    """
+    from ira.brain.correction_store import CorrectionCategory, CorrectionStore
+
+    try:
+        cat = CorrectionCategory[category.upper()]
+    except KeyError:
+        cat = CorrectionCategory.GENERAL
+
+    try:
+        store = CorrectionStore()
+        await store.initialize()
+        row_id = await store.add_correction(
+            entity=entity,
+            new_value=correct_value,
+            old_value=wrong_value,
+            category=cat,
+            source="cursor_mcp",
+        )
+        await store.close()
+        return (
+            f"Correction #{row_id} logged for entity '{entity}' "
+            f"(category={cat.value}). Nemesis will process this during "
+            "the next Dream Mode cycle."
+        )
+    except Exception as exc:
+        logger.exception("MCP submit_correction failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # WEB TOOLS
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -971,6 +1016,190 @@ async def generate_report(
     except Exception as exc:
         logger.exception("generate_report failed")
         return json.dumps({"error": str(exc)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DREAM MODE & METACOGNITION TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def trigger_dream_mode() -> str:
+    """Trigger Ira's Dream Mode consolidation cycle immediately.
+
+    Runs the full 11-stage dream cycle: memory consolidation, gap resolution,
+    creative connections, campaign insights, and Nemesis training.
+    Returns a report with what was consolidated and discovered.
+    """
+    await _ensure_initialized()
+
+    try:
+        from ira.memory.dream_mode import DreamMode
+        from ira.memory.episodic import EpisodicMemory
+        from ira.memory.long_term import LongTermMemory
+        from ira.memory.conversation import ConversationMemory
+        from ira.service_keys import ServiceKey as SK
+
+        long_term = _long_term_memory
+        if long_term is None:
+            long_term = LongTermMemory()
+
+        episodic = None
+        conversation = _conversation_memory
+
+        if _pantheon is not None:
+            mnemosyne = _pantheon.get_agent("mnemosyne")
+            if mnemosyne and hasattr(mnemosyne, "_services"):
+                episodic = mnemosyne._services.get(SK.EPISODIC_MEMORY)
+
+        if episodic is None:
+            episodic = EpisodicMemory(long_term=long_term)
+            await episodic.initialize()
+
+        if conversation is None:
+            conversation = ConversationMemory()
+            await conversation.initialize()
+
+        dm = DreamMode(
+            long_term=long_term,
+            episodic=episodic,
+            conversation=conversation,
+            retriever=_retriever,
+            crm=_crm,
+        )
+        await dm.initialize()
+        report = await dm.run_dream_cycle()
+        await dm.close()
+
+        return json.dumps({
+            "cycle_date": str(report.cycle_date),
+            "memories_consolidated": report.memories_consolidated,
+            "gaps_identified": report.gaps_identified,
+            "creative_connections": report.creative_connections,
+            "campaign_insights": report.campaign_insights,
+            "stage_results": report.stage_results,
+        }, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP trigger_dream_mode failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
+async def get_knowledge_gaps(limit: int = 10) -> str:
+    """Show knowledge gaps Ira has identified during conversations.
+
+    Returns unresolved gaps so you know what documents to upload next.
+    Each gap includes the original query, the knowledge state, and
+    specific missing information.
+    """
+    try:
+        from ira.memory.metacognition import Metacognition
+
+        meta = Metacognition()
+        await meta.initialize()
+        gaps = await meta.get_unresolved_gaps(limit=limit)
+        await meta.close()
+
+        if not gaps:
+            return "No unresolved knowledge gaps found."
+
+        return json.dumps(gaps, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP get_knowledge_gaps failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BOARD MEETING TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def convene_board_meeting(
+    topic: str,
+    participants: str = "all",
+) -> str:
+    """Convene a Pantheon Board Meeting for complex strategic questions.
+
+    Multiple agents debate the topic and Athena synthesizes a final answer.
+    Set participants to a comma-separated list of agent names, or "all"
+    for a full board meeting (e.g. "prometheus,plutus,hephaestus").
+    """
+    await _ensure_initialized()
+    if _pantheon is None:
+        return "Pantheon not available."
+
+    try:
+        names: list[str] | None = None
+        if participants.strip().lower() != "all":
+            names = [n.strip().lower() for n in participants.split(",") if n.strip()]
+
+        minutes = await _pantheon.board_meeting(topic=topic, participants=names)
+
+        return json.dumps({
+            "topic": minutes.topic,
+            "participants": minutes.participants,
+            "contributions": minutes.contributions,
+            "synthesis": minutes.synthesis,
+            "action_items": minutes.action_items,
+        }, indent=2, default=str)
+    except Exception as exc:
+        logger.exception("MCP convene_board_meeting failed")
+        return f"Error: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SYSTEM STATUS TOOLS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def get_system_status() -> str:
+    """Check Ira's system health and agent power levels.
+
+    Returns two sections:
+    1. Service health — status of Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage
+    2. Agent leaderboard — top agents ranked by performance score and tier
+    """
+    await _ensure_initialized()
+
+    result: dict[str, Any] = {}
+
+    try:
+        from ira.brain.power_levels import PowerLevelTracker
+
+        tracker = PowerLevelTracker()
+        await tracker._load()
+        leaderboard = tracker.get_leaderboard()
+        result["agent_leaderboard"] = leaderboard[:10]
+    except Exception as exc:
+        logger.warning("Power level check failed: %s", exc)
+        result["agent_leaderboard"] = f"Error: {exc}"
+
+    try:
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.knowledge_graph import KnowledgeGraph
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.systems.immune import ImmuneSystem
+
+        embedding = EmbeddingService()
+        qdrant = QdrantManager(embedding_service=embedding)
+        graph = KnowledgeGraph()
+        immune = ImmuneSystem(
+            qdrant=qdrant,
+            knowledge_graph=graph,
+            embedding_service=embedding,
+        )
+        health = await immune.run_startup_validation()
+        result["service_health"] = {
+            name: {"status": info["status"], "latency_ms": info.get("latency_ms")}
+            for name, info in health.items()
+        }
+    except Exception as exc:
+        logger.warning("Health check failed: %s", exc)
+        result["service_health"] = f"Error: {exc}"
+
+    return json.dumps(result, indent=2, default=str)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

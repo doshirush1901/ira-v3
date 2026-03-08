@@ -477,6 +477,14 @@ poetry run uvicorn ira.interfaces.server:app --reload
 poetry run ira mcp
 ```
 
+**Web UI (for the team):**
+```bash
+cd web-ui && npm install && npm run dev
+```
+Open http://localhost:3000. Set `CORS_ORIGINS=http://localhost:3000` in the
+backend `.env`. The web UI features an agent selector, SSE streaming with
+live progress indicators, and full Markdown/GFM rendering.
+
 ### Other CLI Commands
 
 ```bash

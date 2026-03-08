@@ -279,6 +279,58 @@ def _chunk_text_tiktoken(
     return chunks
 
 
+_TABLE_PATTERN = re.compile(
+    r"((?:^\|.+\|$\n?){2,})",
+    re.MULTILINE,
+)
+_TABLE_SENTINEL_START = "\n\n<!-- TABLE_BOUNDARY -->\n"
+_TABLE_SENTINEL_END = "\n<!-- /TABLE_BOUNDARY -->\n\n"
+
+
+def _protect_tables(text: str) -> tuple[str, list[str]]:
+    """Wrap Markdown tables in sentinels so the chunker won't split them."""
+    tables: list[str] = []
+
+    def _replace(m: re.Match) -> str:
+        tables.append(m.group(1))
+        idx = len(tables) - 1
+        return f"{_TABLE_SENTINEL_START}__TABLE_{idx}__{_TABLE_SENTINEL_END}"
+
+    return _TABLE_PATTERN.sub(_replace, text), tables
+
+
+def _restore_tables(chunks: list[str], tables: list[str]) -> list[str]:
+    """Replace table placeholders with original table text."""
+    restored: list[str] = []
+    for chunk in chunks:
+        for idx, table in enumerate(tables):
+            placeholder = f"__TABLE_{idx}__"
+            if placeholder in chunk:
+                chunk = chunk.replace(
+                    f"{_TABLE_SENTINEL_START}{placeholder}{_TABLE_SENTINEL_END}",
+                    f"\n\n{table}\n\n",
+                )
+        restored.append(chunk.strip())
+    return [c for c in restored if c]
+
+
+def _get_voyage_embeddings():
+    """Build a Chonkie VoyageAIEmbeddings instance using our configured key."""
+    try:
+        from chonkie.embeddings import VoyageAIEmbeddings
+        from ira.config import get_settings
+
+        settings = get_settings()
+        api_key = settings.embedding.api_key.get_secret_value()
+        model = settings.embedding.model
+        if not api_key:
+            return None
+        return VoyageAIEmbeddings(model=model, api_key=api_key)
+    except Exception:
+        logger.debug("VoyageAI embeddings for Chonkie unavailable", exc_info=True)
+        return None
+
+
 def chunk_text(
     text: str,
     chunk_size: int = _DEFAULT_CHUNK_SIZE,
@@ -286,24 +338,32 @@ def chunk_text(
 ) -> list[str]:
     """Split *text* into semantically coherent chunks via Chonkie.
 
-    Uses SemanticChunker when available (groups sentences by meaning),
-    falling back to the legacy fixed-size tiktoken chunker.
+    Uses SemanticChunker with VoyageAI embeddings (matching our retrieval
+    embedding space) when available.  Markdown tables are protected from
+    being split across chunk boundaries.  Falls back to the legacy
+    fixed-size tiktoken chunker on error.
     """
+    protected_text, tables = _protect_tables(text)
+
     try:
         from chonkie import SemanticChunker
 
+        embedding_model = _get_voyage_embeddings() or "minishlab/potion-base-32M"
         chunker = SemanticChunker(
+            embedding_model=embedding_model,
             chunk_size=chunk_size,
-            chunk_overlap=overlap,
+            threshold=0.7,
+            similarity_window=3,
         )
-        chunks = chunker.chunk(text)
+        chunks = chunker.chunk(protected_text)
         result = [c.text for c in chunks if c.text.strip()]
         if result:
-            return result
+            return _restore_tables(result, tables)
     except Exception:
         logger.debug("Chonkie semantic chunking failed — using tiktoken fallback", exc_info=True)
 
-    return _chunk_text_tiktoken(text, chunk_size, overlap)
+    fallback = _chunk_text_tiktoken(protected_text, chunk_size, overlap)
+    return _restore_tables(fallback, tables)
 
 
 # ── category extraction ──────────────────────────────────────────────────────
@@ -377,6 +437,36 @@ class DocumentIngestor:
         logger.info("Discovered %d importable files under %s", len(files), root)
         return files
 
+    # ── contextual retrieval ─────────────────────────────────────────────
+
+    _CONTEXT_PREVIEW_CHARS = 3000
+
+    async def _generate_document_context(self, text: str, filename: str) -> str:
+        """Generate a 2-sentence document summary for contextual retrieval.
+
+        Prepended to every chunk so isolated chunks retain the global
+        context of their source document (Anthropic's Contextual Retrieval).
+        """
+        try:
+            from ira.prompt_loader import load_prompt
+            from ira.services.llm_client import get_llm_client
+
+            system = load_prompt("document_context")
+            preview = text[: self._CONTEXT_PREVIEW_CHARS]
+            user_msg = f"Filename: {filename}\n\n{preview}"
+            summary = await get_llm_client().generate_text(
+                system, user_msg,
+                temperature=0.0, max_tokens=200,
+                name="document_context",
+            )
+            return summary.strip()
+        except Exception:
+            logger.warning(
+                "Document context generation failed for %s — proceeding without context",
+                filename, exc_info=True,
+            )
+            return ""
+
     # ── single-file ingestion ────────────────────────────────────────────
 
     def is_already_ingested(self, file_info: dict[str, Any]) -> bool:
@@ -425,17 +515,23 @@ class DocumentIngestor:
             logger.warning("Empty content after reading: %s", path)
             return 0
 
+        doc_context = await self._generate_document_context(text, path.name)
+
         chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
         items = [
             KnowledgeItem(
                 source=str(path),
                 source_category=category,
-                content=chunk,
+                content=(
+                    f"[Source Context: {doc_context}]\n\n{chunk}"
+                    if doc_context else chunk
+                ),
                 metadata={
                     "chunk_index": i,
                     "total_chunks": len(chunks),
                     "extension": ext,
+                    "document_context": doc_context or "",
                 },
             )
             for i, chunk in enumerate(chunks)

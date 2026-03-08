@@ -16,3 +16,4 @@ docs/
 *.egg-info/
 dist/
 build/
+web-ui/

@@ -17,7 +17,7 @@ src/ira/
                 #   entity extraction (GLiNER), guardrails (30 modules)
   memory/       # 9 memory subsystems + dream mode + goal sweep
   systems/      # Body-system metaphor (20 modules)
-  interfaces/   # FastAPI server, CLI, email processor, dashboard, cursor feedback
+  interfaces/   # FastAPI server, CLI, MCP server, email processor, dashboard
   data/         # CRM models, quote models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers
@@ -27,10 +27,11 @@ src/ira/
   pantheon.py   # Agent orchestrator + routing
   config.py     # Pydantic settings (all config from .env)
   message_bus.py # Inter-agent pub/sub messaging
-prompts/        # LLM prompt templates (68 files)
+prompts/        # LLM prompt templates (69 files)
 tests/          # pytest test suite (23 files, ~10,600 lines)
 alembic/        # PostgreSQL migrations
 scripts/        # Operational + training scripts
+web-ui/         # Next.js web interface (App Router + Tailwind CSS)
 docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 ```
 
@@ -103,6 +104,9 @@ poetry run ira email sync                           # one-time inbox poll
 poetry run ira email learn --thread-id "18f3a..."   # learn from a thread
 poetry run ira email rescan --after 2023/01/01      # deep historical scan
 poetry run ira email rescan --dry-run --resume      # resume a previous scan
+
+# Web UI (Next.js)
+cd web-ui && npm install && npm run dev             # http://localhost:3000
 ```
 
 ## Code Conventions
@@ -199,6 +203,7 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 | Method | Path | Description |
 |:-------|:-----|:------------|
 | POST | `/api/query` | Send a message to Ira |
+| POST | `/api/query/stream` | SSE streaming query with live progress events |
 | POST | `/api/feedback` | Submit a correction |
 | GET | `/api/health` | Quick health check |
 | GET | `/api/deep-health` | Detailed service-by-service health |
@@ -208,11 +213,52 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 | POST | `/api/reingest-scanned` | Re-OCR scanned PDFs via Document AI |
 | POST | `/api/board-meeting` | Trigger a board meeting |
 | GET | `/api/dream-report` | Trigger dream cycle and return report |
+| POST | `/api/task/stream` | Multi-phase task execution with SSE streaming |
+| POST | `/api/task/clarify` | Resume a task after clarification |
 | POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
 | GET | `/api/email/thread/{id}` | Fetch full email thread by Gmail thread ID |
 | POST | `/api/email/draft` | Draft an email via Calliope |
 | POST | `/api/email/rescan` | Deep historical scan with SSE progress streaming |
 | GET | `/api/email/rescan` | Check status of running/last rescan |
+
+## MCP Tools (Cursor Integration)
+
+The MCP server (`src/ira/interfaces/mcp_server.py`) exposes 35+ tools for
+use in Cursor, Claude Desktop, or any MCP-compatible client:
+
+| Category | Tools |
+|:---------|:------|
+| **Pipeline** | `query_ira`, `search_knowledge`, `search_crm`, `get_pipeline_summary`, `ask_agent` |
+| **Email** | `search_emails`, `read_email_thread`, `draft_email` |
+| **Memory** | `recall_memory`, `store_memory`, `get_conversation_history`, `check_relationship`, `check_goals` |
+| **CRM** | `get_deal`, `list_deals`, `create_contact`, `update_deal`, `get_stale_leads` |
+| **Knowledge Graph** | `find_related_entities`, `find_company_contacts`, `find_company_quotes` |
+| **Corrections** | `submit_correction` — log factual corrections for Nemesis to process during Dream Mode |
+| **Dream Mode** | `trigger_dream_mode` — run the 11-stage memory consolidation cycle on demand |
+| **Board Meeting** | `convene_board_meeting` — multi-agent strategic debate with Athena synthesis |
+| **Metacognition** | `get_knowledge_gaps` — see what Ira doesn't know so you can upload the right documents |
+| **System Health** | `get_system_status` — service health (Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage) + agent power levels |
+| **Web** | `web_search`, `scrape_url` |
+| **Projects** | `get_project_status`, `get_overdue_milestones` |
+| **Agent Loop** | `plan_task`, `execute_phase`, `generate_report` |
+
+## Web UI
+
+A Next.js web interface lives in `web-ui/` for team members who don't use
+Cursor or Telegram. It connects to the FastAPI backend via SSE streaming.
+
+```bash
+cd web-ui
+npm install
+npm run dev   # → http://localhost:3000
+```
+
+Set `CORS_ORIGINS=http://localhost:3000` in the backend `.env`. If the
+backend has `API_SECRET_KEY` set, add `NEXT_PUBLIC_IRA_API_KEY=<key>` to
+`web-ui/.env.local`.
+
+Features: agent selector dropdown, real-time SSE progress indicators,
+Markdown/GFM table rendering, authenticated API calls.
 
 ## Important Rules
 
