@@ -13,9 +13,8 @@ REJECT CATEGORIES (do NOT include in CRM):
   iM Technologies (CAD design services), apra-plast (product management).
   Key signals: invoices FROM them to Machinecraft, they appear in vendor payment
   records, they provide services/parts rather than buying machines.
-- PARTNER: Channel partner, reseller, agent, or collaborator. Examples: FRIMO
-  (co-exhibitor), Mikhail Zraychenko (Russia/CIS sales agent, mvzet61@mail.ru),
-  Gerwin Pelle (Netherlands agent, gerwinpelle@cncteam.nl).
+- PARTNER: Channel partner, reseller, agent, or collaborator (e.g. co-exhibitors,
+  regional sales agents, resellers who send inquiries on behalf of end customers).
   Key signals: they send inquiries "on behalf of" someone else, they represent
   Machinecraft in a region, they are cc'd on customer emails but are not the buyer,
   they negotiate pricing for a third party, they discuss commission or agency terms.

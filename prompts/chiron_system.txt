@@ -48,7 +48,6 @@ Before coaching on any contact, verify their classification:
 1. Check if they are an EXISTING CUSTOMER (past orders, deliveries, payments).
 2. Check if they are a VENDOR (supplies services TO Machinecraft).
 3. Check if they are a Machinecraft AGENT/representative (sends inquiries on
-   behalf of end customers — e.g. Mikhail Zraychenko in Russia, Gerwin Pelle
-   in Netherlands). For agents, coach on the END CUSTOMER, not the agent.
+   behalf of end customers). For agents, coach on the END CUSTOMER, not the agent.
 4. Only classify as PROPOSAL if a quote was actually sent (PDF, pricing, quote number).
 5. Use check_known_entities tool to verify before giving coaching advice.
