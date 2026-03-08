@@ -490,37 +490,22 @@ class EmailProcessor:
         resume: bool = False,
         dry_run: bool = False,
         progress_callback: Any | None = None,
+        artemis: Any | None = None,
+        triage_batch_size: int = 20,
     ) -> dict[str, Any]:
         """Scan historical Gmail messages through the full analysis pipeline.
 
-        Pages through all messages matching the date range, deduplicates
-        against already-processed message IDs (via a checkpoint file), and
-        runs each email through Delphi classification + DigestiveSystem
-        ingestion + CRM interaction logging.
+        When *artemis* is provided, the scan uses a two-phase approach:
 
-        Parameters
-        ----------
-        after : str
-            Start date in ``YYYY/MM/DD`` format (inclusive).
-        before : str
-            End date in ``YYYY/MM/DD`` format (exclusive).
-        batch_size : int
-            Gmail API page size (max 500).
-        throttle : float
-            Seconds to sleep between individual message fetches.
-        resume : bool
-            If True, skip message IDs already recorded in the checkpoint.
-        dry_run : bool
-            If True, fetch and classify but do not write to CRM/Qdrant.
-        progress_callback : callable, optional
-            ``callback(processed, total_estimate, stats)`` called after
-            each message.
+        1. **Batch triage** — fetch lightweight metadata for all messages,
+           then ask Artemis to classify batches of *triage_batch_size* as
+           BUSINESS_HIGH / BUSINESS_LOW / NOISE.  Only BUSINESS_HIGH
+           emails proceed to full processing.
+        2. **Deep processing** — fetch full body and run through
+           ``_analyze_email()`` (Delphi + DigestiveSystem + CRM).
 
-        Returns
-        -------
-        dict
-            Summary with counts of processed, skipped, errors, contacts
-            found, and deals created.
+        Without *artemis*, every email is fetched and processed (original
+        behaviour, much slower for large mailboxes).
         """
         checkpoint_path = Path("data/.deep_scan_checkpoint.json")
         processed_ids: set[str] = set()
@@ -545,6 +530,8 @@ class EmailProcessor:
             "total_listed": 0,
             "fetched": 0,
             "processed": 0,
+            "triaged_business_high": 0,
+            "triaged_noise": 0,
             "skipped_duplicate": 0,
             "skipped_non_business": 0,
             "contacts_found": 0,
@@ -555,7 +542,6 @@ class EmailProcessor:
             "errors": 0,
         }
 
-        # Track threads to detect missed leads (inbound with no outbound reply)
         threads_with_inbound: set[str] = set()
         threads_with_outbound: set[str] = set()
 
@@ -563,11 +549,84 @@ class EmailProcessor:
         stats["total_listed"] = len(all_stubs)
         logger.info("Deep scan: %d messages listed for q=%r", len(all_stubs), q)
 
+        # Phase 1: Batch triage via Artemis (if available)
+        business_ids: set[str] | None = None
+        if artemis is not None:
+            logger.info("Artemis batch triage: classifying %d messages in batches of %d",
+                        len(all_stubs), triage_batch_size)
+            business_ids = set()
+            new_stubs = [s for s in all_stubs if s["id"] not in processed_ids]
+
+            for batch_start in range(0, len(new_stubs), triage_batch_size):
+                batch = new_stubs[batch_start:batch_start + triage_batch_size]
+
+                metadata_batch = await self._fetch_metadata_batch(service, batch)
+
+                triage_input = []
+                for meta in metadata_batch:
+                    _, from_email = parseaddr(meta.get("from", ""))
+                    if from_email and _is_non_business_sender(from_email):
+                        stats["skipped_non_business"] += 1
+                        processed_ids.add(meta["id"])
+                        continue
+                    triage_input.append({
+                        "id": meta["id"],
+                        "from": meta.get("from", ""),
+                        "subject": meta.get("subject", ""),
+                        "snippet": meta.get("snippet", ""),
+                    })
+
+                if not triage_input:
+                    continue
+
+                try:
+                    triage_json = json.dumps(triage_input)
+                    result = await artemis.handle(
+                        "Triage this batch of emails.",
+                        {"task": "batch_triage", "batch": triage_json},
+                    )
+
+                    classifications = json.loads(result) if isinstance(result, str) else result
+                    if isinstance(classifications, list):
+                        for item in classifications:
+                            cat = item.get("category", "NOISE")
+                            if cat == "BUSINESS_HIGH":
+                                business_ids.add(item["id"])
+                                stats["triaged_business_high"] += 1
+                            else:
+                                stats["triaged_noise"] += 1
+                                processed_ids.add(item["id"])
+                    else:
+                        for item in triage_input:
+                            business_ids.add(item["id"])
+                            stats["triaged_business_high"] += 1
+                except (LLMError, IraError, json.JSONDecodeError, Exception):
+                    logger.warning("Artemis triage failed for batch — falling back to process all",
+                                   exc_info=True)
+                    for item in triage_input:
+                        business_ids.add(item["id"])
+
+                if progress_callback is not None:
+                    progress_callback(
+                        stats["triaged_business_high"] + stats["triaged_noise"],
+                        len(new_stubs),
+                        stats,
+                    )
+
+            logger.info(
+                "Artemis triage complete: %d BUSINESS_HIGH, %d NOISE out of %d",
+                stats["triaged_business_high"], stats["triaged_noise"], len(new_stubs),
+            )
+
+        # Phase 2: Deep processing of business-relevant emails
         for i, stub in enumerate(all_stubs):
             msg_id = stub["id"]
 
             if msg_id in processed_ids:
                 stats["skipped_duplicate"] += 1
+                continue
+
+            if business_ids is not None and msg_id not in business_ids:
                 continue
 
             try:
@@ -660,6 +719,45 @@ class EmailProcessor:
             return all_stubs
 
         return await asyncio.to_thread(_list_all)
+
+    async def _fetch_metadata_batch(
+        self, service: Any, stubs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Fetch lightweight metadata (From, To, Subject, snippet) for a batch of messages.
+
+        Uses ``format=metadata`` which is much cheaper than ``format=full``
+        (~2 quota units vs 5) and avoids downloading message bodies.
+        """
+
+        def _get_batch() -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
+            for stub in stubs:
+                msg = (
+                    service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=stub["id"],
+                        format="metadata",
+                        metadataHeaders=["From", "To", "Subject"],
+                    )
+                    .execute()
+                )
+                headers = {
+                    h["name"].lower(): h["value"]
+                    for h in msg.get("payload", {}).get("headers", [])
+                }
+                results.append({
+                    "id": msg["id"],
+                    "thread_id": msg.get("threadId", ""),
+                    "from": headers.get("from", ""),
+                    "to": headers.get("to", ""),
+                    "subject": headers.get("subject", ""),
+                    "snippet": msg.get("snippet", ""),
+                })
+            return results
+
+        return await asyncio.to_thread(_get_batch)
 
     async def _fetch_single_message(
         self, service: Any, msg_id: str,
