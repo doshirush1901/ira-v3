@@ -408,24 +408,21 @@ class BaseAgent(ABC):
         if scratchpad_text:
             user_msg += f"\n\nPrevious reasoning steps:\n{scratchpad_text}\n\nContinue reasoning."
 
-        provider = "anthropic" if self.model_provider == "anthropic" else "openai"
-        decision = await self._llm.generate_structured(
-            system, user_msg, ReActDecision,
-            provider=provider, temperature=0.2,
+        primary = "anthropic" if self.model_provider == "anthropic" else "openai"
+        raw = await self._llm.generate_text_with_fallback(
+            system, user_msg,
+            primary=primary, temperature=0.2,
             name=f"{self.name}.reason",
         )
 
-        result: dict[str, Any] = {"thought": decision.thought}
-        if decision.final_answer is not None:
-            result["final_answer"] = decision.final_answer
-        elif decision.tool_to_use is not None:
-            result["tool_to_use"] = {
-                "name": decision.tool_to_use.name,
-                "input": decision.tool_to_use.input,
-            }
-        else:
-            result["final_answer"] = decision.thought or "(No response)"
-        return result
+        try:
+            parsed = self._parse_json_response(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        return {"thought": "Could not parse structured response.", "final_answer": raw}
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name."""

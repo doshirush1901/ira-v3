@@ -79,14 +79,29 @@ def _make_agent(retriever, bus, *, services=None):
     return agent
 
 
-def _setup_structured_sequence(mock_llm_client, decisions: list[ReActDecision]):
-    """Configure the mock LLMClient to return a sequence of ReActDecision objects."""
-    mock_llm_client.generate_structured.side_effect = list(decisions)
+def _setup_reason_sequence(mock_llm_client, decisions: list[ReActDecision]):
+    """Configure the mock to return JSON strings for _reason() calls via generate_text_with_fallback."""
+    json_responses = []
+    for d in decisions:
+        obj: dict[str, Any] = {"thought": d.thought}
+        if d.final_answer is not None:
+            obj["final_answer"] = d.final_answer
+        if d.tool_to_use is not None:
+            obj["tool_to_use"] = {"name": d.tool_to_use.name, "input": d.tool_to_use.input}
+        json_responses.append(json.dumps(obj))
+    mock_llm_client.generate_text_with_fallback.side_effect = list(json_responses)
 
 
-def _setup_text_sequence(mock_llm_client, responses: list[str]):
-    """Configure the mock LLMClient to return a sequence of text responses."""
-    mock_llm_client.generate_text_with_fallback.side_effect = list(responses)
+def _setup_forced_answer(mock_llm_client, decisions: list[ReActDecision], forced: str):
+    """Configure mock for loops that hit max iterations then force a final answer."""
+    json_responses = []
+    for d in decisions:
+        obj: dict[str, Any] = {"thought": d.thought}
+        if d.tool_to_use is not None:
+            obj["tool_to_use"] = {"name": d.tool_to_use.name, "input": d.tool_to_use.input}
+        json_responses.append(json.dumps(obj))
+    json_responses.append(forced)
+    mock_llm_client.generate_text_with_fallback.side_effect = list(json_responses)
 
 
 # ── Direct Answer ─────────────────────────────────────────────────────────
@@ -97,7 +112,7 @@ class TestDirectAnswer:
 
     async def test_direct_answer_returns_final_answer(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="I know the answer already.",
                 final_answer="Machinecraft makes industrial machines.",
@@ -110,7 +125,7 @@ class TestDirectAnswer:
 
     async def test_direct_answer_completes_in_one_iteration(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Simple question.", final_answer="42"),
         ])
 
@@ -126,7 +141,7 @@ class TestSingleToolUse:
 
     async def test_single_tool_call_then_answer(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="I need to search the knowledge base.",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "PF1-C specs", "limit": "5"}),
@@ -148,7 +163,7 @@ class TestSingleToolUse:
             {"content": "PF1-C max thickness: 1.2mm", "source": "specs.pdf"},
         ]
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="Search for specs.",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "PF1-C"}),
@@ -176,7 +191,7 @@ class TestMultiToolUse:
             {"content": "PF1-C is a panel former", "source": "catalog.pdf"},
         ]
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="First search for PF1-C.",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "PF1-C overview"}),
@@ -199,7 +214,7 @@ class TestMultiToolUse:
     async def test_three_tool_chain(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="Step 1",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "q1"}),
@@ -238,8 +253,7 @@ class TestMaxIterations:
             thought="Keep searching.",
             tool_to_use=ToolCall(name="search_knowledge", input={"query": "loop"}),
         )
-        _setup_structured_sequence(mock_llm_client, [tool_decision] * 3)
-        _setup_text_sequence(mock_llm_client, ["Synthesised from partial results."])
+        _setup_forced_answer(mock_llm_client, [tool_decision] * 3, "Synthesised from partial results.")
 
         result = await agent.run("Infinite loop query")
 
@@ -255,8 +269,7 @@ class TestMaxIterations:
             thought="Searching again.",
             tool_to_use=ToolCall(name="search_knowledge", input={"query": "x"}),
         )
-        _setup_structured_sequence(mock_llm_client, [tool_decision] * 2)
-        _setup_text_sequence(mock_llm_client, ["Forced answer after 2 iterations."])
+        _setup_forced_answer(mock_llm_client, [tool_decision] * 2, "Forced answer after 2 iterations.")
 
         result = await agent.run("Query that loops")
 
@@ -273,7 +286,7 @@ class TestToolExecutionError:
         agent = _make_agent(mock_retriever, bus)
         mock_retriever.search.side_effect = RuntimeError("Connection refused")
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="Search the knowledge base.",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "test"}),
@@ -295,7 +308,7 @@ class TestToolExecutionError:
             [{"content": "Success on retry", "source": "doc.pdf"}],
         ]
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="First search.",
                 tool_to_use=ToolCall(name="search_knowledge", input={"query": "q1"}),
@@ -324,7 +337,7 @@ class TestInvalidToolName:
     async def test_unknown_tool_returns_error_message(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(
                 thought="I'll use the database tool.",
                 tool_to_use=ToolCall(name="query_database", input={"sql": "SELECT *"}),
@@ -367,7 +380,7 @@ class TestDynamicServiceInjection:
             "services": {"relationship_memory": mock_rel},
         }
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Simple answer.", final_answer="Done."),
         ])
 
@@ -382,7 +395,7 @@ class TestDynamicServiceInjection:
         new_crm = MagicMock()
         context = {"services": {"crm": new_crm}}
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Answer.", final_answer="Done."),
         ])
 
@@ -394,7 +407,7 @@ class TestDynamicServiceInjection:
         agent = _make_agent(mock_retriever, bus)
         context = {"services": {"goal_manager": None}}
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Answer.", final_answer="Done."),
         ])
 
@@ -409,7 +422,7 @@ class TestDynamicServiceInjection:
         mock_rel = AsyncMock()
         context = {"services": {"relationship_memory": mock_rel}}
 
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Answer.", final_answer="Done."),
         ])
 
@@ -469,7 +482,7 @@ class TestUnparseableLLMResponse:
 
     async def test_empty_decision_becomes_final_answer(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="Just a plain text answer."),
         ])
 
@@ -480,7 +493,7 @@ class TestUnparseableLLMResponse:
 
     async def test_thought_only_becomes_final_answer(self, mock_retriever, bus, mock_llm_client):
         agent = _make_agent(mock_retriever, bus)
-        _setup_structured_sequence(mock_llm_client, [
+        _setup_reason_sequence(mock_llm_client, [
             ReActDecision(thought="I have the answer directly."),
         ])
 
