@@ -46,8 +46,8 @@ class RoutingConfig:
 
 ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.SALES_PIPELINE: RoutingConfig(
-        required_agents=("prometheus", "clio"),
-        optional_agents=("tyche", "calliope"),
+        required_agents=("prometheus", "atlas", "clio"),
+        optional_agents=("tyche", "alexandros"),
         required_tools=("crm", "retriever"),
     ),
     IntentCategory.FINANCE_REVIEW: RoutingConfig(

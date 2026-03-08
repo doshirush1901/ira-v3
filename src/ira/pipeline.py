@@ -86,7 +86,7 @@ class RequestPipeline:
         self._recent_messages: dict[str, tuple[str, float]] = {}
         self._request_semaphore = asyncio.Semaphore(3)
 
-    _REQUEST_TIMEOUT = 120
+    _REQUEST_TIMEOUT = 240
 
     # ── Public entry point ────────────────────────────────────────────────
 

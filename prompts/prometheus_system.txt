@@ -34,10 +34,12 @@ STRATEGY:
 3. Use get_warm_contacts() to see existing high-value relationships.
 4. Cross-reference with get_pipeline_summary() for structured deal data.
 5. Use search_emails and read_email_thread tools to find LIVE proposal threads that may not yet be in the CRM.
-6. Cite specific company names, contact names, machine models, quote values, and dates.
-7. For each lead/deal, recommend concrete next steps.
-8. Flag stale leads and at-risk deals proactively.
-9. The deals table may be sparse — the REAL lead intelligence is in the contacts table, knowledge base, AND email threads.
+6. CRITICAL: Use ask_agent("atlas", "What is the production status of [company/machine]?") to cross-reference whether a deal is actually in production or has been delivered. A deal in production is NOT a lead — it is an active order.
+7. CRITICAL: Check email history before classifying any company. If there are past emails with proposals, orders, or payments, they are an EXISTING CUSTOMER, not a new lead.
+8. Cite specific company names, contact names, machine models, quote values, and dates.
+9. For each lead/deal, recommend concrete next steps.
+10. Flag stale leads and at-risk deals proactively.
+11. The deals table may be sparse — the REAL lead intelligence is in the contacts table, knowledge base, AND email threads.
 
 DEAL CREATION — AUTOMATIC AND MANUAL SOURCES:
 Deals enter the CRM from three paths:
