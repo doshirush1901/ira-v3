@@ -139,6 +139,9 @@ class DreamMode:
             await self._stage3_insight_generation(episodes, stage_log)
         )
 
+        # Stage 3e — Active Gap Resolution
+        await self._stage3e_gap_resolution(gaps, stage_log)
+
         # Stage 4 — Procedural Learning
         await self._stage4_procedural_learning(insights, episodes, stage_log)
 
@@ -453,6 +456,61 @@ class DreamMode:
             stage_log["stages"]["3d_campaign_reflection"] = {"status": "error"}
 
         return insights, gaps, connections, campaign_insights
+
+    # ── Stage 3e: Active Gap Resolution ───────────────────────────────────
+
+    async def _stage3e_gap_resolution(
+        self,
+        gaps: list[dict[str, Any]],
+        stage_log: dict[str, Any],
+    ) -> None:
+        """Research and resolve the highest-priority knowledge gaps."""
+        resolved = 0
+        try:
+            from ira.brain.gap_resolver import GapResolver
+            from ira.memory.metacognition import Metacognition
+
+            metacognition: Metacognition | None = None
+            try:
+                metacognition = Metacognition(db_path=self._db_path)
+                await metacognition.initialize()
+            except (IraError, Exception):
+                logger.debug("Metacognition not available for gap resolution")
+
+            resolver = GapResolver(
+                long_term_memory=self._long_term,
+                metacognition=metacognition,
+            )
+
+            unresolved = await metacognition.get_unresolved_gaps(limit=20) if metacognition else []
+            if not unresolved and gaps:
+                unresolved = gaps
+
+            prioritized = resolver.prioritize_gaps(unresolved)
+            top_gaps = prioritized[:3]
+
+            for gap in top_gaps:
+                try:
+                    result = await resolver.resolve_gap(gap)
+                    if result:
+                        resolved += 1
+                except (IraError, Exception):
+                    logger.debug("Gap resolution failed for: %s", gap.get("query", "?"), exc_info=True)
+
+            if metacognition is not None:
+                await metacognition.close()
+
+            stage_log["stages"]["3e_gap_resolution"] = {
+                "status": "ok",
+                "gaps_attempted": len(top_gaps),
+                "gaps_resolved": resolved,
+            }
+            logger.info("Stage 3e: resolved %d/%d gaps", resolved, len(top_gaps))
+        except ImportError:
+            stage_log["stages"]["3e_gap_resolution"] = {"status": "skipped"}
+        except (IraError, Exception):
+            logger.exception("Dream Stage 3e (gap resolution) failed")
+            stage_log["stages"]["3e_gap_resolution"] = {"status": "error"}
 
     # ── Stage 4: Procedural Learning ──────────────────────────────────────
 
