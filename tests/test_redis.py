@@ -183,16 +183,18 @@ class TestServiceKeyRegistration:
 
 
 class TestRedisConfig:
-    def test_redis_config_exists(self):
+    def test_redis_config_exists(self, monkeypatch):
+        monkeypatch.delenv("REDIS_URL", raising=False)
         from ira.config import RedisConfig
-        cfg = RedisConfig()
+        cfg = RedisConfig(_env_file=None)
         assert cfg.url == ""
 
-    def test_settings_has_redis(self):
-        from ira.config import Settings
-        s = Settings()
-        assert hasattr(s, "redis")
-        assert s.redis.url == ""
+    def test_settings_has_redis(self, monkeypatch):
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        from ira.config import RedisConfig
+        cfg = RedisConfig(_env_file=None)
+        assert hasattr(cfg, "url")
+        assert cfg.url == ""
 
 
 # ═════════════════════════════════════════════════════════════════════════

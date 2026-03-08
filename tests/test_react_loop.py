@@ -27,6 +27,7 @@ def _make_settings():
     s.llm.anthropic_api_key.get_secret_value.return_value = ""
     s.llm.anthropic_model = "claude-test"
     s.external_apis.api_key.get_secret_value.return_value = ""
+    s.app.react_max_iterations = 8
     return s
 
 
@@ -42,7 +43,9 @@ def _make_mock_llm_client():
 
 @pytest.fixture(autouse=True)
 def mock_settings():
-    with patch("ira.config.get_settings", return_value=_make_settings()):
+    settings = _make_settings()
+    with patch("ira.config.get_settings", return_value=settings), \
+         patch("ira.agents.base_agent.get_settings", return_value=settings):
         yield
 
 
@@ -70,10 +73,12 @@ def bus():
     return MessageBus()
 
 
-def _make_agent(retriever, bus, *, services=None):
+def _make_agent(retriever, bus, *, services=None, llm_client=None):
     """Create a Clio agent (concrete subclass) for testing the base loop."""
     from ira.agents.clio import Clio
     agent = Clio(retriever=retriever, bus=bus)
+    if llm_client is not None:
+        agent._llm = llm_client
     if services:
         agent.inject_services(services)
     return agent
@@ -186,7 +191,7 @@ class TestMultiToolUse:
     """Agent chains 2-3 tool calls before answering."""
 
     async def test_two_tool_calls_then_answer(self, mock_retriever, bus, mock_llm_client):
-        agent = _make_agent(mock_retriever, bus)
+        agent = _make_agent(mock_retriever, bus, llm_client=mock_llm_client)
         mock_retriever.search.return_value = [
             {"content": "PF1-C is a panel former", "source": "catalog.pdf"},
         ]
@@ -212,7 +217,7 @@ class TestMultiToolUse:
         assert mock_retriever.search.await_count == 2
 
     async def test_three_tool_chain(self, mock_retriever, bus, mock_llm_client):
-        agent = _make_agent(mock_retriever, bus)
+        agent = _make_agent(mock_retriever, bus, llm_client=mock_llm_client)
 
         _setup_reason_sequence(mock_llm_client, [
             ReActDecision(

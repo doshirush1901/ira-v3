@@ -71,6 +71,10 @@ def _make_settings_mock():
     s.external_apis.api_key.get_secret_value.return_value = ""
     s.app.log_level = "INFO"
     s.app.environment = "test"
+    s.app.react_max_iterations = 8
+    s.app.agent_timeout = 60
+    s.app.mem0_timeout = 15.0
+    s.app.neo4j_max_pool_size = 50
     return s
 
 
@@ -763,13 +767,13 @@ class TestNemesisTraining:
 
     @pytest.mark.asyncio
     async def test_handle_unconfigured_falls_back_to_llm(self, nemesis):
-        from ira.schemas.llm_outputs import ReActDecision
+        import json as _json
 
-        nemesis._llm.generate_structured = AsyncMock(
-            return_value=ReActDecision(
-                thought="No training infrastructure configured.",
-                final_answer="Training analysis...",
-            ),
+        nemesis._llm.generate_text_with_fallback = AsyncMock(
+            return_value=_json.dumps({
+                "thought": "No training infrastructure configured.",
+                "final_answer": "Training analysis: no infrastructure available.",
+            }),
         )
         result = await nemesis.handle("Run training")
         assert isinstance(result, str)

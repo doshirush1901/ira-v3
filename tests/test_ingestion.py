@@ -32,6 +32,7 @@ class TestRunIngestionCycle:
         so we must patch at the *source* module, not at the gatekeeper module.
         """
         mock_qdrant = MagicMock()
+        mock_qdrant.ensure_collection = AsyncMock()
         mock_qdrant.close = AsyncMock()
 
         mock_graph = MagicMock()

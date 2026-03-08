@@ -2,7 +2,7 @@
 
 Covers ConversationMemory, LongTermMemory, EpisodicMemory,
 Metacognition, EmotionalIntelligence, InnerVoice, RelationshipMemory,
-and DreamMode.
+DreamMode, and GoalManager.
 
 External services (OpenAI, Mem0) are mocked so the suite runs fully offline.
 """
@@ -681,3 +681,85 @@ class TestDreamMode:
 
         assert report is not None
         assert report.memories_consolidated == 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GoalManager — sweep_stalled_goals
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class TestGoalManagerSweep:
+
+    @pytest.fixture()
+    async def goal_manager(self, tmp_path):
+        from ira.memory.goal_manager import GoalManager
+
+        db_path = str(tmp_path / "goals_test.db")
+        with patch("ira.memory.goal_manager.get_llm_client", return_value=MagicMock()):
+            gm = GoalManager(db_path=db_path)
+        await gm.initialize()
+        yield gm
+        await gm.close()
+
+    @pytest.mark.asyncio
+    async def test_sweep_returns_empty_when_no_stalled(self, goal_manager):
+        stalled = await goal_manager.sweep_stalled_goals(stale_hours=48)
+        assert stalled == []
+
+    @pytest.mark.asyncio
+    async def test_sweep_finds_old_active_goals(self, goal_manager):
+        from uuid import uuid4
+
+        from ira.memory.goal_manager import GoalStatus, GoalType
+
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+        assert goal_manager._db is not None
+        await goal_manager._db.execute(
+            "INSERT INTO goals (id, goal_type, contact_id, status, required_slots, progress, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), GoalType.LEAD_QUALIFICATION.value, "contact-1",
+             GoalStatus.ACTIVE.value, json.dumps({"company": None}), 0.0, old_time),
+        )
+        await goal_manager._db.commit()
+
+        stalled = await goal_manager.sweep_stalled_goals(stale_hours=48)
+        assert len(stalled) == 1
+        assert stalled[0].contact_id == "contact-1"
+
+    @pytest.mark.asyncio
+    async def test_sweep_ignores_completed_goals(self, goal_manager):
+        from uuid import uuid4
+
+        from ira.memory.goal_manager import GoalStatus, GoalType
+
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+        assert goal_manager._db is not None
+        await goal_manager._db.execute(
+            "INSERT INTO goals (id, goal_type, contact_id, status, required_slots, progress, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), GoalType.MEETING_BOOKING.value, "contact-2",
+             GoalStatus.COMPLETED.value, json.dumps({}), 1.0, old_time),
+        )
+        await goal_manager._db.commit()
+
+        stalled = await goal_manager.sweep_stalled_goals(stale_hours=48)
+        assert len(stalled) == 0
+
+    @pytest.mark.asyncio
+    async def test_sweep_ignores_recent_goals(self, goal_manager):
+        from uuid import uuid4
+
+        from ira.memory.goal_manager import GoalStatus, GoalType
+
+        recent_time = datetime.now(timezone.utc).isoformat()
+        assert goal_manager._db is not None
+        await goal_manager._db.execute(
+            "INSERT INTO goals (id, goal_type, contact_id, status, required_slots, progress, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid4()), GoalType.QUOTE_PREPARATION.value, "contact-3",
+             GoalStatus.ACTIVE.value, json.dumps({}), 0.5, recent_time),
+        )
+        await goal_manager._db.commit()
+
+        stalled = await goal_manager.sweep_stalled_goals(stale_hours=48)
+        assert len(stalled) == 0

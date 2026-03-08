@@ -501,7 +501,8 @@ class TestMachineIntelligence:
         knowledge_file = tmp_path / "machine_knowledge.json"
         knowledge_file.write_text(json.dumps(knowledge))
 
-        with patch("ira.brain.machine_intelligence.get_settings", return_value=_mock_settings()):
+        mock_llm = MagicMock()
+        with patch("ira.brain.machine_intelligence.get_llm_client", return_value=mock_llm):
             mi = MachineIntelligence(
                 retriever=mock_retriever_fixture,
                 knowledge_path=knowledge_file,
@@ -533,8 +534,9 @@ class TestMachineIntelligence:
         assert specs["truth_hints"] == {}
 
     @pytest.mark.asyncio
-    async def test_recommend_machine_without_openai(self, machine_intel):
-        machine_intel._openai_key = ""
+    async def test_recommend_machine_with_llm_failure(self, machine_intel):
+        machine_intel._llm = MagicMock()
+        machine_intel._llm.generate_text = AsyncMock(return_value="(LLM call failed)")
         result = await machine_intel.recommend_machine({"material": "steel", "thickness": "0.5mm"})
         assert isinstance(result, list)
         assert len(result) >= 1
@@ -570,7 +572,8 @@ class TestPricingEngine:
     def pricing_engine(self, mock_retriever_fixture):
         from ira.brain.pricing_engine import PricingEngine
 
-        with patch("ira.brain.pricing_engine.get_settings", return_value=_mock_settings()):
+        mock_llm = MagicMock()
+        with patch("ira.brain.pricing_engine.get_llm_client", return_value=mock_llm):
             pe = PricingEngine(retriever=mock_retriever_fixture)
         return pe
 
@@ -662,7 +665,9 @@ class TestSalesIntelligence:
     def sales_intel(self, mock_retriever_fixture):
         from ira.brain.sales_intelligence import SalesIntelligence
 
-        with patch("ira.brain.sales_intelligence.get_settings", return_value=_mock_settings()):
+        mock_llm = MagicMock()
+        with patch("ira.brain.sales_intelligence.get_settings", return_value=_mock_settings()), \
+             patch("ira.brain.sales_intelligence.get_llm_client", return_value=mock_llm):
             si = SalesIntelligence(retriever=mock_retriever_fixture)
         return si
 

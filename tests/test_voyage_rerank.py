@@ -69,6 +69,7 @@ class TestVoyageRerank:
         results = _sample_results()
 
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {"data": [{"index": 0, "relevance_score": 0.9}]}
 
