@@ -39,13 +39,21 @@ class Metacognition:
                 query TEXT NOT NULL,
                 state TEXT NOT NULL,
                 gaps TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                resolved_at TEXT DEFAULT NULL,
+                resolution TEXT DEFAULT NULL
             )
             """
         )
         await self._db.execute(
             "CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_date ON knowledge_gaps(created_at)"
         )
+        # Migrate existing tables that lack the resolution columns
+        for col, col_def in [("resolved_at", "TEXT DEFAULT NULL"), ("resolution", "TEXT DEFAULT NULL")]:
+            try:
+                await self._db.execute(f"ALTER TABLE knowledge_gaps ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass  # column already exists
         await self._db.commit()
 
     @observe()
@@ -135,6 +143,43 @@ class Metacognition:
         if state == KnowledgeState.UNKNOWN:
             return "I don't have reliable information on this. I'd recommend checking with the relevant team. "
         return ""
+
+    async def get_unresolved_gaps(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return knowledge gaps that have not yet been resolved."""
+        assert self._db is not None
+        cursor = await self._db.execute(
+            """
+            SELECT id, query, state, gaps, created_at
+            FROM knowledge_gaps
+            WHERE resolved_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [
+            {
+                "id": r[0],
+                "query": r[1],
+                "state": r[2],
+                "gaps": json.loads(r[3]) if isinstance(r[3], str) else r[3],
+                "created_at": r[4],
+            }
+            for r in rows
+        ]
+
+    async def mark_gap_resolved(self, gap_id: int, resolution: str) -> None:
+        """Mark a knowledge gap as resolved with the given resolution text."""
+        assert self._db is not None
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE knowledge_gaps SET resolved_at = ?, resolution = ? WHERE id = ?",
+            (now, resolution, gap_id),
+        )
+        await self._db.commit()
+        logger.info("Knowledge gap #%d marked resolved", gap_id)
 
     async def log_knowledge_gap(
         self,

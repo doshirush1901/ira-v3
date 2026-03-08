@@ -136,9 +136,17 @@ class FeedbackHandler:
         agents_used: list[str],
         *,
         user_id: str = "global",
+        severity: str = "",
     ) -> dict[str, Any]:
         """Full feedback pipeline: detect, score agents, store corrections, trigger learning."""
-        result = await self.detect_feedback(message, previous_query, previous_response)
+        if severity and severity.upper() in ("HIGH", "CRITICAL"):
+            result = {
+                "polarity": "negative",
+                "confidence": 1.0,
+                "extracted_correction": message,
+            }
+        else:
+            result = await self.detect_feedback(message, previous_query, previous_response)
         polarity = result["polarity"]
 
         for agent in agents_used:
