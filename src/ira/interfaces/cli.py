@@ -893,6 +893,13 @@ def email_rescan(
             border_style="blue",
         ))
 
+        # Get Artemis for batch triage
+        artemis = pantheon.get_agent("artemis") if hasattr(pantheon, "get_agent") else None
+        if artemis:
+            console.print("[dim]  Artemis (Lead Hunter) will batch-triage emails before deep processing.[/dim]")
+        else:
+            console.print("[yellow]  Artemis not available — processing all emails (slower).[/yellow]")
+
         # Phase 1: Deep email scan
         console.print("\n[bold cyan]Phase 1:[/bold cyan] Scanning and digesting emails...")
 
@@ -911,19 +918,19 @@ def email_rescan(
             def on_progress(processed: int, total: int, stats: dict) -> None:
                 if progress.tasks[task].total is None and total > 0:
                     progress.update(task, total=total)
-                progress.update(
-                    task,
-                    completed=processed,
-                    description=(
-                        f"[bold green]{processed}/{total} "
-                        f"| in:{stats.get('inbound_emails', 0)} "
-                        f"out:{stats.get('outbound_emails', 0)} "
-                        f"| contacts:{stats.get('contacts_found', 0)} "
-                        f"deals:{stats.get('deals_created', 0)} "
-                        f"proposals:{stats.get('proposal_signals', 0)} "
-                        f"err:{stats.get('errors', 0)}"
-                    ),
+                triaged = stats.get("triaged_business_high", 0) + stats.get("triaged_noise", 0)
+                deep = stats.get("processed", 0)
+                label = (
+                    f"[bold green]triage:{triaged} "
+                    f"biz:{stats.get('triaged_business_high', 0)} "
+                    f"| deep:{deep} "
+                    f"in:{stats.get('inbound_emails', 0)} "
+                    f"out:{stats.get('outbound_emails', 0)} "
+                    f"| contacts:{stats.get('contacts_found', 0)} "
+                    f"deals:{stats.get('deals_created', 0)} "
+                    f"err:{stats.get('errors', 0)}"
                 )
+                progress.update(task, completed=triaged + deep, description=label)
 
             scan_stats = await email_proc.deep_scan(
                 after=after,
@@ -932,6 +939,7 @@ def email_rescan(
                 resume=resume,
                 dry_run=dry_run,
                 progress_callback=on_progress,
+                artemis=artemis,
             )
 
         scan_table = Table(title="Phase 1: Email Scan Results")
@@ -939,8 +947,14 @@ def email_rescan(
         scan_table.add_column("Count", justify="right", style="green")
 
         scan_table.add_row("Messages listed", str(scan_stats.get("total_listed", 0)))
-        scan_table.add_row("Fetched", str(scan_stats.get("fetched", 0)))
-        scan_table.add_row("Processed", str(scan_stats.get("processed", 0)))
+        triaged_biz = scan_stats.get("triaged_business_high", 0)
+        triaged_noise = scan_stats.get("triaged_noise", 0)
+        if triaged_biz or triaged_noise:
+            scan_table.add_row("[bold]Artemis triage[/bold]", "")
+            scan_table.add_row("  ↳ Business (deep-processed)", str(triaged_biz))
+            scan_table.add_row("  ↳ Noise (skipped)", str(triaged_noise))
+        scan_table.add_row("Fetched (full body)", str(scan_stats.get("fetched", 0)))
+        scan_table.add_row("Deep-processed", str(scan_stats.get("processed", 0)))
         scan_table.add_row("  ↳ Inbound", str(scan_stats.get("inbound_emails", 0)))
         scan_table.add_row("  ↳ Outbound", str(scan_stats.get("outbound_emails", 0)))
         scan_table.add_row("  ↳ Proposal signals", str(scan_stats.get("proposal_signals", 0)))
