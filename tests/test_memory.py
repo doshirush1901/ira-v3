@@ -25,6 +25,16 @@ from ira.data.models import (
     KnowledgeState,
     WarmthLevel,
 )
+from ira.schemas.llm_outputs import (
+    ConversationEntities,
+    DreamCreative,
+    DreamGaps,
+    EmotionDetection,
+    EpisodeConsolidation,
+    InnerReflection,
+    KnowledgeAssessment,
+    MemorableMoments,
+)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -38,10 +48,13 @@ def _mock_settings():
     return s
 
 
-def _openai_response(content: str) -> dict:
-    return {
-        "choices": [{"message": {"content": content}}],
-    }
+def _mock_llm_client():
+    client = MagicMock()
+    client.generate_structured = AsyncMock()
+    client.generate_text = AsyncMock(return_value="")
+    client.generate_text_with_fallback = AsyncMock(return_value="")
+    client.generate_structured_with_fallback = AsyncMock()
+    return client
 
 
 def _make_interaction(**overrides) -> Interaction:
@@ -69,7 +82,7 @@ class TestConversationMemory:
         from ira.memory.conversation import ConversationMemory
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.conversation.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.conversation.get_llm_client", return_value=_mock_llm_client()):
             mem = ConversationMemory(db_path=db)
         await mem.initialize()
         yield mem
@@ -116,24 +129,21 @@ class TestConversationMemory:
 
     @pytest.mark.asyncio
     async def test_extract_entities_mocks_llm(self, memory):
-        entities_json = json.dumps([
-            {"type": "person", "value": "John", "context": "Send to John"},
-            {"type": "company", "value": "Acme", "context": "at Acme"},
-            {"type": "machine", "value": "PF1-C", "context": "for the PF1-C"},
-        ])
-
-        with patch.object(
-            memory, "_llm_call", new_callable=AsyncMock, return_value=entities_json
-        ):
-            result = await memory.extract_entities(
-                "Send a quote to John at Acme for the PF1-C"
+        memory._llm.generate_structured = AsyncMock(
+            return_value=ConversationEntities(
+                people=["John"],
+                companies=["Acme"],
+                machines=["PF1-C"],
             )
+        )
 
-        assert len(result) == 3
-        types = {e["type"] for e in result}
-        assert "person" in types
-        assert "company" in types
-        assert "machine" in types
+        result = await memory.extract_entities(
+            "Send a quote to John at Acme for the PF1-C"
+        )
+
+        assert "John" in result["people"]
+        assert "Acme" in result["companies"]
+        assert "PF1-C" in result["machines"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -223,7 +233,7 @@ class TestEpisodicMemory:
         mock_ltm.search = AsyncMock(return_value=[])
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.episodic.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.episodic.get_llm_client", return_value=_mock_llm_client()):
             ep = EpisodicMemory(long_term=mock_ltm, db_path=db)
         await ep.initialize()
         yield ep
@@ -235,17 +245,18 @@ class TestEpisodicMemory:
             {"role": "user", "content": "I need a quote for PF1-C", "timestamp": "2026-03-06T10:00:00"},
             {"role": "assistant", "content": "Sure, let me prepare that.", "timestamp": "2026-03-06T10:01:00"},
         ]
-        episode_json = json.dumps({
-            "narrative": "Customer requested a PF1-C quote.",
-            "key_topics": ["PF1-C", "quote"],
-            "decisions_made": ["prepare quote"],
-            "commitments": ["send quote by EOD"],
-            "emotional_tone": "positive",
-            "relationship_impact": "strengthened",
-        })
+        episodic._llm.generate_structured = AsyncMock(
+            return_value=EpisodeConsolidation(
+                narrative="Customer requested a PF1-C quote.",
+                key_topics=["PF1-C", "quote"],
+                decisions_made=["prepare quote"],
+                commitments=["send quote by EOD"],
+                emotional_tone="positive",
+                relationship_impact="strengthened",
+            )
+        )
 
-        with patch.object(episodic, "_llm_call", new_callable=AsyncMock, return_value=episode_json):
-            result = await episodic.consolidate_episode(conversation, "user1")
+        result = await episodic.consolidate_episode(conversation, "user1")
 
         assert "narrative" in result
         assert result["narrative"] == "Customer requested a PF1-C quote."
@@ -260,10 +271,8 @@ class TestEpisodicMemory:
             {"role": "assistant", "content": "Hi", "timestamp": "2026-03-06T10:01:00"},
         ]
 
-        with patch.object(
-            episodic, "_llm_call", new_callable=AsyncMock, return_value="(LLM call failed)"
-        ):
-            result = await episodic.consolidate_episode(conversation, "user1")
+        episodic._llm.generate_structured = AsyncMock(side_effect=RuntimeError("LLM call failed"))
+        result = await episodic.consolidate_episode(conversation, "user1")
 
         assert "failed" in result["narrative"].lower() or "consolidation" in result["narrative"].lower()
 
@@ -279,11 +288,10 @@ class TestEpisodicMemory:
             )
         await episodic._db.commit()
 
-        with patch.object(
-            episodic, "_llm_call", new_callable=AsyncMock,
+        episodic._llm.generate_text = AsyncMock(
             return_value="The relationship started with Episode 0 and progressed.",
-        ):
-            result = await episodic.weave_episodes("user1")
+        )
+        result = await episodic.weave_episodes("user1")
 
         assert "Episode" in result or "relationship" in result.lower()
 
@@ -300,7 +308,7 @@ class TestMetacognition:
         from ira.memory.metacognition import Metacognition
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.metacognition.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.metacognition.get_llm_client", return_value=_mock_llm_client()):
             m = Metacognition(db_path=db)
         await m.initialize()
         yield m
@@ -312,27 +320,28 @@ class TestMetacognition:
             {"content": "PF1-C specs: ...", "score": 0.9, "source": "manual.pdf", "source_type": "qdrant", "metadata": {}},
             {"content": "PF1-C lead time: 16-20 weeks", "score": 0.85, "source": "specs.pdf", "source_type": "qdrant", "metadata": {}},
         ]
-        llm_response = json.dumps({
-            "state": "KNOW_VERIFIED",
-            "confidence": 0.9,
-            "conflicts": [],
-            "gaps": [],
-        })
+        meta._llm.generate_structured = AsyncMock(
+            return_value=KnowledgeAssessment(
+                state="KNOW_VERIFIED",
+                confidence=0.9,
+                conflicts=[],
+                gaps=[],
+            )
+        )
 
-        with patch.object(meta, "_llm_call", new_callable=AsyncMock, return_value=llm_response):
-            result = await meta.assess_knowledge("PF1-C specs?", context)
+        result = await meta.assess_knowledge("PF1-C specs?", context)
 
         assert result["state"] == KnowledgeState.KNOW_VERIFIED
         assert result["confidence"] >= 0.8
 
     @pytest.mark.asyncio
     async def test_assess_no_results_returns_unknown(self, meta):
-        with patch.object(meta, "_llm_call", new_callable=AsyncMock) as mock_llm:
-            result = await meta.assess_knowledge("unknown topic", [])
+        meta._llm.generate_structured = AsyncMock()
+        result = await meta.assess_knowledge("unknown topic", [])
 
         assert result["state"] == KnowledgeState.UNKNOWN
         assert result["confidence"] == 0.0
-        mock_llm.assert_not_awaited()
+        meta._llm.generate_structured.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_assess_conflicting(self, meta):
@@ -340,15 +349,16 @@ class TestMetacognition:
             {"content": "Price is $100k", "score": 0.8, "source": "a.pdf", "source_type": "qdrant", "metadata": {}},
             {"content": "Price is $200k", "score": 0.75, "source": "b.pdf", "source_type": "qdrant", "metadata": {}},
         ]
-        llm_response = json.dumps({
-            "state": "CONFLICTING",
-            "confidence": 0.5,
-            "conflicts": ["Source A says $100k, Source B says $200k"],
-            "gaps": [],
-        })
+        meta._llm.generate_structured = AsyncMock(
+            return_value=KnowledgeAssessment(
+                state="CONFLICTING",
+                confidence=0.5,
+                conflicts=["Source A says $100k, Source B says $200k"],
+                gaps=[],
+            )
+        )
 
-        with patch.object(meta, "_llm_call", new_callable=AsyncMock, return_value=llm_response):
-            result = await meta.assess_knowledge("PF1-C price?", context)
+        result = await meta.assess_knowledge("PF1-C price?", context)
 
         assert result["state"] == KnowledgeState.CONFLICTING
         assert len(result["conflicts"]) >= 1
@@ -378,7 +388,7 @@ class TestEmotionalIntelligence:
         from ira.memory.emotional_intelligence import EmotionalIntelligence
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.emotional_intelligence.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.emotional_intelligence.get_llm_client", return_value=_mock_llm_client()):
             e = EmotionalIntelligence(db_path=db)
         await e.initialize()
         yield e
@@ -405,18 +415,17 @@ class TestEmotionalIntelligence:
 
     @pytest.mark.asyncio
     async def test_detect_neutral_falls_through_to_llm(self, ei):
-        llm_response = json.dumps({
-            "state": "NEUTRAL",
-            "intensity": "MILD",
-            "indicators": [],
-        })
+        ei._llm.generate_structured = AsyncMock(
+            return_value=EmotionDetection(
+                state="NEUTRAL",
+                intensity="MILD",
+                indicators=[],
+            )
+        )
 
-        with patch.object(
-            ei, "_llm_call", new_callable=AsyncMock, return_value=llm_response
-        ) as mock_llm:
-            result = await ei.detect_emotion("Please send me the catalog.")
+        result = await ei.detect_emotion("Please send me the catalog.")
 
-        mock_llm.assert_awaited_once()
+        ei._llm.generate_structured.assert_awaited_once()
         assert result["state"] == EmotionalState.NEUTRAL
 
     def test_get_response_adjustment(self, ei):
@@ -440,7 +449,7 @@ class TestInnerVoice:
         from ira.memory.inner_voice import InnerVoice
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.inner_voice.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.inner_voice.get_llm_client", return_value=_mock_llm_client()):
             v = InnerVoice(db_path=db, surface_probability=0.0)
         await v.initialize()
         yield v
@@ -456,14 +465,15 @@ class TestInnerVoice:
 
     @pytest.mark.asyncio
     async def test_reflect_returns_structure(self, voice):
-        reflection_json = json.dumps({
-            "reflection_type": "OBSERVATION",
-            "content": "Interesting request pattern.",
-            "should_surface": False,
-        })
+        voice._llm.generate_structured = AsyncMock(
+            return_value=InnerReflection(
+                reflection_type="OBSERVATION",
+                content="Interesting request pattern.",
+                should_surface=False,
+            )
+        )
 
-        with patch.object(voice, "_llm_call", new_callable=AsyncMock, return_value=reflection_json):
-            result = await voice.reflect("customer asked about PF1-C", "new inquiry")
+        result = await voice.reflect("customer asked about PF1-C", "new inquiry")
 
         assert "reflection_type" in result
         assert "content" in result
@@ -497,7 +507,7 @@ class TestRelationshipMemory:
         from ira.memory.relationship import RelationshipMemory
 
         db = str(tmp_path / "test.db")
-        with patch("ira.memory.relationship.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.relationship.get_llm_client", return_value=_mock_llm_client()):
             rm = RelationshipMemory(db_path=db)
         await rm.initialize()
         yield rm
@@ -511,20 +521,24 @@ class TestRelationshipMemory:
 
     @pytest.mark.asyncio
     async def test_warmth_progression_stranger_to_acquaintance(self, rel_mem):
-        with patch.object(rel_mem, "_llm_call", new_callable=AsyncMock, return_value="[]"):
-            for _ in range(3):
-                interaction = _make_interaction()
-                rel = await rel_mem.update_relationship("contact1", interaction)
+        rel_mem._llm.generate_structured = AsyncMock(
+            return_value=MemorableMoments(moments=[])
+        )
+        for _ in range(3):
+            interaction = _make_interaction()
+            rel = await rel_mem.update_relationship("contact1", interaction)
 
         assert rel.warmth_level == WarmthLevel.ACQUAINTANCE
         assert rel.interaction_count == 3
 
     @pytest.mark.asyncio
     async def test_warmth_does_not_skip_levels(self, rel_mem):
-        with patch.object(rel_mem, "_llm_call", new_callable=AsyncMock, return_value="[]"):
-            for _ in range(3):
-                interaction = _make_interaction()
-                rel = await rel_mem.update_relationship("contact2", interaction)
+        rel_mem._llm.generate_structured = AsyncMock(
+            return_value=MemorableMoments(moments=[])
+        )
+        for _ in range(3):
+            interaction = _make_interaction()
+            rel = await rel_mem.update_relationship("contact2", interaction)
 
         assert rel.warmth_level == WarmthLevel.ACQUAINTANCE
         assert rel.warmth_level != WarmthLevel.FAMILIAR
@@ -574,7 +588,7 @@ class TestDreamMode:
             "key_topics": [],
         })
 
-        with patch("ira.memory.dream_mode.get_settings", return_value=_mock_settings()):
+        with patch("ira.memory.dream_mode.get_llm_client", return_value=_mock_llm_client()):
             dm = DreamMode(
                 long_term=mock_ltm,
                 episodic=mock_episodic,
@@ -624,24 +638,20 @@ class TestDreamMode:
 
     @pytest.mark.asyncio
     async def test_run_dream_cycle_produces_report(self, dream):
-        gap_json = json.dumps({
-            "gaps": [{"topic": "PF3", "description": "No info on PF3", "priority": "HIGH", "related_queries": []}]
-        })
-        creative_json = json.dumps({
-            "connections": [{"insight": "PF3 interest may indicate market trend", "supporting_evidence": [], "confidence": "MEDIUM"}]
-        })
+        from ira.schemas.llm_outputs import DreamGap, DreamConnection, DreamInsight as DreamInsightModel
 
-        call_count = 0
+        async def _mock_structured(system, user, model_cls, **kwargs):
+            if model_cls is DreamGaps:
+                return DreamGaps(gaps=[DreamGap(topic="PF3", description="No info on PF3", priority="HIGH")])
+            if model_cls is DreamCreative:
+                return DreamCreative(connections=[
+                    DreamConnection(insight="PF3 interest may indicate market trend", supporting_evidence=[], confidence="MEDIUM")
+                ])
+            return model_cls()
 
-        async def mock_llm(system, user, temperature=0):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return gap_json
-            return creative_json
+        dream._llm.generate_structured = AsyncMock(side_effect=_mock_structured)
 
-        with patch.object(dream, "_llm_call", side_effect=mock_llm):
-            report = await dream.run_dream_cycle()
+        report = await dream.run_dream_cycle()
 
         assert report.memories_consolidated >= 0
         assert isinstance(report.gaps_identified, list)
@@ -649,10 +659,12 @@ class TestDreamMode:
 
     @pytest.mark.asyncio
     async def test_dream_cycle_skips_stage4_without_musculoskeletal(self, dream):
-        with patch.object(
-            dream, "_llm_call", new_callable=AsyncMock, return_value=json.dumps({"gaps": [], "connections": []})
-        ):
-            report = await dream.run_dream_cycle()
+        async def _mock_structured(system, user, model_cls, **kwargs):
+            return model_cls()
+
+        dream._llm.generate_structured = AsyncMock(side_effect=_mock_structured)
+
+        report = await dream.run_dream_cycle()
 
         assert report.campaign_insights == []
 
@@ -660,11 +672,12 @@ class TestDreamMode:
     async def test_dream_cycle_handles_stage_failure(self, dream):
         dream._episodic.consolidate_episode = AsyncMock(side_effect=RuntimeError("boom"))
 
-        with patch.object(
-            dream, "_llm_call", new_callable=AsyncMock,
-            return_value=json.dumps({"gaps": [], "connections": []}),
-        ):
-            report = await dream.run_dream_cycle()
+        async def _mock_structured(system, user, model_cls, **kwargs):
+            return model_cls()
+
+        dream._llm.generate_structured = AsyncMock(side_effect=_mock_structured)
+
+        report = await dream.run_dream_cycle()
 
         assert report is not None
         assert report.memories_consolidated == 0

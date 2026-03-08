@@ -12,22 +12,22 @@ raw facts into clean, self-contained statements that embed well for retrieval.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.brain.document_ingestor import DocumentIngestor, chunk_text
 from ira.brain.embeddings import EmbeddingService
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.quality_filter import QualityFilter
 from ira.brain.qdrant_manager import QdrantManager
-from ira.config import get_settings
 from ira.data.models import Email, KnowledgeItem
 from ira.exceptions import DatabaseError, IngestionError
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import DigestiveSummary, EmailMetadata, NutrientClassification
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,7 @@ class DigestiveSystem:
         self._quality_filter = QualityFilter(
             qdrant_manager=qdrant, embedding_service=embedding_service,
         )
-
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
+        self._llm = get_llm_client()
 
     _WINDOW_SIZE = 10_000
     _WINDOW_OVERLAP = 500
@@ -70,7 +67,7 @@ class DigestiveSystem:
         part of the text is seen by the model.  Results from each window
         are merged into a single nutrient dict.
         """
-        if not self._openai_key:
+        if self._llm._openai is None:
             logger.warning("No OpenAI API key — skipping nutrient extraction")
             return {"protein": [raw_data], "carbs": [], "waste": []}
 
@@ -109,38 +106,11 @@ class DigestiveSystem:
 
     async def _classify_window(self, text: str) -> dict[str, list[str]]:
         """Send a single text window to the LLM for nutrient classification."""
-        empty: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": []}
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _NUTRIENT_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                result = json.loads(content)
-                for key in ("protein", "carbs", "waste"):
-                    if key not in result or not isinstance(result[key], list):
-                        result[key] = []
-                return result
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
-            logger.exception("Nutrient classification failed for window")
-            return empty
+        result = await self._llm.generate_structured(
+            _NUTRIENT_SYSTEM_PROMPT, text, NutrientClassification,
+            name="digestive.classify",
+        )
+        return result.model_dump()
 
     # ── DUODENUM: summarization ─────────────────────────────────────────
 
@@ -153,7 +123,7 @@ class DigestiveSystem:
         embeddings.  Each statement is self-contained so it retrieves well
         in semantic search.  Waste is passed through unchanged.
         """
-        if not self._openai_key:
+        if self._llm._openai is None:
             return nutrients
 
         summarized: dict[str, list[str]] = {"protein": [], "carbs": [], "waste": nutrients.get("waste", [])}
@@ -177,36 +147,11 @@ class DigestiveSystem:
 
     async def _call_summarize(self, text: str) -> list[str]:
         """Send nutrient items to the LLM for summarization into searchable statements."""
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _SUMMARIZE_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                result = json.loads(content)
-                statements = result.get("statements", [])
-                if isinstance(statements, list):
-                    return [s for s in statements if isinstance(s, str) and s.strip()]
-                return []
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
-            logger.exception("Summarization failed for window")
-            return []
+        result = await self._llm.generate_structured(
+            _SUMMARIZE_SYSTEM_PROMPT, text, DigestiveSummary,
+            name="digestive.summarize",
+        )
+        return [s for s in result.statements if isinstance(s, str) and s.strip()]
 
     # ── SMALL INTESTINE: absorption ───────────────────────────────────────
 
@@ -324,6 +269,7 @@ class DigestiveSystem:
 
     # ── public API ────────────────────────────────────────────────────────
 
+    @observe()
     async def ingest(
         self,
         raw_data: str,
@@ -371,6 +317,7 @@ class DigestiveSystem:
             "processing_time": round(elapsed, 3),
         }
 
+    @observe()
     async def ingest_email(self, email: Email) -> dict[str, Any]:
         """Ingest an email through the full pipeline with extra metadata extraction."""
         result = await self.ingest(
@@ -387,43 +334,11 @@ class DigestiveSystem:
 
     async def _extract_email_metadata(self, body: str) -> dict[str, Any]:
         """Extract email-specific metadata (sender info, mentions, dates)."""
-        empty: dict[str, Any] = {
-            "sender_info": {},
-            "company_mentions": [],
-            "machine_mentions": [],
-            "pricing_mentions": [],
-            "dates_deadlines": [],
-        }
-
-        if not self._openai_key:
-            return empty
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _EMAIL_META_SYSTEM_PROMPT},
-                {"role": "user", "content": body[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(content)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
-            logger.exception("Email metadata extraction failed")
-            return empty
+        result = await self._llm.generate_structured(
+            _EMAIL_META_SYSTEM_PROMPT, body[:12_000], EmailMetadata,
+            name="digestive.email_meta",
+        )
+        return result.model_dump()
 
     async def batch_ingest(self, items: list[dict[str, str]]) -> dict[str, Any]:
         """Process multiple items, logging progress and handling errors."""

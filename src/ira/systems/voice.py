@@ -7,18 +7,16 @@ adjusting formatting, tone, length, and style.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import get_settings
 from ira.data.models import Contact, WarmthLevel
-from ira.exceptions import LLMError
 from ira.prompt_loader import load_prompt
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +95,9 @@ class VoiceSystem:
     """Shapes Ira's responses based on channel, recipient, and behavioral modifiers."""
 
     def __init__(self) -> None:
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
+        self._llm = get_llm_client()
 
+    @observe()
     async def shape_response(
         self,
         raw_response: str,
@@ -155,7 +152,7 @@ class VoiceSystem:
         behavioral_addendum: str,
         channel_specific_instructions: str,
     ) -> str:
-        if not self._openai_key:
+        if self._llm._openai is None:
             return text
 
         system_prompt = _SHAPING_SYSTEM_PROMPT.format(
@@ -167,31 +164,10 @@ class VoiceSystem:
             channel_specific_instructions=channel_specific_instructions,
         )
 
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0.3,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (LLMError, Exception):
-            logger.exception("Voice LLM reshaping failed — returning raw response")
-            return text
+        result = await self._llm.generate_text(
+            system_prompt, text[:12_000], name="voice.reshape",
+        )
+        return result
 
     @staticmethod
     def _enforce_length(text: str, max_length: int) -> str:

@@ -115,6 +115,14 @@ class DocumentAIConfig(BaseSettings):
     form_processor_id: str = ""
 
 
+class LangfuseConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LANGFUSE_", **_COMMON)
+
+    public_key: str = ""
+    secret_key: SecretStr = SecretStr("")
+    base_url: str = "https://cloud.langfuse.com"
+
+
 class RedisConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="REDIS_", **_COMMON)
 
@@ -150,6 +158,7 @@ class Settings(BaseSettings):
     google: GoogleConfig = GoogleConfig()
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
     search: SearchConfig = SearchConfig()
+    langfuse: LangfuseConfig = LangfuseConfig()
     app: AppConfig = AppConfig()
 
 

@@ -16,12 +16,15 @@ from typing import Any
 
 import httpx
 from flashrank import Ranker, RerankRequest
+from langfuse.decorators import observe
 
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
 from ira.exceptions import DatabaseError, IngestionError, IraError
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import EntityNames, SubQueries
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +49,8 @@ class UnifiedRetriever:
         self._mem0 = mem0_client
         self._flashrank = Ranker(model_name=reranker_model)
 
+        self._llm = get_llm_client()
         settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
         self._voyage_key = settings.embedding.api_key.get_secret_value()
         self._voyage_rerank_model = settings.embedding.rerank_model
 
@@ -111,6 +113,7 @@ class UnifiedRetriever:
 
     # ── query decomposition ──────────────────────────────────────────────
 
+    @observe()
     async def decompose_and_search(
         self,
         complex_query: str,
@@ -234,46 +237,20 @@ class UnifiedRetriever:
 
     async def _extract_entity_names(self, query: str) -> list[str]:
         """Use the LLM to pull entity names (companies, people, machines) from a query."""
-        if not self._openai_key:
-            return []
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Extract entity names from the user query. Return a JSON "
-                        "array of strings — company names, person names, email "
-                        "addresses, machine model numbers, and quote IDs. Return "
-                        "only the JSON array, nothing else. If no entities are "
-                        "found, return an empty array []."
-                    ),
-                },
-                {"role": "user", "content": query},
-            ],
-        }
-
+        system = (
+            "Extract entity names from the user query. Return a JSON "
+            "array of strings — company names, person names, email "
+            "addresses, machine model numbers, and quote IDs. Return "
+            "only the JSON array, nothing else. If no entities are "
+            "found, return an empty array []."
+        )
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                names = json.loads(content)
-                if isinstance(names, list) and all(isinstance(n, str) for n in names):
-                    return names
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+            result = await self._llm.generate_structured(
+                system, query, EntityNames, name="retriever.extract_entities",
+            )
+            return result.entities
+        except Exception:
             logger.debug("Entity name extraction failed for graph search; using raw query")
-
         return []
 
     async def _search_mem0(self, query: str, limit: int) -> list[dict[str, Any]]:
@@ -463,37 +440,14 @@ class UnifiedRetriever:
     # ── LLM query decomposition ──────────────────────────────────────────
 
     async def _decompose_query(self, query: str) -> list[str]:
-        if not self._openai_key:
-            logger.warning("No OpenAI key; skipping query decomposition")
-            return []
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _DECOMPOSE_SYSTEM_PROMPT},
-                {"role": "user", "content": query},
-            ],
-        }
-
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                sub_queries = json.loads(content)
-                if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
-                    logger.info("Decomposed query into %d sub-queries", len(sub_queries))
-                    return sub_queries
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+            result = await self._llm.generate_structured(
+                _DECOMPOSE_SYSTEM_PROMPT, query, SubQueries,
+                name="retriever.decompose",
+            )
+            if result.queries:
+                logger.info("Decomposed query into %d sub-queries", len(result.queries))
+            return result.queries
+        except Exception:
             logger.exception("Query decomposition failed")
-
         return []

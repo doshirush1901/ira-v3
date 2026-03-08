@@ -19,13 +19,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.config import LLMConfig, get_settings
 from ira.data.crm import CRMDatabase
 from ira.exceptions import DatabaseError
 from ira.memory.procedural import Procedure, ProceduralMemory
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import CorrectionAnalysis, GapAnalysis, ProcedureSteps
+from ira.services.llm_client import get_llm_client
 from ira.skills import SKILL_MATRIX
 
 logger = logging.getLogger(__name__)
@@ -64,10 +66,7 @@ class LearningHub:
     ) -> None:
         self._crm = crm
         self._procedural = procedural_memory
-
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
 
         self._recent_feedback: list[FeedbackRecord] = []
         self._init_db()
@@ -221,6 +220,7 @@ class LearningHub:
             for r in poor[:limit]
         ]
 
+    @observe()
     async def trigger_micro_learning_cycle(self) -> dict[str, Any]:
         """Run a targeted SleepTrainer cycle on recent high-priority corrections.
 
@@ -368,12 +368,15 @@ class LearningHub:
         original: str,
         correction: str,
     ) -> dict[str, Any]:
-        prompt = (
+        user = (
             f"ORIGINAL RESPONSE:\n{original[:4000]}\n\n"
             f"USER CORRECTION:\n{correction[:4000]}"
         )
-        raw = await self._llm_call(_CORRECTION_ANALYSIS_PROMPT, prompt)
-        return self._safe_parse_json(raw)
+        result = await self._llm.generate_structured(
+            _CORRECTION_ANALYSIS_PROMPT, user, CorrectionAnalysis,
+            name="learning_hub.correction",
+        )
+        return result.model_dump()
 
     async def _analyse_gap(
         self,
@@ -389,49 +392,24 @@ class LearningHub:
         ]
         if correction:
             parts.append(f"USER CORRECTION: {correction[:2000]}")
-        prompt = "\n\n".join(parts)
-        raw = await self._llm_call(_GAP_ANALYSIS_PROMPT, prompt)
-        return self._safe_parse_json(raw)
+        user = "\n\n".join(parts)
+        result = await self._llm.generate_structured(
+            _GAP_ANALYSIS_PROMPT, user, GapAnalysis,
+            name="learning_hub.gap",
+        )
+        return result.model_dump()
 
     async def _extract_procedure_steps(
         self,
         query: str,
         response: str,
     ) -> list[str]:
-        prompt = f"QUERY: {query[:2000]}\n\nRESPONSE: {response[:6000]}"
-        raw = await self._llm_call(_PROCEDURE_EXTRACTION_PROMPT, prompt)
-        parsed = self._safe_parse_json(raw)
-        if isinstance(parsed, list):
-            return [str(s) for s in parsed]
-        return []
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self._openai_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError):
-            logger.exception("LLM call failed in LearningHub")
-            return "(LLM call failed)"
+        user = f"QUERY: {query[:2000]}\n\nRESPONSE: {response[:6000]}"
+        result = await self._llm.generate_structured(
+            _PROCEDURE_EXTRACTION_PROMPT, user, ProcedureSteps,
+            name="learning_hub.procedure",
+        )
+        return result.steps
 
     @staticmethod
     def _safe_parse_json(raw: str) -> Any:

@@ -20,14 +20,24 @@ from typing import Any
 
 import aiosqlite
 import httpx
+from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
+from ira.config import get_settings
 from ira.data.models import DreamReport
 from ira.exceptions import ConfigurationError, DatabaseError, IngestionError, IraError, LLMError
 from ira.memory.conversation import ConversationMemory
 from ira.memory.episodic import EpisodicMemory
 from ira.memory.long_term import LongTermMemory
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import (
+    DreamCampaignInsights,
+    DreamCreative,
+    DreamGaps,
+    DreamInsight,
+    DreamProcedures,
+    DreamPrune,
+)
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +67,6 @@ class DreamMode:
         crm: Any | None = None,
         procedural_memory: Any | None = None,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
         dream_log_path: str | Path | None = None,
     ) -> None:
         self._long_term = long_term
@@ -68,9 +77,7 @@ class DreamMode:
         self._crm = crm
         self._procedural = procedural_memory
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
         self._dream_log_path = Path(dream_log_path) if dream_log_path else _DREAM_LOG_PATH
 
@@ -105,6 +112,7 @@ class DreamMode:
 
     # ── public API ────────────────────────────────────────────────────────
 
+    @observe()
     async def run_dream_cycle(self) -> DreamReport:
         """Execute the full 11-stage dream cycle and return a report."""
         logger.info("DREAM CYCLE starting")
@@ -351,11 +359,11 @@ class DreamMode:
                     f"Episode ({e.get('user_id', 'unknown')}): {e.get('narrative', '')}"
                     for e in episodes
                 )
-                raw = await self._llm_call(_INSIGHT_SYSTEM_PROMPT, episode_text, temperature=0.2)
-                try:
-                    insights = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
-                    insights = {}
+                result = await self._llm.generate_structured(
+                    _INSIGHT_SYSTEM_PROMPT, episode_text, DreamInsight,
+                    temperature=0.2, name="dream.insight",
+                )
+                insights = result.model_dump()
             stage_log.setdefault("stages", {})["3a_cross_episode_insights"] = {
                 "status": "ok",
                 "patterns": len(insights.get("patterns", [])),
@@ -378,14 +386,10 @@ class DreamMode:
                 await cursor.close()
                 if rows:
                     gap_text = "\n".join(f"Query: {r[0]}\nGaps: {r[1]}" for r in rows)
-                    raw = await self._llm_call(_GAP_SYSTEM_PROMPT, gap_text, temperature=0)
-                    try:
-                        parsed = json.loads(raw)
-                        gaps = parsed.get("gaps", [])
-                        if not isinstance(gaps, list):
-                            gaps = []
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    result = await self._llm.generate_structured(
+                        _GAP_SYSTEM_PROMPT, gap_text, DreamGaps, name="dream.gaps",
+                    )
+                    gaps = [g.model_dump() for g in result.gaps]
             stage_log["stages"]["3b_gap_detection"] = {
                 "status": "ok",
                 "gaps_found": len(gaps),
@@ -415,14 +419,11 @@ class DreamMode:
                     + "\n".join(f"[{e['created_at']}] {e['narrative']}" for e in recent_episodes)
                 )
             context = "\n\n".join(context_parts) if context_parts else "No gaps or episodes."
-            raw = await self._llm_call(_CREATIVE_SYSTEM_PROMPT, context, temperature=0.3)
-            try:
-                parsed = json.loads(raw)
-                connections = parsed.get("connections", [])
-                if not isinstance(connections, list):
-                    connections = []
-            except (json.JSONDecodeError, TypeError):
-                pass
+            result = await self._llm.generate_structured(
+                _CREATIVE_SYSTEM_PROMPT, context, DreamCreative,
+                temperature=0.3, name="dream.creative",
+            )
+            connections = [c.model_dump() for c in result.connections]
             stage_log["stages"]["3c_creative_synthesis"] = {
                 "status": "ok",
                 "connections_found": len(connections),
@@ -436,14 +437,11 @@ class DreamMode:
             if self._musculoskeletal is not None:
                 myokines = await self._musculoskeletal.extract_myokines(period_days=7)
                 myokines_text = json.dumps(myokines, indent=2)
-                raw = await self._llm_call(_CAMPAIGN_SYSTEM_PROMPT, myokines_text, temperature=0)
-                try:
-                    parsed = json.loads(raw)
-                    campaign_insights = parsed.get("insights", [])
-                    if not isinstance(campaign_insights, list):
-                        campaign_insights = []
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                result = await self._llm.generate_structured(
+                    _CAMPAIGN_SYSTEM_PROMPT, myokines_text, DreamCampaignInsights,
+                    name="dream.campaign",
+                )
+                campaign_insights = result.insights
             stage_log["stages"]["3d_campaign_reflection"] = {
                 "status": "ok",
                 "campaign_insights": len(campaign_insights),
@@ -498,20 +496,14 @@ class DreamMode:
                 )
 
             context = "\n\n".join(context_parts)
-            raw = await self._llm_call(_PROCEDURAL_SYSTEM_PROMPT, context, temperature=0)
+            result = await self._llm.generate_structured(
+                _PROCEDURAL_SYSTEM_PROMPT, context, DreamProcedures,
+                name="dream.procedural",
+            )
 
-            derived: list[dict[str, Any]] = []
-            try:
-                parsed = json.loads(raw)
-                derived = parsed.get("procedures", [])
-                if not isinstance(derived, list):
-                    derived = []
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-            for proc in derived:
-                trigger = proc.get("trigger", "")
-                steps = proc.get("steps", [])
+            for proc in result.procedures:
+                trigger = proc.trigger
+                steps = proc.steps
                 if trigger and steps:
                     await self._procedural.learn_procedure(trigger, steps)
                     procedures_created += 1
@@ -557,12 +549,10 @@ class DreamMode:
                 [{"id": r[0], "narrative": r[1], "topics": r[2], "date": r[3]} for r in old_episodes],
                 indent=2,
             )
-            raw = await self._llm_call(_PRUNE_SYSTEM_PROMPT, episodes_text, temperature=0)
-
-            try:
-                decisions = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                decisions = {}
+            result = await self._llm.generate_structured(
+                _PRUNE_SYSTEM_PROMPT, episodes_text, DreamPrune, name="dream.prune",
+            )
+            decisions = result.model_dump()
 
             archive_ids = decisions.get("archive", [])
             if archive_ids:
@@ -869,38 +859,6 @@ class DreamMode:
                 )
             )
         return reports
-
-    # ── LLM ───────────────────────────────────────────────────────────────
-
-    async def _llm_call(
-        self, system: str, user: str, temperature: float = 0
-    ) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("DreamMode LLM call failed")
-            return "(LLM call failed)"
 
     # ── lifecycle ─────────────────────────────────────────────────────────
 

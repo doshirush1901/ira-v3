@@ -20,7 +20,9 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from email.mime.text import MIMEText
 from email.utils import parseaddr
 from pathlib import Path
@@ -33,7 +35,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from ira.config import EmailMode, get_settings
-from ira.data.models import Channel, Direction, Email
+from ira.data.models import Channel, DealStage, Direction, Email
 from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,16 @@ _REPLY_INTENTS = frozenset({
     "QUOTE_REQUEST", "SUPPORT", "GENERAL_INQUIRY",
     "PARTNERSHIP", "COMPLAINT", "FOLLOW_UP",
 })
+
+_DEAL_INTENTS = frozenset({
+    "QUOTE_REQUEST", "FOLLOW_UP", "PARTNERSHIP",
+})
+
+_DEAL_SUBJECT_PATTERNS = re.compile(
+    r"(?i)(quote|proposal|offer|PF1|PF2|ATF|AM[-\s]|IMG|FCS|"
+    r"thermoform|vacuum\s*form|machine\s+inquiry|pricing|"
+    r"techno.?commercial)",
+)
 
 
 class EmailProcessor:
@@ -342,6 +354,105 @@ class EmailProcessor:
         except (IraError, Exception):
             logger.exception("Failed to send Telegram draft notification")
 
+    # ── Deal creation from email signals ────────────────────────────────
+
+    async def _maybe_create_deal(
+        self,
+        crm_contact: Any,
+        email: Email,
+        classification: dict[str, Any],
+        digest_result: dict[str, Any],
+    ) -> None:
+        """Create a CRM deal when an email carries proposal/quote signals.
+
+        Checks both the Delphi classification intent and subject-line
+        patterns for machine models and sales keywords.  Skips if the
+        contact already has a deal whose title overlaps with this thread.
+        """
+        intent = classification.get("intent", "") if classification else ""
+        subject = email.subject or ""
+
+        has_deal_intent = intent in _DEAL_INTENTS
+        has_deal_subject = bool(_DEAL_SUBJECT_PATTERNS.search(subject))
+
+        if not has_deal_intent and not has_deal_subject:
+            return
+
+        try:
+            existing_deals = await self._crm.get_deals_for_contact(
+                str(crm_contact.id),
+            )
+            subject_lower = subject.lower()
+            for deal in existing_deals:
+                deal_title = (deal.get("title") or "").lower()
+                if (
+                    deal_title
+                    and (deal_title in subject_lower or subject_lower in deal_title)
+                ):
+                    return
+
+            machine = self._extract_machine_model(subject, digest_result)
+            value = self._extract_deal_value(digest_result)
+            stage = DealStage.PROPOSAL if has_deal_subject else DealStage.ENGAGED
+            title = f"{machine} — {subject[:120]}" if machine else subject[:200]
+
+            await self._crm.create_deal(
+                contact_id=str(crm_contact.id),
+                title=title,
+                value=value,
+                currency="USD",
+                stage=stage,
+                machine_model=machine or None,
+                notes=f"Auto-created from email thread. Intent: {intent}",
+            )
+            logger.info(
+                "Created deal for %s: %s (stage=%s)",
+                crm_contact.email, title, stage,
+            )
+        except (DatabaseError, Exception):
+            logger.warning(
+                "Could not create deal from email for %s", crm_contact.email,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _extract_machine_model(
+        subject: str, digest_result: dict[str, Any],
+    ) -> str:
+        """Pull the first Machinecraft machine model from subject or digest metadata."""
+        pattern = re.compile(
+            r"(?i)(PF[12][-\s]?(?:XL[-\s]?|X[-\s]?|C[-\s]?)?[\d]{3,4})"
+            r"|(ATF[-\s]?[\d]{3,4})"
+            r"|(AM[-\s]?V?[-\s]?[\d]{3,4})"
+            r"|(IMG[-\s]?[\d]{3,4})"
+            r"|(FCS[-\s]?[\d]{3,4})"
+            r"|(SAM[-\s]?[\d]{3,4})"
+        )
+        m = pattern.search(subject)
+        if m:
+            return m.group(0).strip()
+
+        meta = digest_result.get("email_metadata") or {}
+        machines = meta.get("machine_mentions") or []
+        if machines:
+            return str(machines[0])
+        return ""
+
+    @staticmethod
+    def _extract_deal_value(digest_result: dict[str, Any]) -> Decimal:
+        """Best-effort extraction of a monetary value from digest metadata."""
+        meta = digest_result.get("email_metadata") or {}
+        for mention in meta.get("pricing_mentions") or []:
+            nums = re.findall(r"[\d,]+(?:\.\d+)?", str(mention))
+            for n in nums:
+                try:
+                    val = Decimal(n.replace(",", ""))
+                    if val > 0:
+                        return val
+                except Exception:
+                    continue
+        return Decimal("0")
+
     # ── Email search ─────────────────────────────────────────────────────
 
     async def search_emails(
@@ -519,6 +630,10 @@ class EmailProcessor:
                 direction=direction,
                 subject=email.subject,
                 content=analysis_summary,
+            )
+
+            await self._maybe_create_deal(
+                crm_contact, email, classification, digest_result,
             )
 
         if self._unified_ctx is not None:

@@ -11,11 +11,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 from pydantic import BaseModel, Field
 
-from ira.config import LLMConfig, get_settings
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import GoalDetection
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +128,9 @@ class GoalManager:
     def __init__(
         self,
         db_path: str = "goals.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -158,6 +156,7 @@ class GoalManager:
         )
         await self._db.commit()
 
+    @observe()
     async def detect_goal(self, query: str, context: dict[str, Any]) -> Goal | None:
         contact_id = context.get("contact_id")
         if not contact_id:
@@ -172,17 +171,18 @@ class GoalManager:
             return await self._create_and_persist_goal(
                 contact_id, GoalType.LEAD_QUALIFICATION
             )
-        raw = await self._llm_call(
+        result = await self._llm.generate_structured(
             _DETECT_SYSTEM_PROMPT,
             f"Query: {query}\nContext: {json.dumps(context)}",
+            GoalDetection,
+            name="goal_manager.detect",
         )
         try:
-            parsed = json.loads(raw)
-            if parsed.get("should_initiate") and parsed.get("goal_type"):
-                gt = GoalType(parsed["goal_type"])
+            if result.should_initiate and result.goal_type:
+                gt = GoalType(result.goal_type)
                 return await self._create_and_persist_goal(contact_id, gt)
-        except (json.JSONDecodeError, ValueError, KeyError):
-            logger.warning("Goal detection LLM returned invalid JSON: %s", raw[:200])
+        except (ValueError, KeyError):
+            logger.warning("Goal detection LLM returned invalid goal_type: %s", result.goal_type)
         return None
 
     async def _create_and_persist_goal(
@@ -258,12 +258,18 @@ class GoalManager:
             completed_at=completed_at,
         )
 
+    @observe()
     async def extract_slots(self, goal: Goal, message: str) -> dict[str, str]:
         unfilled = [k for k, v in goal.required_slots.items() if v is None]
         if not unfilled:
             return {}
         prompt = f"Goal type: {goal.goal_type.value}\nUnfilled slots: {unfilled}\nUser message: {message}"
-        raw = await self._llm_call(_EXTRACT_SYSTEM_PROMPT, prompt)
+        raw = await self._llm.generate_text(
+            _EXTRACT_SYSTEM_PROMPT,
+            prompt,
+            name="goal_manager.extract_slots",
+            temperature=0,
+        )
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
@@ -317,34 +323,6 @@ class GoalManager:
             (GoalStatus.ABANDONED.value, str(goal_id)),
         )
         await self._db.commit()
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "{}"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in GoalManager")
-            return "{}"
 
     async def close(self) -> None:
         if self._db is not None:

@@ -15,10 +15,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import get_settings
 from ira.exceptions import DatabaseError
+from ira.schemas.llm_outputs import FeedbackClassification
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,12 @@ class FeedbackHandler:
         self._correction_store = correction_store
         self._mem0_client = mem0_client
         self._procedural_memory = procedural_memory
+        self._llm = get_llm_client()
         self._agent_scores: dict[str, dict[str, int]] = {}
 
     # ── public API ───────────────────────────────────────────────────────
 
+    @observe()
     async def detect_feedback(
         self,
         message: str,
@@ -229,42 +232,18 @@ class FeedbackHandler:
         previous_query: str,
         previous_response: str,
     ) -> dict[str, Any]:
-        settings = get_settings()
-        api_key = settings.llm.openai_api_key.get_secret_value()
-        if not api_key:
-            return {
-                "polarity": "ambiguous",
-                "confidence": 0.3,
-                "extracted_correction": None,
-            }
-
         user_content = (
             f"Previous query: {previous_query}\n"
             f"Previous response: {previous_response[:2000]}\n"
             f"User message: {message}"
         )
-        payload = {
-            "model": settings.llm.openai_model,
-            "temperature": 0.1,
-            "messages": [
-                {"role": "system", "content": _DISAMBIGUATION_SYSTEM},
-                {"role": "user", "content": user_content},
-            ],
-        }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                raw = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(raw)
-        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError):
+            result = await self._llm.generate_structured(
+                _DISAMBIGUATION_SYSTEM, user_content, FeedbackClassification,
+                temperature=0.1, name="feedback.disambiguate",
+            )
+            return result.model_dump()
+        except Exception:
             logger.exception("LLM disambiguation failed")
             return {
                 "polarity": "ambiguous",

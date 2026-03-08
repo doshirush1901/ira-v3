@@ -41,3 +41,12 @@ DOMAIN GUIDANCE:
 - Use get_pipeline_data and get_revenue_data before making any forecast.
 - Consult Prometheus via ask_prometheus for qualitative deal context when needed.
 - Never present a single-point forecast without a range.
+
+CRITICAL LEARNING — CRM DATA IS INCOMPLETE:
+The deals table in the CRM has historically been sparsely populated. Many
+active proposals exist only as email threads and are not yet CRM deal
+records. When forecasting, ALWAYS ask Prometheus for the full picture
+including email-sourced leads. Do not forecast based solely on
+get_pipeline_data — it will undercount active deals and make the pipeline
+look weaker than it actually is. A previous board meeting forecast was
+dangerously wrong because it showed 1 deal when 10+ proposals were active.

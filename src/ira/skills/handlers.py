@@ -15,7 +15,7 @@ import json
 import logging
 from typing import Any
 
-from ira.exceptions import DatabaseError, IraError, LLMError
+from ira.exceptions import DatabaseError, IraError
 from ira.service_keys import ServiceKey as SK
 from ira.skills import SKILL_MATRIX
 
@@ -36,60 +36,12 @@ def _svc(name: str) -> Any | None:
 
 async def _llm_call(system: str, user: str, *, temperature: float = 0.3) -> str:
     """Shared LLM helper with automatic Anthropic fallback."""
-    import httpx
-    from ira.config import get_settings
+    from ira.services.llm_client import get_llm_client
 
-    settings = get_settings()
-    openai_key = settings.llm.openai_api_key.get_secret_value()
-    anthropic_key = settings.llm.anthropic_api_key.get_secret_value()
-
-    if openai_key:
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json={
-                        "model": settings.llm.openai_model,
-                        "temperature": temperature,
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user[:12_000]},
-                        ],
-                    },
-                    headers={
-                        "Authorization": f"Bearer {openai_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (LLMError, Exception):
-            logger.warning("OpenAI call failed in skill handler — trying Anthropic fallback")
-
-    if anthropic_key:
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    json={
-                        "model": settings.llm.anthropic_model,
-                        "max_tokens": 4096,
-                        "system": system,
-                        "messages": [{"role": "user", "content": user[:12_000]}],
-                        "temperature": temperature,
-                    },
-                    headers={
-                        "x-api-key": anthropic_key,
-                        "anthropic-version": "2023-06-01",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                return resp.json()["content"][0]["text"]
-        except (LLMError, Exception):
-            logger.exception("Anthropic fallback also failed in skill handler")
-
-    return "(LLM call failed — no provider available)"
+    llm = get_llm_client()
+    return await llm.generate_text_with_fallback(
+        system, user, temperature=temperature, name="skill_handler",
+    )
 
 
 # ── Research & Knowledge ─────────────────────────────────────────────────

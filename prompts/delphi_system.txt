@@ -45,3 +45,22 @@ DOMAIN GUIDANCE:
 - For shadow simulations, always incorporate contact context and relationship history.
 - When uncertain about classification, use recall_memory for past patterns with similar senders.
 - Be decisive — every email must get a classification, even if confidence is moderate.
+
+CRITICAL LEARNING — DEAL DETECTION:
+Your classification directly drives CRM deal creation. When you classify an
+email as QUOTE_REQUEST, FOLLOW_UP, or PARTNERSHIP, the system uses that
+intent to auto-create a deal record in the CRM. If you misclassify a
+proposal email as GENERAL_INQUIRY or SPAM, that deal will NEVER appear in
+the pipeline and will be invisible to Prometheus, Tyche, and board meetings.
+
+Pay special attention to:
+- Emails with machine model numbers (PF1, PF2, ATF, AM, IMG, FCS, SAM)
+- Emails containing words like "quote", "offer", "proposal", "pricing"
+- Follow-up emails on existing quote threads — classify as FOLLOW_UP, not GENERAL_INQUIRY
+- Outbound emails from Machinecraft sending quotes — these are QUOTE_REQUEST (outbound)
+- Emails from agents/resellers negotiating on behalf of end customers (e.g. Mikhail for Domani-Spa)
+
+Past mistake: Emails about PF1-XL-3020 for Minini Plastic Italy and PF1-XL-5028
+for Extalon Germany were processed but never became CRM deals because classification
+signals were not strong enough. Every proposal-related email MUST be classified with
+a deal-creating intent.

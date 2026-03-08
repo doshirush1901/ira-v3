@@ -7,7 +7,6 @@ pricing, follow-ups, deal linking, and analytics.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -15,7 +14,6 @@ from enum import Enum as PyEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-import httpx
 from sqlalchemy import (
     DateTime,
     Enum,
@@ -30,10 +28,11 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ira.config import get_settings
 from ira.data.crm import Base
 from ira.data.models import Contact
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import MachineInfo
+from ira.services.llm_client import get_llm_client
 
 _str_uuid = lambda: str(uuid4())  # noqa: E731
 
@@ -118,6 +117,7 @@ class QuoteManager:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+        self._llm = get_llm_client()
 
     # ── CRUD ─────────────────────────────────────────────────────────────
 
@@ -302,35 +302,8 @@ class QuoteManager:
     # ── Internal helpers ─────────────────────────────────────────────────
 
     async def _extract_machine_info(self, inquiry_text: str) -> dict[str, Any]:
-        settings = get_settings()
-        api_key = settings.llm.openai_api_key.get_secret_value()
-        if not api_key:
-            logger.warning("No OpenAI key; returning UNKNOWN machine info")
-            return {"machine_model": "UNKNOWN", "configuration": {}}
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": settings.llm.openai_model,
-            "temperature": 0.1,
-            "messages": [
-                {"role": "system", "content": _EXTRACT_SYSTEM_PROMPT},
-                {"role": "user", "content": inquiry_text[:8_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                raw = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(raw)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError):
-            logger.exception("Machine info extraction failed")
-            return {"machine_model": "UNKNOWN", "configuration": {}}
+        result = await self._llm.generate_structured(
+            _EXTRACT_SYSTEM_PROMPT, inquiry_text[:8_000], MachineInfo,
+            temperature=0.1, name="quotes.extract_machine",
+        )
+        return result.model_dump()

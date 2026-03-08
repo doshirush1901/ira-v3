@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import random
 from datetime import datetime, timezone
@@ -10,11 +9,12 @@ from enum import Enum
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 from pydantic import BaseModel, Field
 
-from ira.config import LLMConfig, get_settings
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import InnerReflection
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,11 @@ class InnerVoice:
     def __init__(
         self,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
         surface_probability: float = 0.1,
     ) -> None:
         self._db_path = db_path
         self._surface_probability = surface_probability
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
         self._traits: dict[str, PersonalityTrait] = {}
 
@@ -109,18 +106,20 @@ class InnerVoice:
             for r in rows
         }
 
+    @observe()
     async def reflect(self, context: str, trigger: str) -> dict:
         trait_vals = {t.name: t.value for t in self._traits.values()}
         system = _REFLECT_SYSTEM_TEMPLATE.format(**trait_vals)
         user_content = f"CONTEXT: {context}\n\nTRIGGER: {trigger}"
-        raw = await self._llm_call(system, user_content)
         try:
-            parsed = json.loads(raw)
-            reflection_type = ReflectionType(
-                parsed.get("reflection_type", "OBSERVATION")
+            result = await self._llm.generate_structured(
+                system,
+                user_content,
+                InnerReflection,
+                name="inner_voice.reflect",
             )
-            content = parsed.get("content", "")
-            should_surface = bool(parsed.get("should_surface", False))
+            reflection_type = ReflectionType(result.reflection_type)
+            should_surface = result.should_surface
             if (
                 should_surface
                 and reflection_type not in (ReflectionType.CELEBRATION, ReflectionType.CONCERN)
@@ -129,11 +128,11 @@ class InnerVoice:
                     should_surface = False
             return {
                 "reflection_type": reflection_type,
-                "content": content,
+                "content": result.content,
                 "should_surface": should_surface,
             }
-        except (json.JSONDecodeError, ValueError, TypeError):
-            logger.warning("InnerVoice reflect: LLM returned invalid JSON")
+        except (ValueError, TypeError):
+            logger.warning("InnerVoice reflect: LLM returned invalid data")
             return {
                 "reflection_type": ReflectionType.OBSERVATION,
                 "content": "",
@@ -186,34 +185,6 @@ class InnerVoice:
 
     def get_all_traits(self) -> dict[str, PersonalityTrait]:
         return dict(self._traits)
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "{}"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("InnerVoice LLM call failed")
-            return "{}"
 
     async def close(self) -> None:
         if self._db is not None:

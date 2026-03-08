@@ -27,6 +27,8 @@ import logging
 import time
 from typing import Any
 
+from langfuse.decorators import observe
+
 from ira.data.models import Channel, Contact, Direction
 from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
@@ -85,6 +87,7 @@ class RequestPipeline:
 
     # ── Public entry point ────────────────────────────────────────────────
 
+    @observe(name="pipeline.process_request")
     async def process_request(
         self,
         raw_input: str,

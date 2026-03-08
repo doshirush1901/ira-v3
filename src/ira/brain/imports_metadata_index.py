@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.brain.document_ingestor import (
     read_csv,
@@ -31,8 +31,9 @@ from ira.brain.document_ingestor import (
     read_xls,
     read_xlsx,
 )
-from ira.config import get_settings
 from ira.exceptions import IngestionError, IraError, LLMError
+from ira.schemas.llm_outputs import DocumentMetadata
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,11 @@ def _file_fingerprint(filepath: Path) -> str:
 # ── LLM metadata generation ─────────────────────────────────────────────
 
 
+@observe()
 async def _generate_metadata_llm(filename: str, text_preview: str) -> dict[str, Any] | None:
     """Use GPT-4.1-mini to produce structured metadata from a file preview."""
-    settings = get_settings()
-    api_key = settings.llm.openai_api_key.get_secret_value()
-    if not api_key:
-        return None
-
-    prompt = f"""Analyze this document and return structured metadata as JSON.
+    system = "Extract structured metadata from documents. Return only valid JSON."
+    user = f"""Analyze this document and return structured metadata as JSON.
 
 FILENAME: {filename}
 
@@ -110,34 +108,13 @@ Return ONLY valid JSON with these fields:
     "keywords": ["5-10 important searchable terms from the document"]
 }}"""
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": _LLM_MODEL,
-        "temperature": 0.1,
-        "max_tokens": 500,
-        "messages": [
-            {"role": "system", "content": "Extract structured metadata from documents. Return only valid JSON."},
-            {"role": "user", "content": prompt},
-        ],
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            text = resp.json()["choices"][0]["message"]["content"].strip()
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            return json.loads(text)
+        llm = get_llm_client()
+        result = await llm.generate_structured(
+            system, user, DocumentMetadata,
+            model="gpt-4.1-mini", name="imports.metadata",
+        )
+        return result.model_dump()
     except (LLMError, Exception) as exc:
         logger.warning("LLM metadata failed for %s: %s", filename, exc)
         return None

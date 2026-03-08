@@ -16,6 +16,23 @@ from uuid import uuid4
 import pytest
 
 from ira.data.models import Channel, Contact, Direction, Email
+from ira.schemas.llm_outputs import (
+    CorrectionAnalysis,
+    DigestiveSummary,
+    DreamCampaignInsights,
+    DreamCreative,
+    DreamConnection,
+    DreamGaps,
+    DreamInsight,
+    DreamProcedure,
+    DreamProcedures,
+    DreamPrune,
+    EmailMetadata,
+    EmailSenderInfo,
+    GapAnalysis,
+    NutrientClassification,
+    ProcedureSteps,
+)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -57,6 +74,17 @@ def _make_settings_mock():
     return s
 
 
+def _mock_llm_client():
+    """Return a mock LLMClient with all generation methods stubbed."""
+    client = MagicMock()
+    client._openai = MagicMock()
+    client.generate_structured = AsyncMock()
+    client.generate_text = AsyncMock(return_value="")
+    client.generate_text_with_fallback = AsyncMock(return_value="")
+    client.generate_structured_with_fallback = AsyncMock()
+    return client
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # 1. DigestiveSystem
 # ═════════════════════════════════════════════════════════════════════════
@@ -83,25 +111,35 @@ class TestDigestiveSystem:
         mock_qdrant = AsyncMock()
         mock_qdrant.upsert_items = AsyncMock(side_effect=lambda items: len(items))
 
-        with patch("ira.systems.digestive.get_settings") as mock_settings:
-            mock_settings.return_value = _make_settings_mock()
+        with patch("ira.systems.digestive.get_llm_client", return_value=_mock_llm_client()):
             from ira.systems.digestive import DigestiveSystem
             ds = DigestiveSystem(mock_ingestor, mock_graph, mock_embeddings, mock_qdrant)
 
         ds._graph = mock_graph
         ds._qdrant = mock_qdrant
+        ds._quality_filter = MagicMock()
+        ds._quality_filter.filter_chunk = MagicMock(return_value={"pass": True, "quality_score": 1.0})
         return ds
 
     @pytest.mark.asyncio
     async def test_ingest_separates_nutrients(self, digestive_system):
-        nutrients_json = json.dumps({
-            "protein": ["Revenue was $5M in Q3", "Deal closes March 15"],
-            "carbs": ["The company is based in Dubai"],
-            "waste": ["Best regards", "Sent from my iPhone"],
-        })
+        mock_nutrients = NutrientClassification(
+            protein=["Revenue was $5M in Q3", "Deal closes March 15"],
+            carbs=["The company is based in Dubai"],
+            waste=["Best regards", "Sent from my iPhone"],
+        )
+        mock_summary = DigestiveSummary(statements=["Revenue was $5M in Q3", "Deal closes March 15"])
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(nutrients_json)):
-            result = await digestive_system.ingest("Some email body", "test@example.com", "email")
+        async def mock_structured(system, user, model_cls, **kwargs):
+            if model_cls is NutrientClassification:
+                return mock_nutrients
+            if model_cls is DigestiveSummary:
+                return mock_summary
+            return model_cls()
+
+        digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
+
+        result = await digestive_system.ingest("Some email body", "test@example.com", "email")
 
         assert result["nutrients_extracted"]["protein"] == 2
         assert result["nutrients_extracted"]["carbs"] == 1
@@ -109,14 +147,27 @@ class TestDigestiveSystem:
 
     @pytest.mark.asyncio
     async def test_ingest_stores_only_protein_and_carbs(self, digestive_system):
-        nutrients_json = json.dumps({
-            "protein": ["Important fact"],
-            "carbs": ["Some context"],
-            "waste": ["Signature block"],
-        })
+        mock_nutrients = NutrientClassification(
+            protein=["Important fact"],
+            carbs=["Some context"],
+            waste=["Signature block"],
+        )
+        mock_summary_protein = DigestiveSummary(statements=["Important fact"])
+        mock_summary_carbs = DigestiveSummary(statements=["Some context"])
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(nutrients_json)):
-            await digestive_system.ingest("Body text", "src", "cat")
+        call_count = 0
+        async def mock_structured(system, user, model_cls, **kwargs):
+            nonlocal call_count
+            if model_cls is NutrientClassification:
+                return mock_nutrients
+            if model_cls is DigestiveSummary:
+                call_count += 1
+                return mock_summary_protein if call_count == 1 else mock_summary_carbs
+            return model_cls()
+
+        digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
+
+        await digestive_system.ingest("Body text", "src", "cat")
 
         digestive_system._qdrant.upsert_items.assert_called_once()
         items = digestive_system._qdrant.upsert_items.call_args[0][0]
@@ -127,14 +178,23 @@ class TestDigestiveSystem:
 
     @pytest.mark.asyncio
     async def test_ingest_extracts_entities_from_protein(self, digestive_system):
-        nutrients_json = json.dumps({
-            "protein": ["Acme Corp ordered a PF1-C"],
-            "carbs": [],
-            "waste": [],
-        })
+        mock_nutrients = NutrientClassification(
+            protein=["Acme Corp ordered a PF1-C"],
+            carbs=[],
+            waste=[],
+        )
+        mock_summary = DigestiveSummary(statements=["Acme Corp ordered a PF1-C"])
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(nutrients_json)):
-            result = await digestive_system.ingest("Body", "src", "cat")
+        async def mock_structured(system, user, model_cls, **kwargs):
+            if model_cls is NutrientClassification:
+                return mock_nutrients
+            if model_cls is DigestiveSummary:
+                return mock_summary
+            return model_cls()
+
+        digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
+
+        result = await digestive_system.ingest("Body", "src", "cat")
 
         digestive_system._graph.extract_entities_from_text.assert_called_once()
         digestive_system._graph.add_company.assert_called_once()
@@ -153,25 +213,30 @@ class TestDigestiveSystem:
             received_at=datetime.now(timezone.utc),
         )
 
-        nutrients_json = json.dumps({"protein": ["pricing for PF1-C"], "carbs": [], "waste": []})
-        meta_json = json.dumps({
-            "sender_info": {"name": "Alice", "company": "Acme Corp"},
-            "company_mentions": ["Acme Corp"],
-            "machine_mentions": ["PF1-C"],
-            "pricing_mentions": ["$500K"],
-            "dates_deadlines": ["March 30"],
-        })
+        mock_nutrients = NutrientClassification(
+            protein=["pricing for PF1-C"], carbs=[], waste=[],
+        )
+        mock_summary = DigestiveSummary(statements=["pricing for PF1-C"])
+        mock_meta = EmailMetadata(
+            sender_info=EmailSenderInfo(name="Alice", company="Acme Corp"),
+            company_mentions=["Acme Corp"],
+            machine_mentions=["PF1-C"],
+            pricing_mentions=["$500K"],
+            dates_deadlines=["March 30"],
+        )
 
-        call_count = 0
-        async def mock_post(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return _mock_openai_response(nutrients_json)
-            return _mock_openai_response(meta_json)
+        async def mock_structured(system, user, model_cls, **kwargs):
+            if model_cls is NutrientClassification:
+                return mock_nutrients
+            if model_cls is DigestiveSummary:
+                return mock_summary
+            if model_cls is EmailMetadata:
+                return mock_meta
+            return model_cls()
 
-        with patch("httpx.AsyncClient.post", side_effect=mock_post):
-            result = await digestive_system.ingest_email(email)
+        digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
+
+        result = await digestive_system.ingest_email(email)
 
         assert "email_metadata" in result
         assert result["email_id"] == "msg-1"
@@ -188,16 +253,10 @@ class TestRespiratorySystem:
 
     @pytest.fixture()
     def respiratory_system(self):
-        mock_digestive = MagicMock()
-        mock_ingestor = MagicMock()
-        mock_ingestor.ingest_all = AsyncMock(return_value={"total_files": 0, "total_chunks": 0})
-
         with patch("ira.systems.respiratory.get_settings") as mock_settings:
             mock_settings.return_value = _make_settings_mock()
             from ira.systems.respiratory import RespiratorySystem
             rs = RespiratorySystem(
-                mock_digestive,
-                mock_ingestor,
                 heartbeat_interval_seconds=1,
             )
         return rs
@@ -449,8 +508,7 @@ class TestVoiceSystem:
 
     @pytest.fixture()
     def voice_system(self):
-        with patch("ira.systems.voice.get_settings") as mock_settings:
-            mock_settings.return_value = _make_settings_mock()
+        with patch("ira.systems.voice.get_llm_client", return_value=_mock_llm_client()):
             from ira.systems.voice import VoiceSystem
             vs = VoiceSystem()
         return vs
@@ -473,8 +531,8 @@ class TestVoiceSystem:
     async def test_shape_response_telegram_enforces_length(self, voice_system):
         long_response = "A" * 5000
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(long_response)):
-            result = await voice_system.shape_response(long_response, "TELEGRAM", None, {})
+        voice_system._llm.generate_text = AsyncMock(return_value=long_response)
+        result = await voice_system.shape_response(long_response, "TELEGRAM", None, {})
 
         assert len(result) <= 2003  # 2000 + "..."
 
@@ -482,15 +540,14 @@ class TestVoiceSystem:
     async def test_shape_response_applies_behavioral_modifiers(self, voice_system):
         modifiers = {"prompt_addendum": "Be cautious.", "verbosity": "detailed"}
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response("shaped")) as mock_post:
-            await voice_system.shape_response(
-                "Some long response that needs reshaping " * 20,
-                "TELEGRAM", None, modifiers,
-            )
+        voice_system._llm.generate_text = AsyncMock(return_value="shaped")
+        await voice_system.shape_response(
+            "Some long response that needs reshaping " * 20,
+            "TELEGRAM", None, modifiers,
+        )
 
-        call_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args[1].get("json")
-        system_msg = call_payload["messages"][0]["content"]
-        assert "Be cautious." in system_msg
+        system_prompt_arg = voice_system._llm.generate_text.call_args[0][0]
+        assert "Be cautious." in system_prompt_arg
 
     def test_detect_preferred_style_defaults(self, voice_system, sample_contact):
         style = voice_system.detect_preferred_style(sample_contact, [])
@@ -540,10 +597,14 @@ class TestLearningHub:
 
     @pytest.fixture()
     def learning_hub(self, mock_crm, mock_procedural):
-        with patch("ira.systems.learning_hub.get_settings") as mock_settings:
-            mock_settings.return_value = _make_settings_mock()
+        with (
+            patch("ira.systems.learning_hub.get_settings", return_value=_make_settings_mock()),
+            patch("ira.systems.learning_hub.get_llm_client", return_value=_mock_llm_client()),
+        ):
             from ira.systems.learning_hub import LearningHub
-            return LearningHub(crm=mock_crm, procedural_memory=mock_procedural)
+            hub = LearningHub(crm=mock_crm, procedural_memory=mock_procedural)
+        hub._recent_feedback = []
+        return hub
 
     @pytest.mark.asyncio
     async def test_process_feedback_good_score(self, learning_hub, mock_crm):
@@ -556,56 +617,56 @@ class TestLearningHub:
     async def test_process_feedback_poor_score_triggers_gap_analysis(
         self, learning_hub, mock_procedural,
     ):
-        gap_json = json.dumps({
-            "gap_type": "KNOWLEDGE_GAP",
-            "description": "Missing lead-time data",
-            "suggested_skill_name": None,
-            "suggested_skill_description": None,
-            "suggested_knowledge_source": "production database",
-        })
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
-            record = await learning_hub.process_feedback("int-2", feedback_score=2)
+        mock_gap = GapAnalysis(
+            gap_type="KNOWLEDGE_GAP",
+            description="Missing lead-time data",
+            suggested_skill_name="",
+            suggested_skill_description="",
+            suggested_knowledge_source="production database",
+        )
+        learning_hub._llm.generate_structured = AsyncMock(return_value=mock_gap)
+
+        record = await learning_hub.process_feedback("int-2", feedback_score=2)
 
         assert record.gap_analysis.get("gap_type") == "KNOWLEDGE_GAP"
         mock_procedural.record_failure.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_process_feedback_with_correction(self, learning_hub, mock_crm):
-        correction_json = json.dumps({
-            "error_category": "FACTUAL",
-            "what_was_wrong": "Wrong lead time",
-            "correct_behaviour": "Should say 8 weeks not 6",
-        })
-        gap_json = json.dumps({
-            "gap_type": "QUALITY_ISSUE",
-            "description": "Incorrect fact",
-            "suggested_skill_name": None,
-            "suggested_skill_description": None,
-            "suggested_knowledge_source": None,
-        })
+        mock_correction = CorrectionAnalysis(
+            error_category="FACTUAL",
+            what_was_wrong="Wrong lead time",
+            correct_behaviour="Should say 8 weeks not 6",
+        )
+        mock_gap = GapAnalysis(
+            gap_type="QUALITY_ISSUE",
+            description="Incorrect fact",
+        )
 
-        call_count = 0
-        async def mock_post(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return _mock_openai_response(correction_json)
-            return _mock_openai_response(gap_json)
+        async def mock_structured(system, user, model_cls, **kwargs):
+            if model_cls is CorrectionAnalysis:
+                return mock_correction
+            if model_cls is GapAnalysis:
+                return mock_gap
+            return model_cls()
 
-        with patch("httpx.AsyncClient.post", side_effect=mock_post):
-            record = await learning_hub.process_feedback(
-                "int-3", feedback_score=2, correction="The lead time is 8 weeks.",
-            )
+        learning_hub._llm.generate_structured = AsyncMock(side_effect=mock_structured)
+
+        record = await learning_hub.process_feedback(
+            "int-3", feedback_score=2, correction="The lead time is 8 weeks.",
+        )
 
         assert record.correction == "The lead time is 8 weeks."
         assert record.correction_analysis.get("error_category") == "FACTUAL"
 
     @pytest.mark.asyncio
     async def test_suggest_procedure_from_interaction(self, learning_hub, mock_procedural):
-        steps_json = json.dumps(["Step 1: Look up machine", "Step 2: Check inventory"])
+        mock_steps = ProcedureSteps(
+            steps=["Step 1: Look up machine", "Step 2: Check inventory"],
+        )
+        learning_hub._llm.generate_structured = AsyncMock(return_value=mock_steps)
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(steps_json)):
-            procedure = await learning_hub.suggest_procedure("int-1")
+        procedure = await learning_hub.suggest_procedure("int-1")
 
         assert procedure is not None
         assert procedure.trigger_pattern == "lead time for {machine}"
@@ -619,12 +680,12 @@ class TestLearningHub:
 
     @pytest.mark.asyncio
     async def test_get_weak_areas_returns_poor_feedback(self, learning_hub):
-        gap_json = json.dumps({"gap_type": "MISSING_SKILL", "description": "test"})
+        mock_gap = GapAnalysis(gap_type="MISSING_SKILL", description="test")
+        learning_hub._llm.generate_structured = AsyncMock(return_value=mock_gap)
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
-            await learning_hub.process_feedback("int-a", feedback_score=1)
-            await learning_hub.process_feedback("int-b", feedback_score=8)
-            await learning_hub.process_feedback("int-c", feedback_score=2)
+        await learning_hub.process_feedback("int-a", feedback_score=1)
+        await learning_hub.process_feedback("int-b", feedback_score=8)
+        await learning_hub.process_feedback("int-c", feedback_score=2)
 
         weak = learning_hub.get_weak_areas(limit=5)
         assert len(weak) == 2
@@ -633,22 +694,21 @@ class TestLearningHub:
 
     @pytest.mark.asyncio
     async def test_get_weak_areas_empty_when_no_poor_feedback(self, learning_hub):
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response("{}")):
-            await learning_hub.process_feedback("int-ok", feedback_score=9)
+        await learning_hub.process_feedback("int-ok", feedback_score=9)
 
         assert learning_hub.get_weak_areas() == []
 
     @pytest.mark.asyncio
     async def test_identify_skill_gap_existing_skill(self, learning_hub):
-        gap_json = json.dumps({
-            "gap_type": "MISSING_SKILL",
-            "description": "Cannot summarise docs",
-            "suggested_skill_name": "summarize_document",
-            "suggested_skill_description": "Summarise long docs",
-            "suggested_knowledge_source": None,
-        })
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(gap_json)):
-            gap = await learning_hub.identify_skill_gap("int-1")
+        mock_gap = GapAnalysis(
+            gap_type="MISSING_SKILL",
+            description="Cannot summarise docs",
+            suggested_skill_name="summarize_document",
+            suggested_skill_description="Summarise long docs",
+        )
+        learning_hub._llm.generate_structured = AsyncMock(return_value=mock_gap)
+
+        gap = await learning_hub.identify_skill_gap("int-1")
 
         assert gap["skill_already_exists"] is True
         assert "existing_description" in gap
@@ -675,12 +735,13 @@ class TestNemesisTraining:
 
     @pytest.fixture()
     def nemesis(self, mock_settings_ctx):
-        from ira.agents.nemesis import Nemesis
-        retriever = AsyncMock()
-        retriever.search = AsyncMock(return_value=[])
-        retriever.search_by_category = AsyncMock(return_value=[])
-        bus = MagicMock()
-        return Nemesis(retriever=retriever, bus=bus)
+        with patch("ira.agents.base_agent.get_llm_client", return_value=_mock_llm_client()):
+            from ira.agents.nemesis import Nemesis
+            retriever = AsyncMock()
+            retriever.search = AsyncMock(return_value=[])
+            retriever.search_by_category = AsyncMock(return_value=[])
+            bus = MagicMock()
+            return Nemesis(retriever=retriever, bus=bus)
 
     @pytest.fixture()
     def mock_target_agent(self):
@@ -702,8 +763,15 @@ class TestNemesisTraining:
 
     @pytest.mark.asyncio
     async def test_handle_unconfigured_falls_back_to_llm(self, nemesis):
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response("Training analysis...")):
-            result = await nemesis.handle("Run training")
+        from ira.schemas.llm_outputs import ReActDecision
+
+        nemesis._llm.generate_structured = AsyncMock(
+            return_value=ReActDecision(
+                thought="No training infrastructure configured.",
+                final_answer="Training analysis...",
+            ),
+        )
+        result = await nemesis.handle("Run training")
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -724,8 +792,8 @@ class TestNemesisTraining:
             "improvement_suggestion": "Add action items",
         })
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
-            result = await nemesis.handle("Run training", {"num_scenarios": 1})
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=scores_json)
+        result = await nemesis.handle("Run training", {"num_scenarios": 1})
 
         assert "Training Cycle Report" in result
         mock_target_agent.handle.assert_awaited()
@@ -746,12 +814,12 @@ class TestNemesisTraining:
             "improvement_suggestion": "Be concise",
         })
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
-            result = await nemesis.create_training_scenario({
-                "test_query": "Show me the sales pipeline",
-                "domain": "sales",
-                "difficulty": "medium",
-            })
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=scores_json)
+        result = await nemesis.create_training_scenario({
+            "test_query": "Show me the sales pipeline",
+            "domain": "sales",
+            "difficulty": "medium",
+        })
 
         assert result.target_agent == "prometheus"
         assert result.overall_score == 8
@@ -776,11 +844,11 @@ class TestNemesisTraining:
             "improvement_suggestion": "Start over",
         })
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
-            result = await nemesis.create_training_scenario({
-                "test_query": "Complex pricing question",
-                "domain": "sales",
-            })
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=scores_json)
+        result = await nemesis.create_training_scenario({
+            "test_query": "Complex pricing question",
+            "domain": "sales",
+        })
 
         assert result.overall_score == 3
         feedback_call = mock_learning_hub.process_feedback.call_args
@@ -803,11 +871,11 @@ class TestNemesisTraining:
             "improvement_suggestion": "None needed",
         })
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scores_json)):
-            await nemesis.create_training_scenario({
-                "test_query": "Simple question",
-                "domain": "sales",
-            })
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=scores_json)
+        await nemesis.create_training_scenario({
+            "test_query": "Simple question",
+            "domain": "sales",
+        })
 
         feedback_call = mock_learning_hub.process_feedback.call_args
         assert feedback_call.kwargs["correction"] is None
@@ -854,8 +922,8 @@ class TestNemesisTraining:
             peer_agents={"hephaestus": AsyncMock()},
         )
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(scenario_json)):
-            scenarios = await nemesis._generate_scenarios(1)
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=scenario_json)
+        scenarios = await nemesis._generate_scenarios(1)
 
         assert len(scenarios) == 1
         assert scenarios[0]["domain"] == "production"
@@ -876,8 +944,8 @@ class TestNemesisTraining:
             {"test_query": "Q2", "domain": "pricing", "difficulty": "hard", "rationale": "r2"},
         ])
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_mock_openai_response(fallback_json)):
-            scenarios = await nemesis._generate_scenarios(2)
+        nemesis._llm.generate_text_with_fallback = AsyncMock(return_value=fallback_json)
+        scenarios = await nemesis._generate_scenarios(2)
 
         assert len(scenarios) == 2
         assert scenarios[0]["test_query"] == "Q1"
@@ -940,7 +1008,10 @@ class TestDreamModeFiveStages:
             id=1, trigger_pattern="pricing inquiry", steps=["look up price"], success_rate=1.0,
         ))
 
-        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+        with (
+            patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()),
+            patch("ira.memory.dream_mode.get_llm_client", return_value=_mock_llm_client()),
+        ):
             dm = DreamMode(
                 long_term=mock_ltm,
                 episodic=mock_episodic,
@@ -979,7 +1050,10 @@ class TestDreamModeFiveStages:
         from ira.memory.dream_mode import DreamMode
 
         db = str(tmp_path / "no_crm.db")
-        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+        with (
+            patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()),
+            patch("ira.memory.dream_mode.get_llm_client", return_value=_mock_llm_client()),
+        ):
             dm = DreamMode(
                 long_term=AsyncMock(),
                 episodic=AsyncMock(),
@@ -1022,18 +1096,18 @@ class TestDreamModeFiveStages:
             {"user_id": "c2", "narrative": "Customer complained about delivery delays."},
         ]
 
-        insight_json = json.dumps({
-            "patterns": [{"description": "Pricing inquiries increasing", "frequency": 3, "examples": []}],
-            "contradictions": [],
-            "insights": [{"insight": "Market shift toward PF1-C", "confidence": "HIGH", "evidence": []}],
-            "recommendations": [{"action": "Create PF1-C pricing FAQ", "priority": "HIGH", "rationale": "Reduce repetitive queries"}],
-        })
+        mock_insight = DreamInsight(
+            patterns=["Pricing inquiries increasing"],
+            contradictions=[],
+            insights=["Market shift toward PF1-C"],
+            recommendations=["Create PF1-C pricing FAQ"],
+        )
+        dm._llm.generate_structured = AsyncMock(return_value=mock_insight)
 
-        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=insight_json):
-            stage_log: dict = {"stages": {}}
-            insights, gaps, connections, campaign_insights = await dm._stage3_insight_generation(
-                episodes, stage_log
-            )
+        stage_log: dict = {"stages": {}}
+        insights, gaps, connections, campaign_insights = await dm._stage3_insight_generation(
+            episodes, stage_log
+        )
 
         assert len(insights.get("patterns", [])) == 1
         assert len(insights.get("recommendations", [])) == 1
@@ -1050,15 +1124,18 @@ class TestDreamModeFiveStages:
         }
         episodes = [{"user_id": "c1", "narrative": "Pricing inquiry handled well."}]
 
-        proc_json = json.dumps({
-            "procedures": [
-                {"trigger": "pricing inquiry received", "steps": ["look up price", "draft reply"], "expected_outcome": "fast response", "confidence": "HIGH"},
-            ],
-        })
+        mock_procedures = DreamProcedures(procedures=[
+            DreamProcedure(
+                trigger="pricing inquiry received",
+                steps=["look up price", "draft reply"],
+                expected_outcome="fast response",
+                confidence="HIGH",
+            ),
+        ])
+        dm._llm.generate_structured = AsyncMock(return_value=mock_procedures)
 
-        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=proc_json):
-            stage_log: dict = {"stages": {}}
-            await dm._stage4_procedural_learning(insights, episodes, stage_log)
+        stage_log: dict = {"stages": {}}
+        await dm._stage4_procedural_learning(insights, episodes, stage_log)
 
         mock_procedural.learn_procedure.assert_awaited_once()
         assert stage_log["stages"]["4_procedural_learning"]["procedures_created"] == 1
@@ -1068,7 +1145,10 @@ class TestDreamModeFiveStages:
         from ira.memory.dream_mode import DreamMode
 
         db = str(tmp_path / "no_proc.db")
-        with patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()):
+        with (
+            patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()),
+            patch("ira.memory.dream_mode.get_llm_client", return_value=_mock_llm_client()),
+        ):
             dm = DreamMode(
                 long_term=AsyncMock(),
                 episodic=AsyncMock(),
@@ -1105,15 +1185,17 @@ class TestDreamModeFiveStages:
             )
         await dm._db.commit()
 
-        prune_json = json.dumps({
-            "keep": [1],
-            "summarise": [{"ids": [2, 3], "summary": "Merged episodes 2 and 3"}],
-            "archive": [4, 5],
-        })
+        from ira.schemas.llm_outputs import DreamPruneSummary
 
-        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value=prune_json):
-            stage_log: dict = {"stages": {}}
-            await dm._stage5_memory_pruning(stage_log)
+        mock_prune = DreamPrune(
+            keep=["1"],
+            summarise=[DreamPruneSummary(ids=["2", "3"], summary="Merged episodes 2 and 3")],
+            archive=["4", "5"],
+        )
+        dm._llm.generate_structured = AsyncMock(return_value=mock_prune)
+
+        stage_log: dict = {"stages": {}}
+        await dm._stage5_memory_pruning(stage_log)
 
         assert stage_log["stages"]["5_memory_pruning"]["archived"] == 2
         assert stage_log["stages"]["5_memory_pruning"]["summarised"] == 2
@@ -1135,33 +1217,21 @@ class TestDreamModeFiveStages:
             }),
         ])
 
-        insight_json = json.dumps({
-            "patterns": [], "contradictions": [],
-            "insights": [], "recommendations": [],
-        })
-        gap_json = json.dumps({"gaps": []})
-        creative_json = json.dumps({"connections": []})
-        proc_json = json.dumps({"procedures": []})
-        prune_json = json.dumps({"keep": [], "summarise": [], "archive": []})
+        _model_responses = {
+            DreamInsight: DreamInsight(),
+            DreamGaps: DreamGaps(),
+            DreamCreative: DreamCreative(),
+            DreamCampaignInsights: DreamCampaignInsights(),
+            DreamProcedures: DreamProcedures(),
+            DreamPrune: DreamPrune(),
+        }
 
-        call_count = 0
-        async def mock_llm(system, user, temperature=0):
-            nonlocal call_count
-            call_count += 1
-            if "cross-episode" in system.lower() or "deep-analysis" in system.lower():
-                return insight_json
-            if "gap" in system.lower():
-                return gap_json
-            if "creative" in system.lower():
-                return creative_json
-            if "process" in system.lower() or "procedur" in system.lower():
-                return proc_json
-            if "curator" in system.lower() or "prun" in system.lower():
-                return prune_json
-            return "{}"
+        async def mock_generate_structured(system, user, model_cls, **kwargs):
+            return _model_responses.get(model_cls, model_cls())
 
-        with patch.object(dm, "_llm_call", side_effect=mock_llm):
-            report = await dm.run_dream_cycle()
+        dm._llm.generate_structured = AsyncMock(side_effect=mock_generate_structured)
+
+        report = await dm.run_dream_cycle()
 
         assert report.memories_consolidated >= 1
         assert isinstance(report.gaps_identified, list)
@@ -1181,8 +1251,21 @@ class TestDreamModeFiveStages:
         mock_crm.list_interactions = AsyncMock(side_effect=RuntimeError("CRM down"))
         mock_episodic.consolidate_episode = AsyncMock(side_effect=RuntimeError("boom"))
 
-        with patch.object(dm, "_llm_call", new_callable=AsyncMock, return_value="{}"):
-            report = await dm.run_dream_cycle()
+        _model_responses = {
+            DreamInsight: DreamInsight(),
+            DreamGaps: DreamGaps(),
+            DreamCreative: DreamCreative(),
+            DreamCampaignInsights: DreamCampaignInsights(),
+            DreamProcedures: DreamProcedures(),
+            DreamPrune: DreamPrune(),
+        }
+
+        async def mock_generate_structured(system, user, model_cls, **kwargs):
+            return _model_responses.get(model_cls, model_cls())
+
+        dm._llm.generate_structured = AsyncMock(side_effect=mock_generate_structured)
+
+        report = await dm.run_dream_cycle()
 
         assert report is not None
         assert report.memories_consolidated == 0

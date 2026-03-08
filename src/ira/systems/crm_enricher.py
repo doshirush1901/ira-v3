@@ -281,7 +281,7 @@ class CRMEnricher:
         evidence: dict[str, list[dict[str, Any]]],
     ) -> None:
         ct = contact.contact_type.value if contact.contact_type else ""
-        if ct not in ("LIVE_CUSTOMER", "PAST_CUSTOMER"):
+        if ct not in ("LIVE_CUSTOMER", "PAST_CUSTOMER", "LEAD_WITH_INTERACTIONS"):
             return
 
         existing_deals = await self._crm.get_deals_for_contact(str(contact.id))
@@ -292,7 +292,12 @@ class CRMEnricher:
         deal_value = 0.0
         currency = "USD"
         forming_area = ""
-        stage = DealStage.WON if ct == "PAST_CUSTOMER" else DealStage.NEGOTIATION
+        if ct == "LEAD_WITH_INTERACTIONS":
+            stage = DealStage.ENGAGED
+        elif ct == "PAST_CUSTOMER":
+            stage = DealStage.WON
+        else:
+            stage = DealStage.NEGOTIATION
         notes_parts: list[str] = []
 
         for r in evidence.get("machine_orders", []):

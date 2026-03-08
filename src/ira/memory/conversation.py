@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import ConversationEntities
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +20,9 @@ class ConversationMemory:
     def __init__(
         self,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -168,10 +165,10 @@ class ConversationMemory:
         ]
         return results
 
+    @observe()
     async def extract_entities(self, message: str) -> dict[str, list]:
         """Extract entities from a message. Returns dict with keys: companies, people, emails, machines, quote_ids, dates, amounts."""
         system = load_prompt("conversation_extract_entities")
-        raw = await self._llm_call(system, message)
         empty: dict[str, list] = {
             "companies": [],
             "people": [],
@@ -182,57 +179,33 @@ class ConversationMemory:
             "amounts": [],
         }
         try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return {k: parsed.get(k, []) if isinstance(parsed.get(k), list) else [] for k in empty}
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("Entity extraction LLM returned non-JSON")
+            result = await self._llm.generate_structured(
+                system, message, ConversationEntities,
+                name="conversation.extract_entities",
+            )
+            return result.model_dump()
+        except Exception:
+            logger.exception("Entity extraction LLM call failed")
         return empty
 
+    @observe()
     async def resolve_coreferences(self, message: str, history: list[dict]) -> str:
         context = "\n".join(
             f"[{h['role']}] {h['content']}" for h in history[-10:]
         )
         system = load_prompt("conversation_resolve_coreferences")
         user_text = f"Context:\n{context}\n\nMessage to rewrite:\n{message}"
-        raw = await self._llm_call(system, user_text)
-        if (
-            raw in ("(LLM call failed)", "(No OpenAI key configured)")
-            or not raw
-            or not raw.strip()
-        ):
-            return message
-        return raw.strip()
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in ConversationMemory")
-            return "(LLM call failed)"
+            result = await self._llm.generate_text(
+                system, user_text,
+                name="conversation.resolve_coreferences",
+            )
+        except Exception:
+            logger.exception("Coreference resolution LLM call failed")
+            return message
+        if not result or not result.strip():
+            return message
+        return result.strip()
 
     async def close(self) -> None:
         if self._db is not None:

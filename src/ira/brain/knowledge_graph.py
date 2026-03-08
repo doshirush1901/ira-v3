@@ -8,17 +8,18 @@ populate the graph from unstructured text.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 from neo4j import AsyncGraphDatabase
 
-from ira.config import LLMConfig, Neo4jConfig, get_settings
+from ira.config import Neo4jConfig, get_settings
 from ira.exceptions import DatabaseError, IraError
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import GraphEntities
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +48,14 @@ class KnowledgeGraph:
     def __init__(
         self,
         config: Neo4jConfig | None = None,
-        llm_config: LLMConfig | None = None,
         event_bus: Any | None = None,
     ) -> None:
         cfg = config or get_settings().neo4j
-        llm = llm_config or get_settings().llm
         self._driver = AsyncGraphDatabase.driver(
             cfg.uri,
             auth=(cfg.user, cfg.password.get_secret_value()),
         )
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._event_bus = event_bus
 
     def set_event_bus(self, event_bus: Any) -> None:
@@ -472,6 +470,7 @@ class KnowledgeGraph:
 
     # ── LLM entity extraction ────────────────────────────────────────────
 
+    @observe()
     async def extract_entities_from_text(self, text: str) -> dict[str, Any]:
         """Use OpenAI to pull structured entities out of free text.
 
@@ -485,34 +484,15 @@ class KnowledgeGraph:
             "relationships": [],
         }
 
-        if not self._openai_key:
-            logger.warning("No OpenAI API key configured; skipping entity extraction")
-            return empty
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": _EXTRACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": text[:12_000]},
-            ],
-        }
-
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(content)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError):
+            result = await self._llm.generate_structured(
+                _EXTRACTION_SYSTEM_PROMPT,
+                text[:12_000],
+                GraphEntities,
+                name="knowledge_graph.extract",
+            )
+            return result.model_dump()
+        except Exception:
             logger.exception("Entity extraction failed for source text (%d chars)", len(text))
             return empty
 

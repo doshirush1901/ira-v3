@@ -41,6 +41,7 @@ class ServiceKey:
     DOCUMENT_AI = "document_ai"
     PDFCO = "pdfco"
     DLP = "dlp"
+    VENDOR_DB = "vendor_db"
 
 
 ALL_SERVICE_KEYS = frozenset(

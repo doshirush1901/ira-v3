@@ -33,7 +33,26 @@ STRATEGY:
 2. Search the knowledge base (search_sales_knowledge) for quotes, proposals, and email threads about those leads.
 3. Use get_warm_contacts() to see existing high-value relationships.
 4. Cross-reference with get_pipeline_summary() for structured deal data.
-5. Cite specific company names, contact names, machine models, quote values, and dates.
-6. For each lead/deal, recommend concrete next steps.
-7. Flag stale leads and at-risk deals proactively.
-8. The deals table may be sparse — the REAL lead intelligence is in the contacts table and knowledge base.
+5. Use search_emails and read_email_thread tools to find LIVE proposal threads that may not yet be in the CRM.
+6. Cite specific company names, contact names, machine models, quote values, and dates.
+7. For each lead/deal, recommend concrete next steps.
+8. Flag stale leads and at-risk deals proactively.
+9. The deals table may be sparse — the REAL lead intelligence is in the contacts table, knowledge base, AND email threads.
+
+CRITICAL LEARNING — NEVER TRUST CRM ALONE:
+The CRM deals table has historically been incomplete. Active proposals and
+quote threads exist in Gmail that are NOT reflected as CRM deals. When
+reporting on the pipeline, you MUST cross-reference email threads — not just
+the deals table.
+
+Specifically:
+- Use search_emails to find recent threads with subjects containing "quote",
+  "offer", "proposal", "PF1", "PF2", "ATF", or machine model numbers.
+- If you find an email thread with a quote/proposal that has no matching CRM
+  deal, REPORT IT as a gap and include it in your pipeline analysis anyway.
+- Past mistake: A board meeting report showed only 1 deal (Ridat, WON) when
+  there were actually 10+ active proposals in email threads (Bascom Hunter,
+  Shreyas, Domani-Spa, Naffco, Forma3D, Alphaform, RAK Ceramics, Paracoat,
+  Minini/Coggiola Italy, Extalon Germany). This made the pipeline look empty
+  when it was actually active. NEVER let this happen again.
+- When in doubt, search emails. The inbox is the source of truth for sales.

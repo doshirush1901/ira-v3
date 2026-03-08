@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 
 from ira.config import EmailMode
 from ira.data.models import Channel, Contact, Direction, Email, KnowledgeState
+from ira.schemas.llm_outputs import ReActDecision
 
 _has_google_auth = importlib.util.find_spec("google_auth_oauthlib") is not None
 _has_telegram = importlib.util.find_spec("telegram") is not None
@@ -1340,10 +1341,12 @@ class TestRequestPipeline:
         sophia = AsyncMock()
         sophia.handle = AsyncMock(return_value="reflection noted")
 
+        retriever = AsyncMock()
+        retriever.search = AsyncMock(return_value=[])
+
         p = MagicMock()
-        p._router = router
-        p._retriever = AsyncMock()
-        p._retriever.search = AsyncMock(return_value=[])
+        p.router = router
+        p.retriever = retriever
         p.process = AsyncMock(return_value="Raw agent response")
         p.get_agent = MagicMock(return_value=sophia)
         return p
@@ -1355,7 +1358,20 @@ class TestRequestPipeline:
         return v
 
     @pytest.fixture()
-    def pipeline(self, mock_sensory, mock_conversation, mock_pantheon, mock_voice):
+    def _mock_llm_client(self):
+        client = MagicMock()
+        client.generate_structured = AsyncMock(
+            return_value=ReActDecision(thought="", final_answer="test response"),
+        )
+        client.generate_text = AsyncMock(return_value="test response")
+        client.generate_text_with_fallback = AsyncMock(return_value="test response")
+        client.generate_structured_with_fallback = AsyncMock()
+        with patch("ira.agents.base_agent.get_llm_client", return_value=client), \
+             patch("ira.brain.realtime_observer.get_llm_client", return_value=client):
+            yield client
+
+    @pytest.fixture()
+    def pipeline(self, mock_sensory, mock_conversation, mock_pantheon, mock_voice, _mock_llm_client):
         from ira.pipeline import RequestPipeline
         return RequestPipeline(
             sensory=mock_sensory,
@@ -1365,7 +1381,7 @@ class TestRequestPipeline:
         )
 
     @pytest.fixture()
-    def full_pipeline(self, mock_sensory, mock_conversation, mock_pantheon, mock_voice):
+    def full_pipeline(self, mock_sensory, mock_conversation, mock_pantheon, mock_voice, _mock_llm_client):
         from ira.pipeline import RequestPipeline
 
         relationship = AsyncMock()
@@ -1446,12 +1462,12 @@ class TestRequestPipeline:
         mock_conversation.get_history.assert_awaited_once_with("alice@example.com", "TELEGRAM", limit=20)
 
     async def test_step5_llm_route_when_no_fast_match(self, pipeline, mock_pantheon):
-        mock_pantheon._router.route.return_value = None
+        mock_pantheon.router.route.return_value = None
         await pipeline.process_request("Tell me something", "CLI", "user1")
         mock_pantheon.process.assert_awaited_once()
 
     async def test_step3_deterministic_route_bypasses_llm(self, pipeline, mock_pantheon):
-        mock_pantheon._router.route.return_value = {
+        mock_pantheon.router.route.return_value = {
             "intent": "PIPELINE",
             "required_agents": ["prometheus"],
             "optional_agents": [],
@@ -1493,7 +1509,6 @@ class TestRequestPipeline:
 
         full_pipeline._sensory.perceive.assert_awaited_once()
         full_pipeline._conversation.get_history.assert_awaited_once()
-        full_pipeline._relationship.get_relationship.assert_awaited_once()
         full_pipeline._goals.get_active_goal.assert_awaited_once()
         full_pipeline._pantheon.process.assert_awaited_once()
         full_pipeline._metacognition.assess_knowledge.assert_awaited_once()

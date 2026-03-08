@@ -1,8 +1,9 @@
 """Abstract base class for all Pantheon agents.
 
 Every specialist agent inherits from :class:`BaseAgent`, which provides
-LLM access (OpenAI and Anthropic), knowledge-base search via the
-:class:`~ira.brain.retriever.UnifiedRetriever`, a reference to the
+LLM access (OpenAI and Anthropic) via the centralised
+:class:`~ira.services.llm_client.LLMClient`, knowledge-base search via
+the :class:`~ira.brain.retriever.UnifiedRetriever`, a reference to the
 :class:`~ira.message_bus.MessageBus` for inter-agent communication,
 and an opt-in ReAct (Reason-Act-Observe) loop for agentic tool use.
 """
@@ -19,12 +20,15 @@ from enum import Enum
 from typing import Any, Callable, Awaitable
 
 import httpx
+from langfuse.decorators import observe
 
 from ira.brain.retriever import UnifiedRetriever
 from ira.config import get_settings
 from ira.exceptions import IraError, ToolExecutionError
 from ira.message_bus import MessageBus
 from ira.prompt_loader import load_prompt, load_soul_preamble
+from ira.schemas.llm_outputs import ReActDecision
+from ira.services.llm_client import LLMClient, get_llm_client
 from ira.skills import SKILL_MATRIX
 from ira.service_keys import ServiceKey as SK
 from ira.skills.handlers import use_skill as _use_skill
@@ -72,11 +76,7 @@ class BaseAgent(ABC):
         self._bus = bus
         self._services: dict[str, Any] = services or {}
 
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
-        self._anthropic_key = settings.llm.anthropic_api_key.get_secret_value()
-        self._anthropic_model = settings.llm.anthropic_model
+        self._llm = get_llm_client()
 
         self.tools: list[AgentTool] = []
         self.max_iterations: int = 8
@@ -408,16 +408,24 @@ class BaseAgent(ABC):
         if scratchpad_text:
             user_msg += f"\n\nPrevious reasoning steps:\n{scratchpad_text}\n\nContinue reasoning."
 
-        raw = await self.call_llm(system, user_msg, temperature=0.2)
+        provider = "anthropic" if self.model_provider == "anthropic" else "openai"
+        decision = await self._llm.generate_structured(
+            system, user_msg, ReActDecision,
+            provider=provider, temperature=0.2,
+            name=f"{self.name}.reason",
+        )
 
-        try:
-            parsed = self._parse_json_response(raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        return {"thought": "Could not parse structured response.", "final_answer": raw}
+        result: dict[str, Any] = {"thought": decision.thought}
+        if decision.final_answer is not None:
+            result["final_answer"] = decision.final_answer
+        elif decision.tool_to_use is not None:
+            result["tool_to_use"] = {
+                "name": decision.tool_to_use.name,
+                "input": decision.tool_to_use.input,
+            }
+        else:
+            result["final_answer"] = decision.thought or "(No response)"
+        return result
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name."""
@@ -452,6 +460,7 @@ class BaseAgent(ABC):
         )
         return await self.call_llm(agent_system_prompt, user_msg)
 
+    @observe(name="agent.run")
     async def run(
         self,
         query: str,
@@ -580,7 +589,12 @@ class BaseAgent(ABC):
             except Exception:
                 pass
 
-        result = await self._call_llm_uncached(system_prompt, user_message, temperature=temperature)
+        primary = "anthropic" if self.model_provider == "anthropic" else "openai"
+        result = await self._llm.generate_text_with_fallback(
+            system_prompt, user_message,
+            primary=primary, temperature=temperature,
+            name=f"{self.name}.call_llm",
+        )
 
         if redis is not None and temperature <= 0.3 and not result.startswith("("):
             try:
@@ -589,127 +603,6 @@ class BaseAgent(ABC):
                 pass
 
         return result
-
-    async def _call_llm_uncached(
-        self,
-        system_prompt: str,
-        user_message: str,
-        *,
-        temperature: float = 0.3,
-    ) -> str:
-        """Call the primary LLM provider; fall back to the other on failure."""
-        if self.model_provider == "anthropic" and self._anthropic_key:
-            result = await self._call_anthropic(system_prompt, user_message, temperature)
-            if not result.startswith("("):
-                return result
-            if self._openai_key:
-                logger.info("Falling back to OpenAI after Anthropic failure in %s", self.name)
-                return await self._call_openai(system_prompt, user_message, temperature)
-            return result
-
-        if self._openai_key:
-            result = await self._call_openai(system_prompt, user_message, temperature)
-            if not result.startswith("("):
-                return result
-            if self._anthropic_key:
-                logger.info("Falling back to Anthropic after OpenAI failure in %s", self.name)
-                return await self._call_anthropic(system_prompt, user_message, temperature)
-            return result
-
-        if self._anthropic_key:
-            return await self._call_anthropic(system_prompt, user_message, temperature)
-
-        return "(No LLM provider available)"
-
-    async def _call_openai(self, system: str, user: str, temperature: float) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-
-        payload = {
-            "model": self._openai_model,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        backoff = 2.0
-        for attempt in range(1, 4):
-            try:
-                async with httpx.AsyncClient(timeout=60) as client:
-                    resp = await client.post(
-                        "https://api.openai.com/v1/chat/completions",
-                        json=payload,
-                        headers={
-                            "Authorization": f"Bearer {self._openai_key}",
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    resp.raise_for_status()
-                    return resp.json()["choices"][0]["message"]["content"]
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                if status == 429 or status == 402:
-                    logger.warning("OpenAI %d in %s — will fallback", status, self.name)
-                    return "(OpenAI quota/rate limit exceeded)"
-                if status < 500:
-                    logger.warning("OpenAI %d error in %s: %s", status, self.name, exc)
-                    return "(LLM call failed)"
-                logger.warning("OpenAI attempt %d/3 failed in %s: %s", attempt, self.name, exc)
-            except (httpx.TransportError, KeyError, IndexError) as exc:
-                logger.warning("OpenAI attempt %d/3 failed in %s: %s", attempt, self.name, exc)
-            except httpx.HTTPError as exc:
-                logger.warning("OpenAI call failed in %s: %s", self.name, exc)
-                return "(LLM call failed)"
-            if attempt < 3:
-                await asyncio.sleep(backoff)
-                backoff *= 2
-        return "(LLM call failed after 3 retries)"
-
-    async def _call_anthropic(self, system: str, user: str, temperature: float) -> str:
-        if not self._anthropic_key:
-            return "(No Anthropic key configured)"
-
-        payload = {
-            "model": self._anthropic_model,
-            "max_tokens": 4096,
-            "system": system,
-            "messages": [{"role": "user", "content": user[:12_000]}],
-            "temperature": temperature,
-        }
-        backoff = 2.0
-        for attempt in range(1, 4):
-            try:
-                async with httpx.AsyncClient(timeout=60) as client:
-                    resp = await client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        json=payload,
-                        headers={
-                            "x-api-key": self._anthropic_key,
-                            "anthropic-version": "2023-06-01",
-                            "Content-Type": "application/json",
-                        },
-                    )
-                    resp.raise_for_status()
-                    return resp.json()["content"][0]["text"]
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                if status == 429 or status == 402:
-                    logger.warning("Anthropic %d in %s — will fallback", status, self.name)
-                    return "(Anthropic quota/rate limit exceeded)"
-                if status < 500:
-                    logger.warning("Anthropic %d error in %s: %s", status, self.name, exc)
-                    return "(LLM call failed)"
-                logger.warning("Anthropic attempt %d/3 failed in %s: %s", attempt, self.name, exc)
-            except (httpx.TransportError, KeyError, IndexError) as exc:
-                logger.warning("Anthropic attempt %d/3 failed in %s: %s", attempt, self.name, exc)
-            except httpx.HTTPError as exc:
-                logger.warning("Anthropic call failed in %s: %s", self.name, exc)
-                return "(LLM call failed)"
-            if attempt < 3:
-                await asyncio.sleep(backoff)
-                backoff *= 2
-        return "(LLM call failed after 3 retries)"
 
     # ── knowledge retrieval ──────────────────────────────────────────────
 

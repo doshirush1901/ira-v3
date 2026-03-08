@@ -4,7 +4,7 @@ Manages vendor relationships, component sourcing, lead-time estimation,
 and procurement taxonomy for Machinecraft's supply chain.
 
 Equipped with ReAct tools for vendor status checks, lead-time estimation,
-component classification, and vendor data search.
+component classification, vendor data search, and vendor payables tracking.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,39 @@ class Hera(BaseAgent):
             handler=self._tool_search_vendor_data,
         ))
 
+        vdb = self._services.get(SK.VENDOR_DB)
+        if vdb is not None:
+            self.register_tool(AgentTool(
+                name="list_vendors",
+                description="List all vendors in the vendor database with their status and contact info.",
+                parameters={},
+                handler=self._tool_list_vendors,
+            ))
+            self.register_tool(AgentTool(
+                name="add_vendor",
+                description="Add a new vendor to the database. Provide name, contact_person, email, phone, category, payment_terms.",
+                parameters={"name": "Vendor name", "contact_person": "Contact name", "email": "Email", "phone": "Phone", "category": "Category (electrical/pneumatic/mechanical/heating/general)", "payment_terms": "e.g. Net 30"},
+                handler=self._tool_add_vendor,
+            ))
+            self.register_tool(AgentTool(
+                name="get_overdue_payables",
+                description="Get all overdue vendor payables that need immediate attention.",
+                parameters={},
+                handler=self._tool_get_overdue_payables,
+            ))
+            self.register_tool(AgentTool(
+                name="get_payables_summary",
+                description="Get a summary of all vendor payables by status (pending, paid, overdue, etc.).",
+                parameters={},
+                handler=self._tool_get_payables_summary,
+            ))
+            self.register_tool(AgentTool(
+                name="record_payable",
+                description="Record a new vendor invoice/payable. Provide vendor_id, invoice_number, amount, currency, due_date, description.",
+                parameters={"vendor_id": "Vendor UUID", "invoice_number": "Invoice #", "amount": "Amount", "currency": "INR/USD/EUR", "due_date": "YYYY-MM-DD", "description": "Description"},
+                handler=self._tool_record_payable,
+            ))
+
     # ── tool handlers ────────────────────────────────────────────────────
 
     async def _tool_check_vendor_status(self, vendor_name: str) -> str:
@@ -87,6 +121,47 @@ class Hera(BaseAgent):
             f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
             for r in results
         )
+
+    # ── vendor DB tool handlers ────────────────────────────────────────
+
+    async def _tool_list_vendors(self) -> str:
+        vdb = self._services.get(SK.VENDOR_DB)
+        if not vdb:
+            return "Vendor database not available."
+        vendors = await vdb.list_vendors()
+        if not vendors:
+            return "No vendors in the database yet."
+        return json.dumps([v.to_dict() for v in vendors], default=str)
+
+    async def _tool_add_vendor(self, name: str, **kwargs: Any) -> str:
+        vdb = self._services.get(SK.VENDOR_DB)
+        if not vdb:
+            return "Vendor database not available."
+        vendor = await vdb.create_vendor(name=name, **kwargs)
+        return json.dumps(vendor.to_dict(), default=str)
+
+    async def _tool_get_overdue_payables(self) -> str:
+        vdb = self._services.get(SK.VENDOR_DB)
+        if not vdb:
+            return "Vendor database not available."
+        overdue = await vdb.get_overdue_payables()
+        if not overdue:
+            return "No overdue payables."
+        return json.dumps(overdue, default=str)
+
+    async def _tool_get_payables_summary(self) -> str:
+        vdb = self._services.get(SK.VENDOR_DB)
+        if not vdb:
+            return "Vendor database not available."
+        summary = await vdb.get_payables_summary()
+        return json.dumps(summary, default=str)
+
+    async def _tool_record_payable(self, vendor_id: str, **kwargs: Any) -> str:
+        vdb = self._services.get(SK.VENDOR_DB)
+        if not vdb:
+            return "Vendor database not available."
+        payable = await vdb.create_payable(vendor_id=vendor_id, **kwargs)
+        return json.dumps(payable.to_dict(), default=str)
 
     # ── existing methods ─────────────────────────────────────────────────
 

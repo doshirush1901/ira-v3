@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import get_settings
 from ira.exceptions import ConfigurationError, LLMError
+from ira.schemas.llm_outputs import ObservedTurn
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,7 @@ class RealTimeObserver:
     """Extracts and persists learnings from each conversation turn."""
 
     def __init__(self) -> None:
-        settings = get_settings()
-        self._api_key = settings.llm.openai_api_key.get_secret_value()
-        self._model = "gpt-4.1-mini"
+        self._llm = get_llm_client()
         self._learnings: dict[str, list[dict[str, Any]]] = {}
 
     async def _load(self) -> None:
@@ -69,6 +68,7 @@ class RealTimeObserver:
 
         await asyncio.to_thread(_append)
 
+    @observe()
     async def observe_turn(
         self,
         query: str,
@@ -76,32 +76,14 @@ class RealTimeObserver:
         contact_id: str,
     ) -> dict[str, Any]:
         """Extract learnings from a conversation turn (fire-and-forget safe)."""
-        if not self._api_key:
-            return {"facts": [], "corrections": [], "preferences": []}
-
         prompt = f"USER: {query[:2000]}\n\nASSISTANT: {response[:2000]}"
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json={
-                        "model": self._model,
-                        "temperature": 0,
-                        "max_tokens": 300,
-                        "messages": [
-                            {"role": "system", "content": _EXTRACT_SYSTEM},
-                            {"role": "user", "content": prompt},
-                        ],
-                    },
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                raw = resp.json()["choices"][0]["message"]["content"]
-                extracted = json.loads(raw)
+            result = await self._llm.generate_structured(
+                _EXTRACT_SYSTEM, prompt, ObservedTurn,
+                model="gpt-4.1-mini", name="realtime_observer.extract",
+            )
+            extracted = result.model_dump()
         except (LLMError, Exception):
             logger.debug("RealTimeObserver extraction failed")
             return {"facts": [], "corrections": [], "preferences": []}

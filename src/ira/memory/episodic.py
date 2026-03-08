@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
 from ira.memory.long_term import LongTermMemory
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import EpisodeConsolidation
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,10 @@ class EpisodicMemory:
         self,
         long_term: LongTermMemory,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._long_term = long_term
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -59,12 +57,12 @@ class EpisodicMemory:
         )
         await self._db.commit()
 
+    @observe()
     async def consolidate_episode(self, conversation: list[dict], user_id: str) -> dict:
         transcript = "".join(
             f"[{m.get('role', 'unknown')}] {m.get('content', '')}\n"
             for m in conversation
         )
-        raw = await self._llm_call(_CONSOLIDATE_SYSTEM_PROMPT, transcript)
         fallback = {
             "narrative": "(Consolidation failed)",
             "key_topics": [],
@@ -74,21 +72,20 @@ class EpisodicMemory:
             "relationship_impact": "unknown",
         }
         try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                episode = {
-                    "narrative": parsed.get("narrative", fallback["narrative"]),
-                    "key_topics": parsed.get("key_topics", []),
-                    "decisions_made": parsed.get("decisions_made", []),
-                    "commitments": parsed.get("commitments", []),
-                    "emotional_tone": parsed.get("emotional_tone", fallback["emotional_tone"]),
-                    "relationship_impact": parsed.get(
-                        "relationship_impact", fallback["relationship_impact"]
-                    ),
-                }
-            else:
-                episode = fallback
-        except (json.JSONDecodeError, TypeError):
+            result = await self._llm.generate_structured(
+                _CONSOLIDATE_SYSTEM_PROMPT, transcript, EpisodeConsolidation,
+                name="episodic.consolidate",
+            )
+            episode = {
+                "narrative": result.narrative or fallback["narrative"],
+                "key_topics": result.key_topics,
+                "decisions_made": result.decisions_made,
+                "commitments": result.commitments,
+                "emotional_tone": result.emotional_tone or fallback["emotional_tone"],
+                "relationship_impact": result.relationship_impact or fallback["relationship_impact"],
+            }
+        except Exception:
+            logger.exception("Structured LLM call failed in EpisodicMemory.consolidate_episode")
             episode = fallback
 
         now = datetime.now(timezone.utc).isoformat()
@@ -167,8 +164,15 @@ class EpisodicMemory:
         formatted = "\n".join(
             f"{i+1}. [{r[2]}] {r[1]}" for i, r in enumerate(rows)
         )
-        raw = await self._llm_call(_WEAVE_SYSTEM_PROMPT, formatted)
-        if raw in ("(LLM call failed)", "(No OpenAI key configured)") or not raw.strip():
+        try:
+            raw = await self._llm.generate_text(
+                _WEAVE_SYSTEM_PROMPT, formatted,
+                name="episodic.weave",
+            )
+        except Exception:
+            logger.exception("Text LLM call failed in EpisodicMemory.weave_episodes")
+            return "(Narrative weaving failed)"
+        if not raw or not raw.strip():
             return "(Narrative weaving failed)"
         return raw.strip()
 
@@ -238,34 +242,6 @@ class EpisodicMemory:
                 seen.add(sig)
                 merged.append(r)
         return merged[:5]
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in EpisodicMemory")
-            return "(LLM call failed)"
 
     async def close(self) -> None:
         if self._db is not None:

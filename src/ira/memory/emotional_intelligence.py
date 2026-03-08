@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
 from ira.data.models import EmotionalState
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import EmotionDetection
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -191,12 +192,9 @@ class EmotionalIntelligence:
     def __init__(
         self,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -220,6 +218,7 @@ class EmotionalIntelligence:
         )
         await self._db.commit()
 
+    @observe()
     async def detect_emotion(self, text: str) -> dict:
         scores: dict[EmotionalState, float] = {s: 0.0 for s in EmotionalState}
         matched_indicators: dict[EmotionalState, list[str]] = {
@@ -272,17 +271,20 @@ class EmotionalIntelligence:
                 "indicators": indicators,
             }
 
-        raw = await self._llm_call(_DETECT_SYSTEM_PROMPT, text)
         try:
-            data = json.loads(raw)
-            state_str = data.get("state", "NEUTRAL")
-            intensity = data.get("intensity", "MILD")
-            indicators = data.get("indicators", [])
-            if not isinstance(indicators, list):
-                indicators = []
-            state = EmotionalState(state_str)
-            return {"state": state, "intensity": intensity, "indicators": indicators}
-        except (json.JSONDecodeError, ValueError, TypeError):
+            result = await self._llm.generate_structured(
+                _DETECT_SYSTEM_PROMPT,
+                text,
+                EmotionDetection,
+                name="emotional_intelligence.detect",
+            )
+            state = EmotionalState(result.state)
+            return {
+                "state": state,
+                "intensity": result.intensity,
+                "indicators": result.indicators,
+            }
+        except (ValueError, TypeError):
             return {
                 "state": EmotionalState.NEUTRAL,
                 "intensity": "MILD",
@@ -384,36 +386,6 @@ class EmotionalIntelligence:
             "recent_trend": recent_trend,
             "interaction_count": total,
         }
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "{}"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in EmotionalIntelligence")
-            return "{}"
 
     async def close(self) -> None:
         if self._db is not None:

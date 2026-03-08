@@ -20,6 +20,8 @@ src/ira/
   data/         # CRM models, quote models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers
+  schemas/      # Pydantic models for structured LLM outputs
+  services/     # LLMClient (OpenAI + Anthropic SDK wrapper with Langfuse tracing)
   pipeline.py   # 11-stage request pipeline
   pantheon.py   # Agent orchestrator + routing
   config.py     # Pydantic settings (all config from .env)
@@ -104,8 +106,10 @@ poetry run ira health     # vital signs
 
 ### LLM calls
 
-- Raw `httpx` for OpenAI and Anthropic. Do not import the `openai` or `anthropic` SDKs.
-- Use `self._call_openai(system, user)` or `self._call_anthropic(system, user)` from BaseAgent.
+- Use the centralised `LLMClient` in `src/ira/services/llm_client.py`. Do not use raw `httpx` for LLM calls.
+- For structured JSON responses, use `generate_structured()` with a Pydantic model from `src/ira/schemas/llm_outputs.py`.
+- For plain text responses, use `generate_text()` or `generate_text_with_fallback()`.
+- OpenAI calls are auto-traced via `langfuse.openai.AsyncOpenAI`. Anthropic calls use `@observe()` decorators.
 - Embeddings go through `EmbeddingService` (Voyage AI via httpx).
 
 ### Agent development
@@ -146,7 +150,8 @@ poetry run ira health     # vital signs
 
 - Tests in `tests/`. Framework: `pytest` + `pytest-asyncio` with `asyncio_mode = "auto"`.
 - Mock all external services (LLM APIs, Qdrant, Neo4j, Mem0) in tests.
-- Test agent `handle()` by mocking `_call_openai` and verifying tool usage.
+- Mock `LLMClient.generate_structured` and `LLMClient.generate_text` (not raw httpx).
+- Return Pydantic model instances (e.g. `ReActDecision`) from mocks, not JSON strings.
 
 ## Creating a New Agent
 

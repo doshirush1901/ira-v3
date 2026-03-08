@@ -8,12 +8,13 @@ from datetime import datetime
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 from pydantic import BaseModel, Field
 
-from ira.config import LLMConfig, get_settings
 from ira.data.models import Interaction, WarmthLevel
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import MemorableMoment, MemorableMoments
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +45,9 @@ class RelationshipMemory:
     def __init__(
         self,
         db_path: str = "relationships.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -70,6 +68,7 @@ class RelationshipMemory:
         )
         await self._db.commit()
 
+    @observe()
     async def update_relationship(self, contact_id: str, interaction: Interaction) -> Relationship:
         assert self._db is not None
         rel = await self.get_relationship(contact_id)
@@ -79,23 +78,18 @@ class RelationshipMemory:
             rel.first_interaction = interaction.created_at
 
         if interaction.content and len(interaction.content) > 50:
-            raw = await self._llm_call(_MOMENTS_SYSTEM_PROMPT, interaction.content)
-            try:
-                parsed = json.loads(raw)
-                moments = []
-                if isinstance(parsed, dict) and "moments" in parsed:
-                    for m in parsed["moments"]:
-                        if isinstance(m, dict) and m.get("content", "").strip():
-                            moments.append(m["content"].strip())
-                elif isinstance(parsed, list):
-                    for m in parsed:
-                        if isinstance(m, str) and m.strip():
-                            moments.append(m.strip())
-                for m in moments:
-                    rel.memorable_moments.append(m)
-                rel.memorable_moments = rel.memorable_moments[-50:]
-            except (json.JSONDecodeError, TypeError):
-                pass
+            result = await self._llm.generate_structured(
+                _MOMENTS_SYSTEM_PROMPT, interaction.content, MemorableMoments,
+                name="relationship.moments",
+            )
+            for m in result.moments:
+                if isinstance(m, MemorableMoment):
+                    text = m.content.strip()
+                else:
+                    text = m.strip()
+                if text:
+                    rel.memorable_moments.append(text)
+            rel.memorable_moments = rel.memorable_moments[-50:]
 
         rel.warmth_level = self._check_warmth_upgrade(rel)
 
@@ -245,34 +239,6 @@ class RelationshipMemory:
                 )
             )
         return result
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "[]"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in RelationshipMemory")
-            return "[]"
 
     async def close(self) -> None:
         if self._db is not None:

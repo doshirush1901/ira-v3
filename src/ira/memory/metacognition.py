@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
 from ira.data.models import KnowledgeState
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import KnowledgeAssessment
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,9 @@ class Metacognition:
     def __init__(
         self,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -50,6 +48,7 @@ class Metacognition:
         )
         await self._db.commit()
 
+    @observe()
     async def assess_knowledge(self, query: str, retrieved_context: list[dict]) -> dict:
         has_results = len(retrieved_context) > 0
         if not has_results:
@@ -82,19 +81,17 @@ class Metacognition:
             )
         user_msg = f"Query: {query}\n\nContext:\n" + "\n\n".join(context_lines)
 
-        raw = await self._llm_call(_ASSESS_SYSTEM_PROMPT, user_msg)
-
         try:
-            data = json.loads(raw)
-            state_str = data.get("state", "UNKNOWN")
-            confidence = float(data.get("confidence", 0.0))
-            conflicts = data.get("conflicts", [])
-            if not isinstance(conflicts, list):
-                conflicts = []
-            gaps = data.get("gaps", [])
-            if not isinstance(gaps, list):
-                gaps = []
-        except (json.JSONDecodeError, ValueError, TypeError):
+            result = await self._llm.generate_structured(
+                _ASSESS_SYSTEM_PROMPT, user_msg, KnowledgeAssessment,
+                name="metacognition.assess",
+            )
+            state_str = result.state
+            confidence = result.confidence
+            conflicts = result.conflicts
+            gaps = result.gaps
+        except Exception:
+            logger.exception("Structured LLM call failed in Metacognition")
             if avg_score >= 0.7 and has_high_confidence:
                 state_str = "KNOW_UNVERIFIED"
                 confidence = avg_score
@@ -159,36 +156,6 @@ class Metacognition:
             ),
         )
         await self._db.commit()
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "{}"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in Metacognition")
-            return "{}"
 
     async def close(self) -> None:
         if self._db is not None:

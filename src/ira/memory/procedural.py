@@ -10,11 +10,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
-import httpx
+from langfuse.decorators import observe
 from pydantic import BaseModel
 
-from ira.config import LLMConfig, get_settings
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import PatternExtraction
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,9 @@ class ProceduralMemory:
     def __init__(
         self,
         db_path: str = "conversations.db",
-        llm_config: LLMConfig | None = None,
     ) -> None:
         self._db_path = db_path
-        llm = llm_config or get_settings().llm
-        self._openai_key = llm.openai_api_key.get_secret_value()
-        self._openai_model = llm.openai_model
+        self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
         self._cache: list[Procedure] = []
         self._cache_time: float = 0.0
@@ -102,24 +100,20 @@ class ProceduralMemory:
         self._cache_time = time.monotonic()
         return self._cache
 
+    @observe()
     async def learn_procedure(
         self,
         query: str,
         successful_response_path: list[str],
     ) -> Procedure:
         user_msg = f"Query: {query}\n\nSuccessful agent path: {', '.join(successful_response_path)}"
-        raw = await self._llm_call(_PATTERN_SYSTEM_PROMPT, user_msg)
-        if raw in ("(LLM call failed)", "(No OpenAI key configured)") or not raw or not raw.strip():
-            trigger_pattern = query.lower()
+        result = await self._llm.generate_structured(
+            _PATTERN_SYSTEM_PROMPT, user_msg, PatternExtraction, name="procedural.learn",
+        )
+        if result.trigger.strip():
+            trigger_pattern = result.trigger.strip()
         else:
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict) and parsed.get("trigger", "").strip():
-                    trigger_pattern = parsed["trigger"].strip()
-                else:
-                    trigger_pattern = raw.strip()
-            except (json.JSONDecodeError, TypeError):
-                trigger_pattern = raw.strip()
+            trigger_pattern = query.lower()
 
         procedures = await self._load_cache()
         best_match: Procedure | None = None
@@ -259,36 +253,6 @@ class ProceduralMemory:
             )
         await self._db.commit()
         self._cache_time = 0.0
-
-    async def _llm_call(self, system: str, user: str) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("LLM call failed in ProceduralMemory")
-            return "(LLM call failed)"
 
     async def close(self) -> None:
         if self._db is not None:

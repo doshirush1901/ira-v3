@@ -21,14 +21,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
+from langfuse.decorators import observe
 
 from ira.brain.correction_store import CorrectionStore
 from ira.brain.embeddings import EmbeddingService
 from ira.brain.qdrant_manager import QdrantManager
-from ira.config import get_settings
 from ira.data.models import KnowledgeItem
 from ira.exceptions import DatabaseError, IraError, LLMError
+from ira.schemas.llm_outputs import TruthHints
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +59,9 @@ class SleepTrainer:
         self._qdrant = qdrant_manager
         self._embeddings = embedding_service
         self._mem0 = mem0_client
-        settings = get_settings()
-        self._openai_key = settings.llm.openai_api_key.get_secret_value()
-        self._openai_model = settings.llm.openai_model
+        self._llm = get_llm_client()
 
+    @observe()
     async def run_training(self) -> dict[str, Any]:
         """Execute all 5 phases and return aggregate stats."""
         corrections = await self._store.get_pending_corrections()
@@ -96,9 +96,11 @@ class SleepTrainer:
         hints: list[dict[str, Any]] = []
         try:
             corrections_text = json.dumps(corrections, indent=2, default=str)
-            raw = await self._llm_call(_TRUTH_HINT_SYSTEM, corrections_text)
-            parsed = self._safe_parse(raw)
-            hints = parsed.get("hints", []) if isinstance(parsed, dict) else []
+            result = await self._llm.generate_structured(
+                _TRUTH_HINT_SYSTEM, corrections_text, TruthHints,
+                name="sleep_trainer.truth_hints",
+            )
+            hints = [h.model_dump() for h in result.hints]
             stats["phases"]["1_truth_hints"] = {"status": "ok", "hints_generated": len(hints)}
             logger.info("Phase 1: generated %d truth hints", len(hints))
         except (LLMError, Exception):
@@ -292,44 +294,3 @@ class SleepTrainer:
             logger.exception("Phase 5 (persist learned) failed")
             stats["phases"]["5_persist_learned"] = {"status": "error"}
 
-    # ── LLM ───────────────────────────────────────────────────────────────
-
-    async def _llm_call(self, system: str, user: str, temperature: float = 0.0) -> str:
-        if not self._openai_key:
-            return "(No OpenAI key configured)"
-        headers = {
-            "Authorization": f"Bearer {self._openai_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self._openai_model,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user[:12_000]},
-            ],
-        }
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError):
-            logger.exception("SleepTrainer LLM call failed")
-            return "(LLM call failed)"
-
-    @staticmethod
-    def _safe_parse(raw: str) -> Any:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [ln for ln in lines if not ln.strip().startswith("```")]
-            cleaned = "\n".join(lines)
-        try:
-            return json.loads(cleaned)
-        except (json.JSONDecodeError, TypeError):
-            return {"raw_response": raw}

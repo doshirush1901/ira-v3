@@ -198,8 +198,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await crm.create_tables()
     quotes = QuoteManager(session_factory=crm.session_factory)
 
+    from ira.data.vendors import VendorDatabase
+
+    vendor_db = VendorDatabase()
+    await vendor_db.create_tables()
+
     _services[SK.CRM] = crm
     _services[SK.QUOTES] = quotes
+    _services[SK.VENDOR_DB] = vendor_db
 
     # ── Circulatory system (data sync) ────────────────────────────────
     from ira.systems.circulatory import CirculatorySystem
@@ -965,3 +971,47 @@ async def email_draft(req: EmailDraftRequest) -> dict[str, Any]:
         "subject": req.subject,
         "body": body,
     }
+
+
+# ── Vendor / Procurement endpoints ──────────────────────────────────────
+
+
+@app.get("/api/vendors")
+async def list_vendors() -> dict[str, Any]:
+    """List all vendors."""
+    vdb = _svc(SK.VENDOR_DB)
+    vendors = await vdb.list_vendors()
+    return {"vendors": [v.to_dict() for v in vendors], "count": len(vendors)}
+
+
+@app.post("/api/vendors")
+async def create_vendor(req: dict[str, Any]) -> dict[str, Any]:
+    """Create a new vendor."""
+    vdb = _svc(SK.VENDOR_DB)
+    vendor = await vdb.create_vendor(**req)
+    return vendor.to_dict()
+
+
+@app.get("/api/vendors/payables")
+async def vendor_payables_summary() -> dict[str, Any]:
+    """Get payables summary across all vendors."""
+    vdb = _svc(SK.VENDOR_DB)
+    summary = await vdb.get_payables_summary()
+    overdue = await vdb.get_overdue_payables()
+    return {"summary": summary, "overdue": overdue}
+
+
+@app.get("/api/vendors/overdue")
+async def overdue_payables() -> dict[str, Any]:
+    """Get all overdue vendor payables."""
+    vdb = _svc(SK.VENDOR_DB)
+    overdue = await vdb.get_overdue_payables()
+    return {"overdue": overdue, "count": len(overdue)}
+
+
+@app.post("/api/vendors/payables")
+async def create_payable(req: dict[str, Any]) -> dict[str, Any]:
+    """Record a new vendor payable/invoice."""
+    vdb = _svc(SK.VENDOR_DB)
+    payable = await vdb.create_payable(**req)
+    return payable.to_dict()
