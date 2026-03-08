@@ -11,6 +11,7 @@ LearningHub can:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -21,9 +22,8 @@ from typing import Any
 
 from langfuse.decorators import observe
 
-from ira.config import LLMConfig, get_settings
+from ira.config import LLMConfig
 from ira.data.crm import CRMDatabase
-from ira.exceptions import DatabaseError
 from ira.memory.procedural import Procedure, ProceduralMemory
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import CorrectionAnalysis, GapAnalysis, ProcedureSteps
@@ -125,7 +125,7 @@ class LearningHub:
             )
 
         self._recent_feedback.append(record)
-        self._save_feedback(record)
+        await self._save_feedback(record)
         logger.info(
             "Feedback recorded: interaction=%s score=%d has_correction=%s",
             interaction_id,
@@ -137,6 +137,7 @@ class LearningHub:
     async def identify_skill_gap(
         self,
         interaction_id: str,
+        feedback_score: int | None = None,
     ) -> dict[str, Any]:
         """Analyse a poorly-rated interaction and suggest a new skill or procedure.
 
@@ -150,7 +151,8 @@ class LearningHub:
         query = interaction.subject or "(unknown query)"
         response = interaction.content or "(no response recorded)"
 
-        gap = await self._analyse_gap(query, response, feedback_score=1)
+        score = feedback_score if feedback_score is not None else getattr(interaction, "feedback_score", 1)
+        gap = await self._analyse_gap(query, response, feedback_score=score)
 
         skill_name = gap.get("suggested_skill_name")
         if skill_name and skill_name in SKILL_MATRIX:
@@ -249,14 +251,18 @@ class LearningHub:
 
             embedding = EmbeddingService()
             qdrant = QdrantManager(embedding_service=embedding)
-            trainer = SleepTrainer(
-                correction_store=correction_store,
-                qdrant_manager=qdrant,
-                embedding_service=embedding,
-            )
+            try:
+                trainer = SleepTrainer(
+                    correction_store=correction_store,
+                    qdrant_manager=qdrant,
+                    embedding_service=embedding,
+                )
 
-            stats = await trainer.run_training()
-            await correction_store.close()
+                stats = await trainer.run_training()
+            finally:
+                await correction_store.close()
+                await qdrant.close()
+                await embedding.close()
 
             logger.info(
                 "Micro-learning cycle complete: processed %d corrections",
@@ -264,7 +270,7 @@ class LearningHub:
             )
             return stats
 
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("Micro-learning cycle failed")
             return {"status": "error", "processed": 0}
 
@@ -296,6 +302,9 @@ class LearningHub:
 
     def _init_db(self) -> None:
         _FEEDBACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db_sync()
+
+    def _init_db_sync(self) -> None:
         conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
         conn.execute("""
             CREATE TABLE IF NOT EXISTS feedback (
@@ -313,46 +322,52 @@ class LearningHub:
 
     def _load_feedback(self) -> None:
         try:
-            conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
-            rows = conn.execute(
-                "SELECT interaction_id, feedback_score, correction, "
-                "correction_analysis, gap_analysis, created_at "
-                "FROM feedback ORDER BY id"
-            ).fetchall()
-            conn.close()
-            for row in rows:
-                self._recent_feedback.append(FeedbackRecord(
-                    interaction_id=row[0],
-                    feedback_score=row[1],
-                    correction=row[2],
-                    correction_analysis=json.loads(row[3]) if row[3] else {},
-                    gap_analysis=json.loads(row[4]) if row[4] else {},
-                    created_at=datetime.fromisoformat(row[5]),
-                ))
-            if self._recent_feedback:
-                logger.info("Loaded %d feedback records from disk", len(self._recent_feedback))
-        except (DatabaseError, Exception):
+            self._load_feedback_sync()
+        except Exception:
             logger.warning("Failed to load feedback from disk", exc_info=True)
 
-    def _save_feedback(self, record: FeedbackRecord) -> None:
+    def _load_feedback_sync(self) -> None:
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        rows = conn.execute(
+            "SELECT interaction_id, feedback_score, correction, "
+            "correction_analysis, gap_analysis, created_at "
+            "FROM feedback ORDER BY id"
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            self._recent_feedback.append(FeedbackRecord(
+                interaction_id=row[0],
+                feedback_score=row[1],
+                correction=row[2],
+                correction_analysis=json.loads(row[3]) if row[3] else {},
+                gap_analysis=json.loads(row[4]) if row[4] else {},
+                created_at=datetime.fromisoformat(row[5]),
+            ))
+        if self._recent_feedback:
+            logger.info("Loaded %d feedback records from disk", len(self._recent_feedback))
+
+    def _save_feedback_sync(self, record: FeedbackRecord) -> None:
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        conn.execute(
+            "INSERT INTO feedback "
+            "(interaction_id, feedback_score, correction, correction_analysis, gap_analysis, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                record.interaction_id,
+                record.feedback_score,
+                record.correction,
+                json.dumps(record.correction_analysis),
+                json.dumps(record.gap_analysis),
+                record.created_at.isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    async def _save_feedback(self, record: FeedbackRecord) -> None:
         try:
-            conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
-            conn.execute(
-                "INSERT INTO feedback "
-                "(interaction_id, feedback_score, correction, correction_analysis, gap_analysis, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    record.interaction_id,
-                    record.feedback_score,
-                    record.correction,
-                    json.dumps(record.correction_analysis),
-                    json.dumps(record.gap_analysis),
-                    record.created_at.isoformat(),
-                ),
-            )
-            conn.commit()
-            conn.close()
-        except (DatabaseError, Exception):
+            await asyncio.to_thread(self._save_feedback_sync, record)
+        except Exception:
             logger.warning("Failed to persist feedback record", exc_info=True)
 
     # ── internal helpers ──────────────────────────────────────────────────
@@ -411,14 +426,3 @@ class LearningHub:
         )
         return result.steps
 
-    @staticmethod
-    def _safe_parse_json(raw: str) -> Any:
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            lines = [ln for ln in lines if not ln.strip().startswith("```")]
-            cleaned = "\n".join(lines)
-        try:
-            return json.loads(cleaned)
-        except (json.JSONDecodeError, TypeError):
-            return {"raw_response": raw}

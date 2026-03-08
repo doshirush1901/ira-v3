@@ -186,7 +186,7 @@ class GoogleDocsService:
                     "requests": [
                         {
                             "insertText": {
-                                "location": {"index": 1},
+                                "endOfSegmentLocation": {},
                                 "text": text,
                             }
                         }

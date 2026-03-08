@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.config import get_settings
-from ira.exceptions import DatabaseError, LLMError
 from ira.data.models import Channel, Contact, EmotionalState, WarmthLevel
 
 logger = logging.getLogger(__name__)
@@ -111,7 +110,7 @@ class SensorySystem:
         if self._emotional_intelligence is not None:
             try:
                 emotional_result = await self._emotional_intelligence.detect_emotion(event.raw_input)
-            except (LLMError, Exception):
+            except Exception:
                 logger.exception("Emotion detection failed")
                 emotional_result = {"state": EmotionalState.NEUTRAL.value, "confidence": 0.0}
         else:
@@ -123,7 +122,7 @@ class SensorySystem:
                 history = await self._conversation_memory.get_history(
                     contact.email, event.channel.value, limit=10,
                 )
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.exception("Conversation history retrieval failed")
                 history = []
         else:
@@ -133,7 +132,7 @@ class SensorySystem:
         if self._relationship_memory is not None:
             try:
                 relationship = await self._relationship_memory.get_relationship(contact.email)
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.exception("Relationship retrieval failed")
                 relationship = {"warmth": WarmthLevel.STRANGER.value}
         else:
@@ -221,7 +220,7 @@ class SensorySystem:
                     name=sender_name or sender_id,
                     email=contact_email,
                 )
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.exception("Failed to add person to knowledge graph")
 
         self._identity_cache[cache_key] = contact_email

@@ -123,6 +123,8 @@ class DlpService:
     async def _ensure_connected(self) -> None:
         if self._creds is None or not self._creds.valid:
             await self.connect()
+        if self._creds is None:
+            raise DlpError("DLP service is not configured or authentication failed")
 
     def _base_url(self) -> str:
         return f"https://dlp.googleapis.com/v2/projects/{self._project_id}"

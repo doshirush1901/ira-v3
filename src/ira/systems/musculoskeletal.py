@@ -321,12 +321,12 @@ class MusculoskeletalSystem:
 
         by_hour = email_metrics.get("by_hour", {})
         if by_hour:
-            best_hour = max(by_hour, key=by_hour.get)  # type: ignore[arg-type]
+            best_hour = max(by_hour, key=lambda h: by_hour[h] if isinstance(by_hour[h], (int, float)) else by_hour[h].get("success", 0) / max(by_hour[h].get("total", 1), 1))
             recs.append(f"Email reply rates are highest at {best_hour}:00 — schedule outreach accordingly.")
 
         by_region = quote_metrics.get("by_region", {})
         if len(by_region) >= 2:
-            best_region = max(by_region, key=by_region.get)  # type: ignore[arg-type]
+            best_region = max(by_region, key=lambda r: by_region[r] if isinstance(by_region[r], (int, float)) else by_region[r].get("success", 0) / max(by_region[r].get("total", 1), 1))
             recs.append(f"Quote conversion is highest in {best_region} — consider prioritizing leads there.")
 
         accuracy = lead_metrics.get("accuracy", 0)

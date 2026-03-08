@@ -13,7 +13,6 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import re as _re_module
@@ -27,7 +26,6 @@ from ira.agents.delphi import Delphi
 from ira.config import get_settings
 from ira.data.crm import CRMDatabase
 from ira.data.models import ContactType
-from ira.exceptions import DatabaseError, IraError, LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +168,7 @@ class CRMPopulator:
                         self._stats["inserted"],
                         self._stats["skipped_rejected"],
                     )
-            except (LLMError, DatabaseError, IraError, Exception):
+            except Exception:
                 self._stats["errors"] += 1
                 logger.exception(
                     "Failed to process contact: %s",
@@ -285,8 +283,8 @@ class CRMPopulator:
                     },
                     source_store=SourceStore.POPULATOR,
                 ))
-            except (IraError, Exception):
-                logger.debug("Populator event emission failed", exc_info=True)
+            except Exception:
+                logger.warning("Populator event emission failed", exc_info=True)
 
     # ── Evidence gathering (Clio cross-referencing) ──────────────────────
 
@@ -352,7 +350,7 @@ class CRMPopulator:
                     )
                 ).strip()
 
-        except (DatabaseError, Exception):
+        except Exception:
             logger.debug("KB evidence gathering failed for %s", search_term, exc_info=True)
 
         return evidence
@@ -517,7 +515,7 @@ class CRMPopulator:
             logger.info("Extracted %d contacts from Gmail", len(results))
             return results
 
-        except (IraError, Exception):
+        except Exception:
             logger.exception("Gmail extraction failed")
             return []
 
@@ -589,7 +587,7 @@ class CRMPopulator:
             )
             return results
 
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("KB extraction failed")
             return []
 
@@ -625,7 +623,7 @@ class CRMPopulator:
                 })
             logger.info("Extracted %d contacts from Neo4j", len(results))
             return results
-        except (DatabaseError, Exception):
+        except Exception:
             logger.debug("Neo4j extraction failed", exc_info=True)
             return []
 

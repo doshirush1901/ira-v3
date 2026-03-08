@@ -24,7 +24,6 @@ from typing import Any, Awaitable, Callable
 
 from langfuse.decorators import observe
 
-from ira.exceptions import IraError
 from ira.schemas.llm_outputs import ClarityAssessment, TaskPlan, TaskPlanPhase
 
 logger = logging.getLogger(__name__)
@@ -121,7 +120,7 @@ class TaskOrchestrator:
             # 2. Plan
             return await self._plan_and_execute(task_id, state, on_progress)
 
-        except (IraError, Exception) as exc:
+        except Exception as exc:
             logger.exception("Task %s failed", task_id)
             await self._emit(on_progress, "task_error", error=str(exc))
             return TaskResult(task_id=task_id, status="error", summary=str(exc))
@@ -145,7 +144,7 @@ class TaskOrchestrator:
 
         try:
             return await self._plan_and_execute(task_id, state, on_progress)
-        except (IraError, Exception) as exc:
+        except Exception as exc:
             logger.exception("Task %s failed after clarification", task_id)
             await self._emit(on_progress, "task_error", error=str(exc))
             return TaskResult(task_id=task_id, status="error", summary=str(exc))
@@ -228,7 +227,7 @@ class TaskOrchestrator:
         except asyncio.TimeoutError:
             logger.warning("Sphinx clarity check timed out — assuming clear")
             return ClarityAssessment(clear=True)
-        except (IraError, Exception):
+        except Exception:
             logger.exception("Sphinx clarity check failed — assuming clear")
             return ClarityAssessment(clear=True)
 
@@ -290,7 +289,7 @@ class TaskOrchestrator:
             except asyncio.TimeoutError:
                 result = f"(Agent '{phase.agent}' timed out after {_PHASE_TIMEOUT}s)"
                 logger.warning("Phase %d: agent '%s' timed out", phase_id, phase.agent)
-            except (IraError, Exception) as exc:
+            except Exception as exc:
                 result = f"(Agent '{phase.agent}' error: {exc})"
                 logger.exception("Phase %d: agent '%s' failed", phase_id, phase.agent)
 
@@ -326,7 +325,7 @@ class TaskOrchestrator:
                     ),
                     timeout=_PHASE_TIMEOUT,
                 )
-            except (asyncio.TimeoutError, IraError, Exception):
+            except Exception:
                 logger.exception("Calliope report formatting failed — using raw results")
                 markdown_report = f"# Report: {goal}\n\n{compiled}"
         else:
@@ -345,7 +344,7 @@ class TaskOrchestrator:
                 pdf_path = _REPORTS_DIR / f"{task_id}.pdf"
                 pdf_path.write_bytes(pdf_bytes)
                 file_path = str(pdf_path)
-            except (IraError, Exception):
+            except Exception:
                 logger.exception("PDF generation failed — falling back to markdown")
 
         await self._emit(

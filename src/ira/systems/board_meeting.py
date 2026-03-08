@@ -12,7 +12,6 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from ira.data.models import BoardMeetingMinutes
-from ira.exceptions import ToolExecutionError
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ class BoardMeeting:
             try:
                 response = await self._agent_handler(name, topic)
                 return name, response
-            except (ToolExecutionError, Exception):
+            except Exception:
                 logger.exception("Agent '%s' failed during board meeting", name)
                 return name, f"(Agent '{name}' encountered an error)"
 
@@ -60,7 +59,7 @@ class BoardMeeting:
 
         try:
             synthesis = await self._agent_handler("athena", synthesis_prompt)
-        except (ToolExecutionError, Exception):
+        except Exception:
             logger.exception("Athena synthesis failed")
             synthesis = "Synthesis unavailable — see individual contributions above."
 

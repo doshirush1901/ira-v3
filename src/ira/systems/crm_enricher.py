@@ -13,18 +13,14 @@ Each pass is idempotent and safe to re-run.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from ira.brain.embeddings import EmbeddingService
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.crm import CRMDatabase
-from ira.data.models import ContactType, DealStage, WarmthLevel
-from ira.exceptions import DatabaseError
+from ira.data.models import DealStage, WarmthLevel
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +90,7 @@ class CRMEnricher:
                         self._stats["scores_set"],
                         self._stats["companies_enriched"],
                     )
-            except (DatabaseError, Exception):
+            except Exception:
                 self._stats["errors"] += 1
                 logger.exception("Failed to enrich %s", contact.email)
 
@@ -137,8 +133,8 @@ class CRMEnricher:
             )
             evidence["quotes"] = results
 
-        except (DatabaseError, Exception):
-            logger.debug("KB search failed for %s", search_term, exc_info=True)
+        except Exception:
+            logger.warning("KB search failed for %s", search_term, exc_info=True)
 
         return evidence
 
@@ -171,7 +167,9 @@ class CRMEnricher:
 
         for r in evidence.get("company_info", []):
             content = r.get("content", "").lower()
-            if company_name.lower() not in content:
+            if company_name and company_name.lower() not in content:
+                continue
+            if not company_name:
                 continue
 
             if not region:

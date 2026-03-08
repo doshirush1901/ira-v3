@@ -76,7 +76,7 @@ class DocumentAIService:
         if not self.configured:
             logger.warning(
                 "Document AI not configured (project=%s, processor=%s)",
-                self._project_id, self._processor_id,
+                self._project_id, self._processors.get("ocr", ""),
             )
             return
 
@@ -117,6 +117,8 @@ class DocumentAIService:
     async def _ensure_connected(self) -> None:
         if self._creds is None or not self._creds.valid:
             await self.connect()
+        if self._creds is None:
+            raise DocumentAIError("Document AI service is not configured or authentication failed")
 
     def _endpoint(self, processor_type: str = "ocr") -> str:
         pid = self._processors.get(processor_type) or self._processors.get("ocr", "")

@@ -14,13 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from ira.data.models import KnowledgeItem
-from ira.exceptions import DatabaseError, IraError
 from ira.systems.data_event_bus import (
     DataEvent,
     DataEventBus,
@@ -100,7 +98,7 @@ class CirculatorySystem:
         try:
             line = json.dumps(entry, default=str) + "\n"
             await asyncio.to_thread(self._append_ledger_line, line)
-        except (IraError, Exception):
+        except Exception:
             logger.warning("Ledger write failed", exc_info=True)
 
     # ── CRM → Neo4j ─────────────────────────────────────────────────────
@@ -130,7 +128,7 @@ class CirculatorySystem:
                 )
 
             logger.debug("Synced contact %s to Neo4j", email)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Neo4j sync failed for %s", email)
 
     async def _crm_to_neo4j_company(self, event: DataEvent) -> None:
@@ -148,7 +146,7 @@ class CirculatorySystem:
                 industry=p.get("industry", ""),
             )
             logger.debug("Synced company %s to Neo4j", name)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Neo4j sync failed for company %s", name)
 
     async def _crm_to_neo4j_deal(self, event: DataEvent) -> None:
@@ -176,7 +174,7 @@ class CirculatorySystem:
                     )
 
             logger.debug("Synced deal %s to Neo4j", deal_id)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Neo4j deal sync failed for %s", event.entity_id)
 
     async def _relationship_to_neo4j(self, event: DataEvent) -> None:
@@ -195,7 +193,7 @@ class CirculatorySystem:
                 "Synced relationship %s-[%s]->%s to Neo4j",
                 p.get("from_key"), p.get("rel"), p.get("to_key"),
             )
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("Relationship→Neo4j sync failed for %s", event.entity_id)
 
     # ── CRM → Qdrant ────────────────────────────────────────────────────
@@ -239,7 +237,7 @@ class CirculatorySystem:
         try:
             await self._qdrant.upsert_items([item])
             logger.debug("Synced contact %s to Qdrant", email)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Qdrant sync failed for %s", email)
 
     async def _company_to_qdrant(self, event: DataEvent) -> None:
@@ -272,7 +270,7 @@ class CirculatorySystem:
         try:
             await self._qdrant.upsert_items([item])
             logger.debug("Synced company %s to Qdrant", name)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Qdrant sync failed for company %s", name)
 
     async def _deal_to_qdrant(self, event: DataEvent) -> None:
@@ -306,7 +304,7 @@ class CirculatorySystem:
         try:
             await self._qdrant.upsert_items([item])
             logger.debug("Synced deal %s to Qdrant", event.entity_id)
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("CRM→Qdrant deal sync failed for %s", event.entity_id)
 
     # ── Neo4j → CRM ─────────────────────────────────────────────────────
@@ -353,7 +351,7 @@ class CirculatorySystem:
                     )
                     logger.debug("Created CRM company from Neo4j entity: %s", name)
 
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("Neo4j→CRM sync failed for %s", event.entity_id)
 
     def _append_ledger_line(self, line: str) -> None:
@@ -371,14 +369,15 @@ class CirculatorySystem:
             events = [json.loads(line) for line in lines[-limit:] if line.strip()]
             events.reverse()
             return events
-        except (IraError, Exception):
-            logger.debug("Ledger read failed", exc_info=True)
+        except Exception:
+            logger.warning("Ledger read failed", exc_info=True)
             return []
 
     def event_count(self) -> int:
         if not self._ledger_path.exists():
             return 0
         try:
-            return sum(1 for _ in open(self._ledger_path, encoding="utf-8"))
-        except (IraError, Exception):
+            with open(self._ledger_path, encoding="utf-8") as f:
+                return sum(1 for _ in f)
+        except Exception:
             return 0

@@ -24,7 +24,6 @@ from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.quality_filter import QualityFilter
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.models import Email, KnowledgeItem
-from ira.exceptions import DatabaseError, IngestionError
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import DigestiveSummary, EmailMetadata, NutrientClassification
 from ira.services.llm_client import get_llm_client
@@ -261,7 +260,7 @@ class DigestiveSystem:
                 )
                 if ok:
                     rel_count += 1
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.debug("Failed to add relationship: %s", rel, exc_info=True)
         counts["relationships"] = rel_count
 
@@ -359,7 +358,7 @@ class DigestiveSystem:
                 total_chunks += result["chunks_created"]
                 for key in total_entities:
                     total_entities[key] += result["entities_found"].get(key, 0)
-            except (IngestionError, Exception):
+            except Exception:
                 total_failed += 1
                 errors.append(item.get("source", f"item_{i}"))
                 logger.exception("Batch ingest failed for item %d", i)

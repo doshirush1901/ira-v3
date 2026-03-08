@@ -140,7 +140,7 @@ class VoiceSystem:
             max_length, addendum, channel_instructions,
         )
 
-        return self._enforce_length(shaped, profile.max_length)
+        return self._enforce_length(shaped, max_length)
 
     async def _llm_reshape(
         self,
@@ -275,9 +275,9 @@ class VoiceSystem:
     @staticmethod
     def format_for_telegram(text: str) -> str:
         """Ensure Markdown is valid for Telegram's MarkdownV2 parser."""
-        # Strip HTML tags
         text = re.sub(r"<[^>]+>", "", text)
-        # Escape special chars that Telegram MarkdownV2 requires
+        # Backslash must be escaped first to avoid double-escaping
+        text = text.replace("\\", "\\\\")
         special = r"_[]()~`>#+-=|{}.!"
         for ch in special:
             text = text.replace(ch, f"\\{ch}")

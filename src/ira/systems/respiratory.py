@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import resource
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -20,7 +21,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ira.config import get_settings
-from ira.exceptions import IngestionError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +83,14 @@ class RespiratorySystem:
                 )
                 if self._is_unhealthy(vitals) and self._immune_system is not None:
                     await self._immune_system.respond(vitals)
-            except (IraError, Exception):
+            except Exception:
                 logger.exception("Heartbeat iteration failed")
             await asyncio.sleep(self._heartbeat_interval)
 
     def _collect_vitals(self) -> dict[str, Any]:
         usage = resource.getrusage(resource.RUSAGE_SELF)
-        memory_mb = usage.ru_maxrss / (1024 * 1024)  # macOS reports bytes
+        divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+        memory_mb = usage.ru_maxrss / divisor
 
         avg_breath: float = 0.0
         if self._breath_durations:
@@ -118,14 +119,14 @@ class RespiratorySystem:
             from ira.brain.ingestion_gatekeeper import run_ingestion_cycle
             result = await run_ingestion_cycle()
             logger.info("INHALE Alexandros ingestion: %s", result)
-        except (IngestionError, Exception):
+        except Exception:
             logger.exception("INHALE Alexandros ingestion failed")
 
         if self._email_processor is not None:
             try:
                 await self._email_processor.fetch_and_process()
                 logger.info("INHALE email processing complete")
-            except (IraError, Exception):
+            except Exception:
                 logger.exception("INHALE email processing failed")
         else:
             logger.debug("INHALE skipping email processing (no EmailProcessor)")
@@ -147,7 +148,7 @@ class RespiratorySystem:
                 len(report.gaps_identified),
                 len(report.creative_connections),
             )
-        except (IraError, Exception):
+        except Exception:
             logger.exception("DREAM cycle failed")
 
     # ── EXHALE ────────────────────────────────────────────────────────────
@@ -156,20 +157,11 @@ class RespiratorySystem:
         logger.info("EXHALE cycle starting")
         summary_parts: list[str] = []
 
-        if self._dream_mode is not None:
-            try:
-                dream_report = await self._dream_mode.run_dream_cycle()
-                summary_parts.append(f"Dream cycle: {dream_report}")
-            except (IraError, Exception):
-                logger.exception("EXHALE dream cycle failed")
-        else:
-            logger.debug("EXHALE skipping dream mode (not configured)")
-
         if self._drip_engine is not None:
             try:
                 drip_result = await self._drip_engine.evaluate_campaigns()
                 summary_parts.append(f"Drip evaluation: {drip_result}")
-            except (IraError, Exception):
+            except Exception:
                 logger.exception("EXHALE drip evaluation failed")
         else:
             logger.debug("EXHALE skipping drip engine (not configured)")
@@ -186,7 +178,7 @@ class RespiratorySystem:
                             "stalled_since": goal.created_at.isoformat(),
                         })
                 summary_parts.append(f"Stalled goals: {len(stalled)} flagged for follow-up")
-            except (IraError, Exception):
+            except Exception:
                 logger.exception("EXHALE goal sweep failed")
         else:
             logger.debug("EXHALE skipping goal sweep (GoalManager not configured)")
@@ -214,7 +206,7 @@ class RespiratorySystem:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
-        except (IraError, Exception):
+        except Exception:
             logger.exception("Failed to send Telegram daily summary")
 
     # ── Public CLI entry points ─────────────────────────────────────────────

@@ -11,7 +11,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from ira.exceptions import DatabaseError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class AutonomousDripEngine:
         """Check active campaigns and evaluate performance metrics."""
         try:
             campaigns = await self._crm.list_campaigns()
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("Failed to list campaigns")
             return {"campaigns": 0, "active": 0, "error": "CRM query failed"}
 
@@ -58,7 +57,7 @@ class AutonomousDripEngine:
                     "replied": replied,
                     "reply_rate": round(reply_rate, 3),
                 })
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.exception("Failed to evaluate campaign %s", campaign.name)
 
         return {"campaigns": len(campaigns), "active": len(active), "stats": stats}
@@ -70,7 +69,7 @@ class AutonomousDripEngine:
 
         try:
             campaigns = await self._crm.list_campaigns()
-        except (DatabaseError, Exception):
+        except Exception:
             return {"sent": 0, "errors": ["CRM query failed"]}
 
         active = [c for c in campaigns if getattr(c, "status", None) in ("ACTIVE", "active")]
@@ -83,20 +82,30 @@ class AutonomousDripEngine:
                 pending = [s for s in steps if s.sent_at is None]
 
                 for step in pending:
+                    if step.scheduled_at and step.scheduled_at > datetime.now(timezone.utc):
+                        continue
+
                     if self._gmail is not None:
                         try:
+                            contact = await self._crm.get_contact(step.contact_id)
+                            if contact is None or not contact.email:
+                                errors.append(f"No email for contact {step.contact_id} (step {step.step_number})")
+                                continue
+
                             await self._gmail.send_draft(
-                                to=str(step.contact_id),
+                                to=contact.email,
                                 subject=step.email_subject,
                                 body=step.email_body,
                             )
-                            step.sent_at = datetime.now(timezone.utc)
+                            now = datetime.now(timezone.utc)
+                            step.sent_at = now
+                            await self._crm.update_drip_step(step.id, sent_at=now)
                             sent_count += 1
-                        except (IraError, Exception) as exc:
+                        except Exception as exc:
                             errors.append(f"Send failed for step {step.step_number}: {exc}")
                     else:
                         logger.debug("Gmail sender not configured — skipping step %d", step.step_number)
-            except (DatabaseError, Exception):
+            except Exception:
                 logger.exception("Failed to process campaign %s", campaign.name)
 
         logger.info("Drip engine: sent %d steps, %d errors", sent_count, len(errors))
@@ -121,17 +130,22 @@ class AutonomousDripEngine:
 
                 for step in sent_unreplied:
                     try:
+                        contact = await self._crm.get_contact(step.contact_id)
+                        if contact is None or not contact.email:
+                            continue
+
                         has_reply = await self._gmail.check_reply(
-                            to=str(step.contact_id),
+                            to=contact.email,
                             subject=step.email_subject,
                         )
                         if has_reply:
                             step.reply_received = True
+                            await self._crm.update_drip_step(step.id, reply_received=True)
                             reply_count += 1
-                    except (IraError, Exception):
-                        logger.debug("Reply check failed for step %d", step.step_number)
+                    except Exception:
+                        logger.warning("Reply check failed for step %d", step.step_number, exc_info=True)
 
-        except (DatabaseError, Exception):
+        except Exception:
             logger.exception("Reply check cycle failed")
 
         return {"replies_detected": reply_count}

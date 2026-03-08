@@ -19,7 +19,6 @@ from ira.brain.embeddings import EmbeddingService
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
-from ira.exceptions import DatabaseError, IraError
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +219,7 @@ class ImmuneSystem:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
-        except (IraError, Exception):
+        except Exception:
             logger.exception("Failed to send Telegram alert")
 
     # ── KNOWLEDGE HEALTH ──────────────────────────────────────────────────
@@ -237,7 +236,7 @@ class ImmuneSystem:
                 "point_count": info.points_count,
                 "status": str(info.status),
             }
-        except (DatabaseError, Exception) as exc:
+        except Exception as exc:
             report["qdrant"] = {"error": str(exc)}
 
         try:
@@ -257,7 +256,7 @@ class ImmuneSystem:
                 "orphaned_nodes": orphaned,
                 "node_counts": node_counts,
             }
-        except (DatabaseError, Exception) as exc:
+        except Exception as exc:
             report["neo4j"] = {"error": str(exc)}
 
         try:
@@ -272,8 +271,8 @@ class ImmuneSystem:
                     f"Knowledge health: {len(chronic)} chronic issue(s) detected",
                     severity="warning",
                 )
-        except (IraError, Exception):
-            logger.debug("KnowledgeHealthMonitor not available", exc_info=True)
+        except Exception:
+            logger.warning("KnowledgeHealthMonitor not available", exc_info=True)
 
         return report
 
@@ -287,7 +286,12 @@ class ImmuneSystem:
             if service_name == "qdrant":
                 result["action"] = "reconnect_qdrant"
                 await self._qdrant._client.close()
-                self._qdrant._client = AsyncQdrantClient(url=self._qdrant_url)
+                settings = get_settings()
+                api_key = settings.qdrant.api_key.get_secret_value()
+                self._qdrant._client = AsyncQdrantClient(
+                    url=self._qdrant_url,
+                    api_key=api_key or None,
+                )
                 await self._qdrant.ensure_collection()
                 check = await self._check_qdrant()
                 result["success"] = check["status"] == "healthy"
@@ -312,7 +316,7 @@ class ImmuneSystem:
                 result["action"] = "unknown_service"
                 result["error"] = f"No recovery action for '{service_name}'"
 
-        except (DatabaseError, IraError, Exception) as exc:
+        except Exception as exc:
             result["error"] = str(exc)
             logger.exception("Recovery failed for %s", service_name)
 
