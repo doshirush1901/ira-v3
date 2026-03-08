@@ -233,9 +233,21 @@ Ira doesn't just generate text — it *knows things*. The brain is a multi-backe
     │  Redis Cache                     │
     │  Response dedup + caching        │
     └──────────────────────────────────┘
+
+    ┌──────────────────────────────────┐
+    │  Entity Extractor (GLiNER)       │
+    │  Zero-shot NER for contacts,     │
+    │  companies, machines             │
+    └──────────────────────────────────┘
+
+    ┌──────────────────────────────────┐
+    │  Guardrails                      │
+    │  Input validation + output       │
+    │  safety checks                   │
+    └──────────────────────────────────┘
 ```
 
-All three backends are searched **in parallel**, results are **reranked** with Voyage Rerank (FlashRank as local fallback), and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive. Redis caches responses and deduplicates repeated queries.
+All three backends are searched **in parallel**, results are **reranked** with Voyage Rerank (FlashRank as local fallback), and if nothing comes back, the system falls back to **Alexandros** (the librarian) who searches the raw document archive. Redis caches responses and deduplicates repeated queries. The **entity extractor** (GLiNER) identifies contacts, companies, and machines in queries for entity-aware routing. **Guardrails** validate inputs and check outputs for safety before they reach the user.
 
 ## Memory Architecture
 
@@ -302,14 +314,19 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 |:------|:-----------|
 | Language | Python 3.11+ |
 | Package Manager | Poetry |
-| LLM | OpenAI (primary) + Anthropic (fallback) |
+| LLM | OpenAI (primary) + Anthropic (fallback) via LLMClient |
+| LLM Observability | Langfuse (tracing, cost tracking) |
 | Embeddings | Voyage AI |
 | Vector Database | Qdrant |
 | Knowledge Graph | Neo4j |
 | Relational Database | PostgreSQL (CRM via asyncpg) |
 | Cache | Redis (response dedup, stream persistence) |
 | Memory | Mem0 + SQLite |
-| Document Processing | Google Document AI, PDF.co |
+| NER / Entity Extraction | GLiNER (local, zero-shot) |
+| Document Processing | Docling + Chonkie (chunking), Google Document AI, PDF.co |
+| Web Crawling | crawl4ai |
+| Input/Output Safety | guardrails-ai |
+| Evaluation | deepeval + promptfoo |
 | Privacy | Google Cloud DLP (PII redaction) |
 | Integrations | Google Docs, Gmail |
 | API Framework | FastAPI |
@@ -324,11 +341,15 @@ Project priorities and architectural guardrails live in [`VISION.md`](VISION.md)
 ```
 ira-v3/
 ├── src/ira/
-│   ├── agents/              # 24 specialist agents + base_agent.py
-│   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing
-│   ├── memory/              # 9 memory subsystems + dream mode
-│   ├── systems/             # Body systems + extended systems (17 modules)
-│   ├── interfaces/          # CLI, FastAPI server, Telegram bot, email processor, dashboard
+│   ├── agents/              # 24 specialist agents + base_agent.py (~870 lines)
+│   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing,
+│   │                        #   entity extraction (GLiNER), guardrails (30 modules)
+│   ├── memory/              # 9 memory subsystems + dream mode + goal sweep
+│   ├── systems/             # Body systems + extended systems (20 modules)
+│   ├── interfaces/          # CLI, FastAPI server, Telegram bot, email processor,
+│   │                        #   dashboard, cursor feedback
+│   ├── services/            # LLMClient (OpenAI + Anthropic SDK with Langfuse tracing)
+│   ├── schemas/             # Pydantic models for structured LLM outputs
 │   ├── skills/              # Skill matrix + tool handlers
 │   ├── middleware/          # Auth + request context
 │   ├── data/                # CRM models, quote models
@@ -337,17 +358,18 @@ ira-v3/
 │   ├── config.py            # Pydantic settings (all config from env)
 │   ├── context.py           # Unified context manager
 │   └── message_bus.py       # Inter-agent messaging
-├── prompts/                 # LLM prompt templates (one per agent + utilities)
-├── scripts/                 # Operational scripts (board meetings, health checks)
-├── tests/                   # Test suite
+├── prompts/                 # LLM prompt templates (68 files)
+├── scripts/                 # Operational scripts + training (shakti_train.sh)
+├── tests/                   # Test suite (23 files, ~10,600 lines)
 ├── alembic/                 # Database migrations
 ├── docs/                    # Architecture and audit documentation
 ├── SOUL.md                  # Ira's identity, voice, and behavioral boundaries
 ├── VISION.md                # Project priorities and architectural guardrails
+├── promptfooconfig.yaml     # Prompt regression testing config
 ├── docker-compose.yml       # Production stack
 ├── docker-compose.local.yml # Local development stack
 ├── Dockerfile               # Container build
-└── pyproject.toml           # Dependencies and project metadata
+└── pyproject.toml           # Dependencies and project metadata (v3.3.0)
 ```
 
 ## Getting Started

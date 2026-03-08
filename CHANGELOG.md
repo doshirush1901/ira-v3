@@ -5,6 +5,36 @@ All notable changes to Ira are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] - 2026-03-08
+
+### Added
+- **Entity extractor** — GLiNER-based NER for contacts, companies, and machines (`brain/entity_extractor.py`).
+- **Guardrails module** — Input validation and output safety checks (`brain/guardrails.py`).
+- **Cursor feedback interface** — IDE-integrated correction flow (`interfaces/cursor_feedback.py`).
+- **Eval harness** — deepeval-based evaluation suite (`tests/test_eval.py`) and promptfoo config for prompt regression testing.
+- **Training scripts** — `scripts/shakti_train.sh` for fine-tuning workflows.
+- **Stalled goal sweep** — `GoalManager.sweep_stalled_goals()` finds ACTIVE goals that haven't been updated.
+- **Langfuse observability** — config placeholders in `.env.example` for LLM tracing.
+- **New dependencies** — crawl4ai, docling, chonkie, deepeval, guardrails-ai, gliner.
+
+### Changed
+- **Vera** upgraded with structured fact-checking and KB cross-referencing.
+- **Iris** upgraded with crawl4ai-based web search.
+- **BaseAgent** ReAct loop improved with better tool dispatch and error recovery.
+- **Deterministic router** now entity-aware for smarter routing.
+- **Document ingestor** enhanced with docling/chonkie chunking pipeline.
+- **Pricing, machine intelligence, and sales intelligence** modules refactored.
+- **CLI** expanded with richer interactive commands.
+- **Email processor** hardened with retry logic.
+- **Respiratory system** expanded with health monitoring.
+- **AdaptiveStyleTracker** and **PowerLevelTracker** now use async locks to prevent race conditions.
+- Docker healthcheck URL fixed (`/health` → `/api/health`).
+- Codebase grown to 106 source files, ~33,000 lines | 23 test files, ~10,600 lines | 68 prompt files.
+
+### Fixed
+- Docker healthcheck URL in `docker-compose.yml` pointed to wrong path.
+- Race conditions in `AdaptiveStyleTracker.update_profile()` and `PowerLevelTracker.record_success/failure/training_boost`.
+
 ## [3.1.0] - 2026-03-07
 
 ### Added

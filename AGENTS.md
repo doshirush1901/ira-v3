@@ -13,10 +13,11 @@ persistent memory across conversations.
 ```
 src/ira/
   agents/       # 24 specialist agents + BaseAgent
-  brain/        # Retrieval, embeddings, graph, routing, pricing
-  memory/       # 9 memory subsystems + dream mode
-  systems/      # Body-system metaphor (digestive, immune, voice, redis, document_ai, dlp, etc.)
-  interfaces/   # FastAPI server, CLI, Telegram, email processor, dashboard
+  brain/        # Retrieval, embeddings, graph, routing, pricing,
+                #   entity extraction (GLiNER), guardrails (30 modules)
+  memory/       # 9 memory subsystems + dream mode + goal sweep
+  systems/      # Body-system metaphor (20 modules)
+  interfaces/   # FastAPI server, CLI, Telegram, email processor, dashboard, cursor feedback
   data/         # CRM models, quote models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers
@@ -26,10 +27,10 @@ src/ira/
   pantheon.py   # Agent orchestrator + routing
   config.py     # Pydantic settings (all config from .env)
   message_bus.py # Inter-agent pub/sub messaging
-prompts/        # LLM prompt templates (~70 files)
-tests/          # pytest test suite
+prompts/        # LLM prompt templates (68 files)
+tests/          # pytest test suite (23 files, ~10,600 lines)
 alembic/        # PostgreSQL migrations
-scripts/        # Operational scripts
+scripts/        # Operational + training scripts
 docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 ```
 
@@ -209,8 +210,8 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 - **Never commit `.env` or credentials.** Use `.env.example` for templates.
 - **Keep agents bounded.** If a new capability overlaps with an existing
   agent, extend that agent. Do not create overlapping agents.
-- **No heavy frameworks.** No LangChain, LlamaIndex, or CrewAI. Raw httpx
-  for LLM calls, custom ReAct loop, custom retrieval.
+- **No heavy frameworks.** No LangChain, LlamaIndex, or CrewAI. LLMClient
+  for LLM calls (with Langfuse tracing), custom ReAct loop, custom retrieval.
 - **Prompts are config.** System prompts live in `prompts/`, not in Python
   source. Use `load_prompt()`.
 - **The body metaphor is real.** Body systems enforce separation of concerns.

@@ -1,9 +1,9 @@
 # Ira v3 — Comprehensive System Audit
 
-**Date:** 2026-03-07
+**Date:** 2026-03-08 (updated for v3.3.0)
 **Auditor:** Principal Engineer Review
 **Scope:** Full codebase (`src/ira/`, `tests/`, `scripts/`, `prompts/`, infrastructure)
-**Codebase:** 95 source files, ~22,500 lines | 10 test files, ~6,800 lines | 71 prompt files
+**Codebase:** 106 source files, ~33,000 lines | 23 test files, ~10,600 lines | 68 prompt files
 
 ---
 
@@ -24,7 +24,7 @@
 
 | # | Severity | Finding |
 |---|----------|---------|
-| 1.1a | **CRITICAL** | **No `Dockerfile` exists.** `ira-app` references `build: { context: ., dockerfile: Dockerfile }` but the file does not exist. `docker-compose up` will fail. |
+| 1.1a | **RESOLVED** | `Dockerfile` now exists. Docker healthcheck URL fixed to `/api/health` in v3.3.0. |
 | 1.1b | LOW | `qdrant` uses `latest` tag — not pinned. Builds are non-reproducible. |
 | 1.1c | GOOD | All services have health checks, restart policies, resource limits, and proper networking. |
 | 1.1d | GOOD | `docker-compose.local.yml` exists for local dev (no health checks, bind mounts to `./data/`). |

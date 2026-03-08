@@ -53,15 +53,18 @@ poetry run ruff format src/ tests/
 ```
 src/ira/
   agents/       # 24 specialist agents + BaseAgent
-  brain/        # Knowledge retrieval, embeddings, search
+  brain/        # Knowledge retrieval, embeddings, entity extraction,
+                #   guardrails, pricing, routing (30 modules)
   data/         # CRM models, quote models
-  interfaces/   # CLI, server, Telegram, email, dashboard
+  interfaces/   # CLI, server, Telegram, email, dashboard, cursor feedback
   memory/       # Conversation, episodic, relationship, goals
-  systems/      # Body-system metaphor (digestive, immune, etc.)
+  services/     # LLMClient (OpenAI + Anthropic with Langfuse tracing)
+  schemas/      # Pydantic models for structured LLM outputs
+  systems/      # Body-system metaphor (20 modules)
   pipeline.py   # 11-stage request pipeline
   pantheon.py   # Agent orchestrator
-prompts/        # LLM prompt templates (71 files)
-tests/          # pytest test suite
+prompts/        # LLM prompt templates (68 files)
+tests/          # pytest test suite (23 files)
 alembic/        # Database migrations
 ```
 
@@ -80,9 +83,10 @@ alembic/        # Database migrations
 - Use `from __future__ import annotations` in every module.
 - Use stdlib `logging`, not structlog.
 - Type-hint all public functions.
-- LLM calls go through raw `httpx` — do not import `openai` or `anthropic` SDKs.
+- LLM calls go through `LLMClient` (`src/ira/services/llm_client.py`). Use `generate_text()` for plain text and `generate_structured()` with a Pydantic model for JSON. All calls are auto-traced via Langfuse.
 - **Linting and formatting** are enforced by [Ruff](https://github.com/astral-sh/ruff). Run `poetry run ruff check --fix src/ tests/` to auto-fix.
 - **Pre-commit hooks** run ruff automatically on every commit if installed.
+- **Evaluation** — run `poetry run pytest tests/test_eval.py` for the deepeval suite, or `npx promptfoo eval` for prompt regression testing.
 - See `AGENTS.md` for full conventions.
 
 ## Testing

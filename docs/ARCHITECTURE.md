@@ -57,7 +57,7 @@ logged, timed, and tested.
 
 ### BaseAgent
 
-All 24 agents inherit from `BaseAgent` (~920 lines), which provides:
+All 24 agents inherit from `BaseAgent` (~870 lines), which provides:
 
 - **Shared identity** -- `SOUL.md` preamble (Identity, Voice, Behavioral
   Boundaries) is prepended to every agent's system prompt via
@@ -71,9 +71,9 @@ All 24 agents inherit from `BaseAgent` (~920 lines), which provides:
   `search_knowledge`, `recall_memory`, `store_memory`,
   `get_conversation_history`, `check_relationship`, `check_goals`,
   `recall_episodes`, `ask_agent`, `search_emails`, `read_email_thread`.
-- **Dual LLM support** -- `_call_openai()` and `_call_anthropic()` via
-  raw `httpx` (no SDK dependencies). Automatic Anthropic fallback on
-  OpenAI failure.
+- **Dual LLM support** -- OpenAI and Anthropic via `LLMClient`
+  (`src/ira/services/llm_client.py`), with Langfuse tracing and automatic
+  Anthropic fallback on OpenAI failure.
 - **Knowledge retriever** -- `self._retriever` (UnifiedRetriever) for
   Qdrant + Neo4j + Mem0 search.
 - **Email tools** -- when the email processor is injected, all agents
@@ -117,7 +117,7 @@ ReAct tools that depend on memory, CRM, and other shared services.
 | Sphinx | Gatekeeper | analyze_query, suggest_clarifications |
 | Themis | HR | lookup_employee, search_hr_policies, generate_org_chart |
 | Tyche | Forecasting | get_pipeline_data, get_revenue_data |
-| Vera | Fact Checker | search_qdrant, ask_iris |
+| Vera | Fact Checker | search_qdrant, ask_iris, structured fact-check with KB cross-referencing |
 
 ## Memory Systems (`src/ira/memory/`)
 
@@ -141,11 +141,15 @@ ReAct tools that depend on memory, CRM, and other shared services.
 | QdrantManager | Vector store management (CRUD, chunking, embedding) |
 | KnowledgeGraph | Neo4j entity/relationship CRUD and graph queries |
 | EmbeddingService | Voyage AI embeddings via raw HTTP |
-| DeterministicRouter | Keyword-to-agent intent matching |
+| EntityExtractor | GLiNER-based zero-shot NER for contacts, companies, and machines |
+| Guardrails | Input validation and output safety checks (guardrails-ai) |
+| DeterministicRouter | Entity-aware keyword-to-agent intent matching |
 | PricingEngine | Machine price estimation from knowledge base |
 | SalesIntelligence | Lead qualification, customer health, re-engagement |
 | MachineIntelligence | Machine comparison and recommendation |
-| DocumentIngestor | PDF/DOCX/Excel ingestion pipeline; re-OCR via Document AI for scanned PDFs |
+| DocumentIngestor | PDF/DOCX/Excel ingestion via docling + chonkie chunking; re-OCR via Document AI for scanned PDFs |
+| AdaptiveStyleTracker | Per-contact communication style profiling with async-safe updates |
+| PowerLevelTracker | Agent performance scoring (success/failure/training boosts) |
 | TruthHints | Cached factual answers for common queries |
 
 ## Body Systems (`src/ira/systems/`)
