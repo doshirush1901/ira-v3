@@ -242,3 +242,7 @@ class DreamReport(BaseModel):
         default_factory=list,
         description="Sales/marketing insights generated from pattern analysis",
     )
+    stage_results: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-stage status: stage_name -> 'ok' | 'error' | 'skipped'",
+    )

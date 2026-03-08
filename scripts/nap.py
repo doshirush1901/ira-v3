@@ -144,63 +144,23 @@ async def phase_sleep_training(dry_run: bool) -> dict:
 
 
 async def phase_dream_cycle(dry_run: bool) -> dict:
-    from ira.brain.embeddings import EmbeddingService
-    from ira.brain.knowledge_graph import KnowledgeGraph
-    from ira.brain.qdrant_manager import QdrantManager
-    from ira.brain.retriever import UnifiedRetriever
-    from ira.data.crm import CRMDatabase
-    from ira.memory.conversation import ConversationMemory
-    from ira.memory.dream_mode import DreamMode
-    from ira.memory.episodic import EpisodicMemory
-    from ira.memory.long_term import LongTermMemory
-    from ira.systems.musculoskeletal import MusculoskeletalSystem
+    from ira.memory.dream_mode import build_dream_mode
 
-    embedding = EmbeddingService()
-    qdrant = QdrantManager(embedding_service=embedding)
-    graph = KnowledgeGraph()
-    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
-
-    crm = CRMDatabase()
-    await crm.create_tables()
-
-    long_term = LongTermMemory()
-    episodic = EpisodicMemory(long_term=long_term)
-    await episodic.initialize()
-    conversation = ConversationMemory()
-    await conversation.initialize()
-    musculoskeletal = MusculoskeletalSystem()
-    await musculoskeletal.create_tables()
-
-    dream = DreamMode(
-        long_term=long_term,
-        episodic=episodic,
-        conversation=conversation,
-        musculoskeletal=musculoskeletal,
-        retriever=retriever,
-        crm=crm,
-    )
-    await dream.initialize()
+    dream = await build_dream_mode()
 
     if dry_run:
         await dream.close()
-        await graph.close()
-        await qdrant.close()
         return {"dry_run": True, "note": "would run full dream cycle"}
 
     report = await dream.run_dream_cycle()
-
     await dream.close()
-    await conversation.close()
-    await episodic.close()
-    await musculoskeletal.close()
-    await graph.close()
-    await qdrant.close()
 
     return {
         "memories_consolidated": report.memories_consolidated,
         "gaps": len(report.gaps_identified),
         "connections": len(report.creative_connections),
         "campaign_insights": len(report.campaign_insights),
+        "stage_results": report.stage_results,
     }
 
 

@@ -1234,25 +1234,24 @@ def system_exhale(
     pantheon, shared = _build_pantheon()
 
     async def _exhale() -> None:
-        from ira.memory.dream_mode import DreamMode
-        from ira.memory.long_term import LongTermMemory
+        from ira.memory.dream_mode import build_dream_mode
 
-        long_term = LongTermMemory()
-        dream_mode = DreamMode(long_term_memory=long_term)
-        await dream_mode.initialize()
+        dream_mode = await build_dream_mode()
+        try:
+            respiratory = RespiratorySystem(dream_mode=dream_mode)
 
-        respiratory = RespiratorySystem(dream_mode=dream_mode)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold magenta]Exhaling..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("exhale", total=None)
+                await respiratory.run_exhale_cycle()
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold magenta]Exhaling..."),
-            console=err_console,
-            transient=True,
-        ) as progress:
-            progress.add_task("exhale", total=None)
-            await respiratory.run_exhale_cycle()
-
-        console.print("[green]Exhale cycle complete.[/green]")
+            console.print("[green]Exhale cycle complete.[/green]")
+        finally:
+            await dream_mode.close()
 
     from ira.systems.respiratory import RespiratorySystem
     _run(_exhale())
@@ -1446,69 +1445,60 @@ def dream(
     _configure_logging(verbose)
 
     async def _dream() -> None:
-        from ira.brain.embeddings import EmbeddingService
-        from ira.brain.knowledge_graph import KnowledgeGraph
-        from ira.brain.qdrant_manager import QdrantManager
-        from ira.brain.retriever import UnifiedRetriever
-        from ira.memory.conversation import ConversationMemory
-        from ira.memory.dream_mode import DreamMode
-        from ira.memory.episodic import EpisodicMemory
-        from ira.memory.long_term import LongTermMemory
+        from ira.memory.dream_mode import build_dream_mode
 
-        embedding = EmbeddingService()
-        qdrant = QdrantManager(embedding_service=embedding)
-        graph = KnowledgeGraph()
-        retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
-        long_term = LongTermMemory()
-        episodic = EpisodicMemory()
-        conversation = ConversationMemory()
+        dream_mode = await build_dream_mode()
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold magenta]Dreaming..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("dream", total=None)
+                report = await dream_mode.run_dream_cycle()
 
-        dream_mode = DreamMode(
-            long_term=long_term,
-            episodic=episodic,
-            conversation=conversation,
-            retriever=retriever,
-        )
+            console.print(Panel(
+                f"[bold]Date:[/bold]                  {report.cycle_date}\n"
+                f"[bold]Memories consolidated:[/bold] {report.memories_consolidated}",
+                title="Dream Report",
+                border_style="magenta",
+            ))
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold magenta]Dreaming..."),
-            console=err_console,
-            transient=True,
-        ) as progress:
-            progress.add_task("dream", total=None)
-            report = await dream_mode.run_dream_cycle()
+            if report.stage_results:
+                stage_table = Table(title="Stage Results")
+                stage_table.add_column("Stage", style="dim")
+                stage_table.add_column("Status")
+                for stage_name, status in report.stage_results.items():
+                    style = "green" if status == "ok" else ("red" if status == "error" else "yellow")
+                    stage_table.add_row(stage_name, f"[{style}]{status}[/{style}]")
+                console.print(stage_table)
 
-        console.print(Panel(
-            f"[bold]Date:[/bold]                  {report.cycle_date}\n"
-            f"[bold]Memories consolidated:[/bold] {report.memories_consolidated}",
-            title="Dream Report",
-            border_style="magenta",
-        ))
+            if report.gaps_identified:
+                gap_table = Table(title="Knowledge Gaps Identified")
+                gap_table.add_column("#", style="dim", width=3)
+                gap_table.add_column("Gap", style="yellow")
+                for i, gap in enumerate(report.gaps_identified, 1):
+                    gap_table.add_row(str(i), gap)
+                console.print(gap_table)
 
-        if report.gaps_identified:
-            gap_table = Table(title="Knowledge Gaps Identified")
-            gap_table.add_column("#", style="dim", width=3)
-            gap_table.add_column("Gap", style="yellow")
-            for i, gap in enumerate(report.gaps_identified, 1):
-                gap_table.add_row(str(i), gap)
-            console.print(gap_table)
+            if report.creative_connections:
+                conn_table = Table(title="Creative Connections")
+                conn_table.add_column("#", style="dim", width=3)
+                conn_table.add_column("Insight", style="cyan")
+                for i, conn in enumerate(report.creative_connections, 1):
+                    conn_table.add_row(str(i), conn)
+                console.print(conn_table)
 
-        if report.creative_connections:
-            conn_table = Table(title="Creative Connections")
-            conn_table.add_column("#", style="dim", width=3)
-            conn_table.add_column("Insight", style="cyan")
-            for i, conn in enumerate(report.creative_connections, 1):
-                conn_table.add_row(str(i), conn)
-            console.print(conn_table)
-
-        if report.campaign_insights:
-            camp_table = Table(title="Campaign Insights")
-            camp_table.add_column("#", style="dim", width=3)
-            camp_table.add_column("Insight", style="green")
-            for i, insight in enumerate(report.campaign_insights, 1):
-                camp_table.add_row(str(i), insight)
-            console.print(camp_table)
+            if report.campaign_insights:
+                camp_table = Table(title="Campaign Insights")
+                camp_table.add_column("#", style="dim", width=3)
+                camp_table.add_column("Insight", style="green")
+                for i, insight in enumerate(report.campaign_insights, 1):
+                    camp_table.add_row(str(i), insight)
+                console.print(camp_table)
+        finally:
+            await dream_mode.close()
 
     _run(_dream())
 

@@ -558,9 +558,9 @@ Per request, the pipeline makes **at minimum 3-5 LLM calls**, and up to **15+ fo
 
 | File | Expected Purpose |
 |------|-----------------|
-| `prompts/dream_morning_summary.txt` | Morning summary generation |
-| `prompts/dream_price_check.txt` | Price validation during dreams |
-| `prompts/dream_quality_review.txt` | Quality review of stored knowledge |
+| ~~`prompts/dream_morning_summary.txt`~~ | ~~Morning summary generation~~ (handled inline in Stage 10) |
+| ~~`prompts/dream_price_check.txt`~~ | ~~Price validation during dreams~~ (handled by PricingLearner) |
+| ~~`prompts/dream_quality_review.txt`~~ | ~~Quality review of stored knowledge~~ (handled by GraphConsolidation) |
 | `prompts/drip_adjust.txt` | Drip campaign adjustment |
 | `prompts/drip_evaluate.txt` | Drip campaign evaluation |
 

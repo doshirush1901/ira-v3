@@ -217,11 +217,34 @@ class PatternExtraction(BaseModel):
 # ── Dream mode ────────────────────────────────────────────────────────────
 
 
+class DreamPattern(BaseModel):
+    description: str = ""
+    frequency: int = 0
+    examples: list[str] = Field(default_factory=list)
+
+
+class DreamContradiction(BaseModel):
+    description: str = ""
+    sources: list[str] = Field(default_factory=list)
+
+
+class DreamInsightItem(BaseModel):
+    insight: str = ""
+    confidence: str = ""
+    evidence: list[str] = Field(default_factory=list)
+
+
+class DreamRecommendation(BaseModel):
+    action: str = ""
+    priority: str = ""
+    rationale: str = ""
+
+
 class DreamInsight(BaseModel):
-    patterns: list[str] = Field(default_factory=list)
-    contradictions: list[str] = Field(default_factory=list)
-    insights: list[str] = Field(default_factory=list)
-    recommendations: list[str] = Field(default_factory=list)
+    patterns: list[DreamPattern] = Field(default_factory=list)
+    contradictions: list[DreamContradiction] = Field(default_factory=list)
+    insights: list[DreamInsightItem] = Field(default_factory=list)
+    recommendations: list[DreamRecommendation] = Field(default_factory=list)
 
 
 class DreamGap(BaseModel):
@@ -261,14 +284,14 @@ class DreamProcedures(BaseModel):
 
 
 class DreamPruneSummary(BaseModel):
-    ids: list[str] = Field(default_factory=list)
+    ids: list[int] = Field(default_factory=list)
     summary: str = ""
 
 
 class DreamPrune(BaseModel):
-    keep: list[str] = Field(default_factory=list)
+    keep: list[int] = Field(default_factory=list)
     summarise: list[DreamPruneSummary] = Field(default_factory=list)
-    archive: list[str] = Field(default_factory=list)
+    archive: list[int] = Field(default_factory=list)
 
 
 # ── Sleep trainer ─────────────────────────────────────────────────────────

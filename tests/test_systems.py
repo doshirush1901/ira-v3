@@ -20,13 +20,17 @@ from ira.schemas.llm_outputs import (
     CorrectionAnalysis,
     DigestiveSummary,
     DreamCampaignInsights,
+    DreamContradiction,
     DreamCreative,
     DreamConnection,
     DreamGaps,
     DreamInsight,
+    DreamInsightItem,
+    DreamPattern,
     DreamProcedure,
     DreamProcedures,
     DreamPrune,
+    DreamRecommendation,
     EmailMetadata,
     EmailSenderInfo,
     GapAnalysis,
@@ -977,8 +981,8 @@ class TestNemesisTraining:
 # ═════════════════════════════════════════════════════════════════════════
 
 
-class TestDreamModeFiveStages:
-    """Tests for the 5-stage DreamMode cycle with CRM and ProceduralMemory."""
+class TestDreamModeStages:
+    """Tests for the 11-stage DreamMode cycle with CRM and ProceduralMemory."""
 
     @pytest.fixture()
     async def dream(self, tmp_path):
@@ -1101,10 +1105,10 @@ class TestDreamModeFiveStages:
         ]
 
         mock_insight = DreamInsight(
-            patterns=["Pricing inquiries increasing"],
+            patterns=[DreamPattern(description="Pricing inquiries increasing", frequency=3)],
             contradictions=[],
-            insights=["Market shift toward PF1-C"],
-            recommendations=["Create PF1-C pricing FAQ"],
+            insights=[DreamInsightItem(insight="Market shift toward PF1-C", confidence="HIGH")],
+            recommendations=[DreamRecommendation(action="Create PF1-C pricing FAQ", priority="HIGH", rationale="Save time")],
         )
         dm._llm.generate_structured = AsyncMock(return_value=mock_insight)
 
@@ -1123,7 +1127,7 @@ class TestDreamModeFiveStages:
 
         insights = {
             "recommendations": [
-                {"action": "Auto-reply to pricing inquiries", "priority": "HIGH", "rationale": "Save time"},
+                DreamRecommendation(action="Auto-reply to pricing inquiries", priority="HIGH", rationale="Save time"),
             ],
         }
         episodes = [{"user_id": "c1", "narrative": "Pricing inquiry handled well."}]
@@ -1192,9 +1196,9 @@ class TestDreamModeFiveStages:
         from ira.schemas.llm_outputs import DreamPruneSummary
 
         mock_prune = DreamPrune(
-            keep=["1"],
-            summarise=[DreamPruneSummary(ids=["2", "3"], summary="Merged episodes 2 and 3")],
-            archive=["4", "5"],
+            keep=[1],
+            summarise=[DreamPruneSummary(ids=[2, 3], summary="Merged episodes 2 and 3")],
+            archive=[4, 5],
         )
         dm._llm.generate_structured = AsyncMock(return_value=mock_prune)
 
@@ -1273,3 +1277,238 @@ class TestDreamModeFiveStages:
 
         assert report is not None
         assert report.memories_consolidated == 0
+
+    # ── Stage 0: Deferred Ingestion ──────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage0_skips_when_no_queue(self, dream):
+        dm, _, _, _, _ = dream
+        stage_log: dict = {"stages": {}}
+
+        with patch(
+            "ira.memory.dream_mode.DreamMode._stage0_deferred_ingestion",
+            wraps=dm._stage0_deferred_ingestion,
+        ):
+            await dm._stage0_deferred_ingestion(stage_log)
+
+        status = stage_log["stages"].get("0_deferred_ingestion", {}).get("status")
+        assert status in ("ok", "skipped")
+
+    # ── Stage 0.5: Sleep Training ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage0_5_skips_when_no_pending(self, dream):
+        dm, _, _, _, _ = dream
+        stage_log: dict = {"stages": {}}
+
+        await dm._stage0_5_sleep_training(stage_log)
+
+        status = stage_log["stages"].get("0_5_sleep_training", {}).get("status")
+        assert status in ("ok", "skipped")
+
+    # ── Stage 3b: Gap Detection ──────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage3b_detects_gaps_from_db(self, dream):
+        dm, _, _, _, _ = dream
+
+        now = datetime.now(timezone.utc).isoformat()
+        assert dm._db is not None
+        await dm._db.execute(
+            """CREATE TABLE IF NOT EXISTS knowledge_gaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query TEXT NOT NULL, state TEXT NOT NULL,
+                gaps TEXT NOT NULL, created_at TEXT NOT NULL
+            )"""
+        )
+        await dm._db.execute(
+            "INSERT INTO knowledge_gaps (query, state, gaps, created_at) VALUES (?, ?, ?, ?)",
+            ("What is PF3?", "UNKNOWN", "[]", now),
+        )
+        await dm._db.commit()
+
+        from ira.schemas.llm_outputs import DreamGap
+
+        dm._llm.generate_structured = AsyncMock(
+            return_value=DreamGaps(gaps=[DreamGap(topic="PF3", description="No info", priority="HIGH")])
+        )
+
+        stage_log: dict = {"stages": {}}
+        _, gaps, _, _ = await dm._stage3_insight_generation([], stage_log)
+
+        assert len(gaps) == 1
+        assert gaps[0]["topic"] == "PF3"
+        assert stage_log["stages"]["3b_gap_detection"]["gaps_found"] == 1
+
+    # ── Stage 3d: Campaign Reflection ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage3d_campaign_reflection_with_musculoskeletal(self, dream):
+        dm, _, _, _, _ = dream
+
+        mock_musculo = AsyncMock()
+        mock_musculo.extract_myokines = AsyncMock(return_value={"email_replies": 5})
+        dm._musculoskeletal = mock_musculo
+
+        dm._llm.generate_structured = AsyncMock(
+            return_value=DreamCampaignInsights(insights=["Improve follow-up cadence"])
+        )
+
+        stage_log: dict = {"stages": {}}
+        _, _, _, campaign = await dm._stage3_insight_generation([], stage_log)
+
+        assert len(campaign) == 1
+        assert "follow-up" in campaign[0].lower()
+        mock_musculo.extract_myokines.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stage3d_skips_without_musculoskeletal(self, dream):
+        dm, _, _, _, _ = dream
+        dm._musculoskeletal = None
+
+        dm._llm.generate_structured = AsyncMock(return_value=DreamCampaignInsights())
+
+        stage_log: dict = {"stages": {}}
+        _, _, _, campaign = await dm._stage3_insight_generation([], stage_log)
+
+        assert campaign == []
+        assert stage_log["stages"]["3d_campaign_reflection"]["campaign_insights"] == 0
+
+    # ── Stage 6: Price Conflict Check ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage6_handles_import_error(self, dream):
+        dm, _, _, _, _ = dream
+        stage_log: dict = {"stages": {}}
+
+        with patch.dict("sys.modules", {"ira.brain.pricing_learner": None}):
+            await dm._stage6_price_conflict_check(stage_log)
+
+        assert stage_log["stages"]["6_price_conflict"]["status"] in ("skipped", "error")
+
+    # ── Stage 9: Follow-up Automation ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage9_detects_stale_deals(self, dream):
+        dm, mock_crm, _, _, _ = dream
+
+        old_date = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        mock_crm.list_deals = AsyncMock(return_value=[
+            MagicMock(updated_at=old_date),
+            MagicMock(updated_at=datetime.now(timezone.utc).isoformat()),
+        ])
+
+        stage_log: dict = {"stages": {}}
+        await dm._stage9_follow_up_automation(stage_log)
+
+        assert stage_log["stages"]["9_follow_up"]["status"] == "ok"
+        assert stage_log["stages"]["9_follow_up"]["stale_deals"] == 1
+
+    @pytest.mark.asyncio
+    async def test_stage9_skips_without_crm(self, tmp_path):
+        from ira.memory.dream_mode import DreamMode
+
+        db = str(tmp_path / "no_crm_s9.db")
+        with (
+            patch("ira.memory.dream_mode.get_settings", return_value=_make_settings_mock()),
+            patch("ira.memory.dream_mode.get_llm_client", return_value=_mock_llm_client()),
+        ):
+            dm = DreamMode(
+                long_term=AsyncMock(), episodic=AsyncMock(), conversation=AsyncMock(),
+                crm=None, db_path=db,
+            )
+        await dm.initialize()
+
+        stage_log: dict = {"stages": {}}
+        await dm._stage9_follow_up_automation(stage_log)
+
+        assert stage_log["stages"]["9_follow_up"]["status"] == "skipped"
+        await dm.close()
+
+    # ── Stage 10: Morning Summary ────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_stage10_skips_without_telegram(self, dream):
+        dm, _, _, _, _ = dream
+
+        mock_settings = _make_settings_mock()
+        mock_settings.telegram.bot_token.get_secret_value.return_value = ""
+        mock_settings.telegram.admin_chat_id = ""
+
+        with patch("ira.memory.dream_mode.get_settings", return_value=mock_settings):
+            stage_log: dict = {"stages": {}}
+            await dm._stage10_morning_summary(stage_log, 5, [], [], [])
+
+        assert stage_log["stages"]["10_morning_summary"]["status"] == "skipped"
+
+    @pytest.mark.asyncio
+    async def test_stage10_includes_failed_stages(self, dream):
+        dm, _, _, _, _ = dream
+
+        mock_settings = _make_settings_mock()
+        with (
+            patch("ira.memory.dream_mode.get_settings", return_value=mock_settings),
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+        ):
+            mock_post.return_value = MagicMock(status_code=200)
+            stage_log: dict = {"stages": {"1_memory_ingestion": {"status": "error"}}}
+            await dm._stage10_morning_summary(stage_log, 0, [], [], [])
+
+        if mock_post.called:
+            body = mock_post.call_args[1]["json"]["text"]
+            assert "FAILED stages" in body
+            assert "1_memory_ingestion" in body
+
+    # ── Report persistence ───────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_persist_and_retrieve_report(self, dream):
+        from ira.data.models import DreamReport
+        from datetime import date
+
+        dm, _, _, _, _ = dream
+
+        report = DreamReport(
+            cycle_date=date.today(),
+            memories_consolidated=42,
+            gaps_identified=["gap1"],
+            creative_connections=["conn1"],
+            campaign_insights=["insight1"],
+            stage_results={"1_memory_ingestion": "ok", "2_episodic": "error"},
+        )
+        await dm._persist_report(report)
+
+        reports = await dm.get_dream_reports(limit=1)
+        assert len(reports) == 1
+        assert reports[0].memories_consolidated == 42
+        assert reports[0].gaps_identified == ["gap1"]
+        assert reports[0].stage_results == {"1_memory_ingestion": "ok", "2_episodic": "error"}
+
+    # ── stage_results in report ──────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_full_cycle_report_includes_stage_results(self, dream):
+        dm, mock_crm, mock_procedural, _, _ = dream
+
+        mock_crm.list_interactions = AsyncMock(return_value=[])
+
+        _model_responses = {
+            DreamInsight: DreamInsight(),
+            DreamGaps: DreamGaps(),
+            DreamCreative: DreamCreative(),
+            DreamCampaignInsights: DreamCampaignInsights(),
+            DreamProcedures: DreamProcedures(),
+            DreamPrune: DreamPrune(),
+        }
+
+        async def mock_generate_structured(system, user, model_cls, **kwargs):
+            return _model_responses.get(model_cls, model_cls())
+
+        dm._llm.generate_structured = AsyncMock(side_effect=mock_generate_structured)
+
+        report = await dm.run_dream_cycle()
+
+        assert isinstance(report.stage_results, dict)
+        assert len(report.stage_results) > 0
+        for status in report.stage_results.values():
+            assert status in ("ok", "error", "skipped")

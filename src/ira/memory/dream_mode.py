@@ -1,13 +1,24 @@
 """Dream mode — nightly memory consolidation, gap detection, and creative synthesis.
 
-Implements a 5-stage dream cycle:
-  1. Memory Ingestion — pull recent interactions from the CRM.
-  2. Episodic Consolidation — group related interactions into narrative episodes.
-  3. Insight Generation — LLM-driven pattern/contradiction detection across episodes.
-  4. Procedural Learning — turn repeatable successful patterns into procedures.
-  5. Memory Pruning — archive or summarise older, less-relevant memories.
+Implements an 11-stage dream cycle:
+  0.   Deferred Ingestion — ingest files accessed via Alexandros fallback.
+  0.5  Sleep Training — run Nemesis corrections on pending items.
+  1.   Memory Ingestion — pull recent interactions from the CRM.
+  2.   Episodic Consolidation — group related interactions into narrative episodes.
+  3a.  Cross-episode Insights — LLM-driven pattern/contradiction detection.
+  3b.  Gap Detection — identify knowledge gaps from metacognition table.
+  3c.  Creative Synthesis — connect gaps and episodes for novel insights.
+  3d.  Campaign Reflection — review campaign myokines for marketing insights.
+  3e.  Active Gap Resolution — research and resolve top priority gaps.
+  4.   Procedural Learning — turn repeatable successful patterns into procedures.
+  5.   Memory Pruning — archive or summarise older, less-relevant memories.
+  6.   Price Conflict Check — scan pricing data for inconsistencies.
+  7.   Conversation Quality Review — review retrieval quality via co-access matrix.
+  8.   Graph Consolidation — tune knowledge graph relationships.
+  9.   Follow-up Automation — detect stale quotes for follow-up.
+  10.  Morning Summary — send Telegram summary.
 
-Each cycle is logged to ``dream_log.json`` for auditability.
+Each cycle is logged to ``data/dream_log.json`` for auditability.
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
-_DREAM_LOG_PATH = Path("dream_log.json")
+_DREAM_LOG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data" / "dream_log.json"
 
 _GAP_SYSTEM_PROMPT = load_prompt("dream_gap_analysis")
 
@@ -106,10 +117,17 @@ class DreamMode:
                 gaps_identified TEXT NOT NULL,
                 creative_connections TEXT NOT NULL,
                 campaign_insights TEXT NOT NULL,
+                stage_results TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             )
             """
         )
+        try:
+            await self._db.execute(
+                "ALTER TABLE dream_reports ADD COLUMN stage_results TEXT NOT NULL DEFAULT '{}'"
+            )
+        except Exception:
+            pass
         await self._db.commit()
 
     # ── public API ────────────────────────────────────────────────────────
@@ -151,11 +169,8 @@ class DreamMode:
         # Stage 6 — Price Conflict Check
         price_conflicts = await self._stage6_price_conflict_check(stage_log)
 
-        # Stage 7 — Conversation Quality Review
-        await self._stage7_quality_review(stage_log)
-
-        # Stage 8 — Graph Consolidation
-        await self._stage8_graph_consolidation(stage_log)
+        # Stages 7 & 8 — Quality Review + Graph Consolidation (shared graph)
+        await self._stage7_and_8_graph(stage_log)
 
         # Stage 9 — Follow-up Automation
         await self._stage9_follow_up_automation(stage_log)
@@ -163,12 +178,18 @@ class DreamMode:
         # Stage 10 — Morning Summary (Telegram)
         await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
 
+        stage_results = {
+            name: info.get("status", "unknown")
+            for name, info in stage_log.get("stages", {}).items()
+        }
+
         report = DreamReport(
             cycle_date=date.today(),
             memories_consolidated=memories_consolidated,
             gaps_identified=[g.get("description", "") for g in gaps],
             creative_connections=[c.get("insight", "") for c in connections],
             campaign_insights=campaign_insights,
+            stage_results=stage_results,
         )
 
         await self._persist_report(report)
@@ -200,35 +221,37 @@ class DreamMode:
                 return
 
             ingested = 0
-            for entry in queue:
-                filepath = entry.get("filepath", "")
-                if not filepath or not Path(filepath).exists():
-                    continue
-                try:
-                    if self._retriever is not None:
-                        from ira.brain.document_ingestor import DocumentIngestor
-                        from ira.brain.embeddings import EmbeddingService
-                        from ira.brain.qdrant_manager import QdrantManager
+            if self._retriever is not None:
+                from ira.brain.document_ingestor import DocumentIngestor
+                from ira.brain.embeddings import EmbeddingService
+                from ira.brain.qdrant_manager import QdrantManager
 
-                        embedding = EmbeddingService()
-                        qdrant = QdrantManager(embedding_service=embedding)
-                        await qdrant.ensure_collection()
-                        ingestor = DocumentIngestor(qdrant)
-                        file_info = {
-                            "path": filepath,
-                            "category": entry.get("doc_type", "uncategorised"),
-                            "extension": Path(filepath).suffix.lower(),
-                            "size": Path(filepath).stat().st_size,
-                        }
-                        chunks = await ingestor.ingest_file(file_info, force=True)
-                        if chunks > 0:
-                            await mark_deferred_ingested(filepath)
-                            ingested += 1
-                            logger.info("Deferred ingestion: %s -> %d chunks", entry.get("filename", ""), chunks)
-                        ingestor.close()
-                        await qdrant.close()
-                except (IngestionError, Exception):
-                    logger.exception("Deferred ingestion failed for %s", filepath)
+                embedding = EmbeddingService()
+                qdrant = QdrantManager(embedding_service=embedding)
+                await qdrant.ensure_collection()
+                ingestor = DocumentIngestor(qdrant)
+                try:
+                    for entry in queue:
+                        filepath = entry.get("filepath", "")
+                        if not filepath or not Path(filepath).exists():
+                            continue
+                        try:
+                            file_info = {
+                                "path": filepath,
+                                "category": entry.get("doc_type", "uncategorised"),
+                                "extension": Path(filepath).suffix.lower(),
+                                "size": Path(filepath).stat().st_size,
+                            }
+                            chunks = await ingestor.ingest_file(file_info, force=True)
+                            if chunks > 0:
+                                await mark_deferred_ingested(filepath)
+                                ingested += 1
+                                logger.info("Deferred ingestion: %s -> %d chunks", entry.get("filename", ""), chunks)
+                        except (IngestionError, Exception):
+                            logger.exception("Deferred ingestion failed for %s", filepath)
+                finally:
+                    ingestor.close()
+                    await qdrant.close()
 
             stage_log["stages"]["0_deferred_ingestion"] = {"status": "ok", "files_ingested": ingested}
             logger.info("Stage 0: deferred ingestion complete — %d files", ingested)
@@ -382,6 +405,13 @@ class DreamMode:
         # 3b — Knowledge gap detection (from metacognition table)
         try:
             if self._db is not None:
+                await self._db.execute(
+                    """CREATE TABLE IF NOT EXISTS knowledge_gaps (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query TEXT NOT NULL, state TEXT NOT NULL,
+                        gaps TEXT NOT NULL, created_at TEXT NOT NULL
+                    )"""
+                )
                 cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
                 cursor = await self._db.execute(
                     "SELECT query, gaps FROM knowledge_gaps WHERE created_at >= ?",
@@ -407,13 +437,17 @@ class DreamMode:
         try:
             top_gaps = gaps[:5]
             recent_episodes: list[dict[str, Any]] = []
-            if self._db is not None:
-                cursor = await self._db.execute(
-                    "SELECT narrative, created_at FROM episodes ORDER BY created_at DESC LIMIT 5"
-                )
-                ep_rows = await cursor.fetchall()
-                await cursor.close()
-                recent_episodes = [{"narrative": r[0], "created_at": r[1]} for r in ep_rows]
+            ep_db = getattr(self._episodic, "_db", None) or self._db
+            if ep_db is not None:
+                try:
+                    cursor = await ep_db.execute(
+                        "SELECT narrative, created_at FROM episodes ORDER BY created_at DESC LIMIT 5"
+                    )
+                    ep_rows = await cursor.fetchall()
+                    await cursor.close()
+                    recent_episodes = [{"narrative": r[0], "created_at": r[1]} for r in ep_rows]
+                except Exception:
+                    logger.debug("Stage 3c: episodes table not available")
 
             context_parts = []
             if top_gaps:
@@ -530,7 +564,8 @@ class DreamMode:
 
             recommendations = insights.get("recommendations", [])
             high_confidence = [
-                r for r in recommendations if r.get("priority") == "HIGH"
+                r for r in recommendations
+                if (r.get("priority") if isinstance(r, dict) else getattr(r, "priority", "")) == "HIGH"
             ]
 
             if not high_confidence and not episodes:
@@ -540,11 +575,14 @@ class DreamMode:
                 }
                 return
 
-            # Ask LLM to derive procedures from insights + episodes
             context_parts = []
             if high_confidence:
+                serializable = [
+                    r.model_dump() if hasattr(r, "model_dump") else r
+                    for r in high_confidence
+                ]
                 context_parts.append(
-                    "High-priority recommendations:\n" + json.dumps(high_confidence, indent=2)
+                    "High-priority recommendations:\n" + json.dumps(serializable, indent=2)
                 )
             if episodes:
                 episode_summaries = [
@@ -656,8 +694,8 @@ class DreamMode:
             """
             INSERT OR REPLACE INTO dream_reports
             (cycle_date, memories_consolidated, gaps_identified, creative_connections,
-             campaign_insights, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+             campaign_insights, stage_results, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.cycle_date.isoformat(),
@@ -665,6 +703,7 @@ class DreamMode:
                 json.dumps(report.gaps_identified),
                 json.dumps(report.creative_connections),
                 json.dumps(report.campaign_insights),
+                json.dumps(report.stage_results),
                 now,
             ),
         )
@@ -739,47 +778,39 @@ class DreamMode:
             stage_log["stages"]["6_price_conflict"] = {"status": "error"}
         return conflicts
 
-    # ── Stage 7: Conversation Quality Review ───────────────────────────
+    # ── Stages 7 & 8: Quality Review + Graph Consolidation (shared graph) ──
 
-    async def _stage7_quality_review(self, stage_log: dict[str, Any]) -> None:
-        """Review recent retrieval quality and identify knowledge gaps."""
+    async def _stage7_and_8_graph(self, stage_log: dict[str, Any]) -> None:
+        """Quality review and graph consolidation using a single KnowledgeGraph."""
         try:
             from ira.brain.graph_consolidation import GraphConsolidation
             from ira.brain.knowledge_graph import KnowledgeGraph
 
             graph = KnowledgeGraph()
             gc = GraphConsolidation(knowledge_graph=graph)
-            co_access = await gc.build_co_access_matrix()
-            stage_log["stages"]["7_quality_review"] = {
-                "status": "ok",
-                "retrieval_pairs_analyzed": len(co_access),
-            }
+            try:
+                co_access = await gc.build_co_access_matrix()
+                stage_log["stages"]["7_quality_review"] = {
+                    "status": "ok",
+                    "retrieval_pairs_analyzed": len(co_access),
+                }
+            except (DatabaseError, Exception):
+                logger.exception("Dream Stage 7 (quality review) failed")
+                stage_log["stages"]["7_quality_review"] = {"status": "error"}
+
+            try:
+                stats = await gc.run_consolidation()
+                stats.pop("status", None)
+                stage_log["stages"]["8_graph_consolidation"] = {"status": "ok", **stats}
+                logger.info("Stage 8: graph consolidation — %s", stats)
+            except (DatabaseError, Exception):
+                logger.exception("Dream Stage 8 (graph consolidation) failed")
+                stage_log["stages"]["8_graph_consolidation"] = {"status": "error"}
+
             await graph.close()
         except ImportError:
             stage_log["stages"]["7_quality_review"] = {"status": "skipped"}
-        except (DatabaseError, Exception):
-            logger.exception("Dream Stage 7 (quality review) failed")
-            stage_log["stages"]["7_quality_review"] = {"status": "error"}
-
-    # ── Stage 8: Graph Consolidation ───────────────────────────────────
-
-    async def _stage8_graph_consolidation(self, stage_log: dict[str, Any]) -> None:
-        """Tune knowledge graph relationships based on usage patterns."""
-        try:
-            from ira.brain.graph_consolidation import GraphConsolidation
-            from ira.brain.knowledge_graph import KnowledgeGraph
-
-            graph = KnowledgeGraph()
-            gc = GraphConsolidation(knowledge_graph=graph)
-            stats = await gc.run_consolidation()
-            stage_log["stages"]["8_graph_consolidation"] = {"status": "ok", **stats}
-            logger.info("Stage 8: graph consolidation — %s", stats)
-            await graph.close()
-        except ImportError:
             stage_log["stages"]["8_graph_consolidation"] = {"status": "skipped"}
-        except (DatabaseError, Exception):
-            logger.exception("Dream Stage 8 (graph consolidation) failed")
-            stage_log["stages"]["8_graph_consolidation"] = {"status": "error"}
 
     # ── Stage 9: Follow-up Automation ──────────────────────────────────
 
@@ -831,8 +862,13 @@ class DreamMode:
             deferred = stage_log.get("stages", {}).get("0_deferred_ingestion", {}).get("files_ingested", 0)
             sleep_training = stage_log.get("stages", {}).get("0_5_sleep_training", {}).get("corrections", 0)
 
+            failed_stages = [
+                name for name, info in stage_log.get("stages", {}).items()
+                if info.get("status") == "error"
+            ]
+
             lines = [
-                f"Good morning! Dream cycle complete.",
+                "Good morning! Dream cycle complete.",
                 f"- Memories consolidated: {memories_consolidated}",
                 f"- Knowledge gaps found: {len(gaps)}",
                 f"- Creative connections: {len(connections)}",
@@ -840,6 +876,8 @@ class DreamMode:
                 f"- Files ingested (deferred): {deferred}",
                 f"- Corrections trained: {sleep_training}",
             ]
+            if failed_stages:
+                lines.append(f"- FAILED stages: {', '.join(failed_stages)}")
             message = "\n".join(lines)
 
             async with httpx.AsyncClient(timeout=15) as client:
@@ -862,6 +900,7 @@ class DreamMode:
             "gaps_identified": report.gaps_identified,
             "creative_connections": report.creative_connections,
             "campaign_insights": report.campaign_insights,
+            "stage_results": report.stage_results,
             "stages": stage_log.get("stages", {}),
         }
 
@@ -875,6 +914,11 @@ class DreamMode:
                 existing = []
 
         existing.append(entry)
+        if len(existing) > 450:
+            logger.warning(
+                "Dream log has %d entries (cap=500). Oldest entries will be dropped.",
+                len(existing),
+            )
         existing = existing[-500:]
         try:
             self._dream_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -892,7 +936,7 @@ class DreamMode:
         cursor = await self._db.execute(
             """
             SELECT cycle_date, memories_consolidated, gaps_identified,
-                   creative_connections, campaign_insights
+                   creative_connections, campaign_insights, stage_results
             FROM dream_reports
             ORDER BY cycle_date DESC
             LIMIT ?
@@ -910,6 +954,7 @@ class DreamMode:
             gaps_val = json.loads(r[2]) if isinstance(r[2], str) else r[2] or []
             creative = json.loads(r[3]) if isinstance(r[3], str) else r[3] or []
             campaign = json.loads(r[4]) if isinstance(r[4], str) else r[4] or []
+            stages = json.loads(r[5]) if isinstance(r[5], str) and r[5] else {}
             reports.append(
                 DreamReport(
                     cycle_date=cycle_dt,
@@ -917,6 +962,7 @@ class DreamMode:
                     gaps_identified=gaps_val,
                     creative_connections=creative,
                     campaign_insights=campaign,
+                    stage_results=stages,
                 )
             )
         return reports
@@ -933,3 +979,77 @@ class DreamMode:
 
     async def __aexit__(self, *exc: Any) -> None:
         await self.close()
+
+
+# ── Factory ───────────────────────────────────────────────────────────────
+
+
+async def build_dream_mode(
+    *,
+    crm: Any | None = None,
+    procedural_memory: Any | None = None,
+    data_event_bus: Any | None = None,
+    db_path: str = "conversations.db",
+    dream_log_path: str | Path | None = None,
+) -> DreamMode:
+    """Build a fully-wired DreamMode instance with all optional dependencies.
+
+    Shared by CLI, nap script, and anywhere else that needs a standalone
+    DreamMode outside the server lifespan.  The server bootstrap wires
+    dependencies itself and does not use this factory.
+    """
+    from ira.brain.embeddings import EmbeddingService
+    from ira.brain.knowledge_graph import KnowledgeGraph
+    from ira.brain.qdrant_manager import QdrantManager
+    from ira.brain.retriever import UnifiedRetriever
+    from ira.systems.musculoskeletal import MusculoskeletalSystem
+
+    embedding = EmbeddingService()
+    qdrant = QdrantManager(embedding_service=embedding)
+    graph = KnowledgeGraph()
+    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph)
+
+    long_term = LongTermMemory()
+    episodic = EpisodicMemory(long_term=long_term)
+    await episodic.initialize()
+    conversation = ConversationMemory()
+    await conversation.initialize()
+    musculoskeletal = MusculoskeletalSystem()
+    try:
+        await musculoskeletal.create_tables()
+    except Exception:
+        logger.debug("MusculoskeletalSystem table creation failed — continuing", exc_info=True)
+        musculoskeletal = None  # type: ignore[assignment]
+
+    if crm is None:
+        try:
+            from ira.data.crm import CRMDatabase
+            crm = CRMDatabase()
+            await crm.create_tables()
+        except Exception:
+            logger.debug("CRM not available for dream mode", exc_info=True)
+            crm = None
+
+    if procedural_memory is None:
+        try:
+            from ira.memory.procedural import ProceduralMemory
+            procedural_memory = ProceduralMemory()
+            await procedural_memory.initialize()
+        except Exception:
+            logger.debug("ProceduralMemory not available for dream mode", exc_info=True)
+            procedural_memory = None
+
+    dm = DreamMode(
+        long_term=long_term,
+        episodic=episodic,
+        conversation=conversation,
+        musculoskeletal=musculoskeletal,
+        retriever=retriever,
+        crm=crm,
+        procedural_memory=procedural_memory,
+        data_event_bus=data_event_bus,
+        db_path=db_path,
+        dream_log_path=dream_log_path,
+    )
+    await dm.initialize()
+    return dm

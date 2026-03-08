@@ -1036,6 +1036,7 @@ async def dream_report() -> dict[str, Any]:
         "gaps_identified": report.gaps_identified,
         "creative_connections": report.creative_connections,
         "campaign_insights": report.campaign_insights,
+        "stage_results": report.stage_results,
     }
 
 
