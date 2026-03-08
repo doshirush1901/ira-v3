@@ -2463,3 +2463,78 @@ def list_agents() -> None:
 
     console.print(table)
     console.print(f"\n[dim]{len(pantheon.agents)} agents registered.[/dim]")
+
+
+# ── Audit commands ────────────────────────────────────────────────────────
+
+audit_app = typer.Typer(help="Audit and evaluation commands.")
+app.add_typer(audit_app, name="audit")
+
+
+@audit_app.command("knowledge")
+def audit_knowledge(
+    limit: int = typer.Option(20, help="Max unresolved gaps to show"),
+) -> None:
+    """Audit knowledge gaps — show unresolved gaps and eval dataset scores."""
+
+    async def _run() -> None:
+        from ira.memory.metacognition import Metacognition
+
+        console.print(Panel("[bold]Ira Knowledge Audit[/bold]", style="blue"))
+
+        # 1. Unresolved gaps
+        console.print("\n[bold cyan]Unresolved Knowledge Gaps[/bold cyan]\n")
+        try:
+            meta = Metacognition()
+            await meta.initialize()
+            gaps = await meta.get_unresolved_gaps(limit=limit)
+            await meta.close()
+
+            if not gaps:
+                console.print("[green]No unresolved gaps found.[/green]")
+            else:
+                gap_table = Table(title=f"{len(gaps)} Unresolved Gaps")
+                gap_table.add_column("#", style="dim", width=4)
+                gap_table.add_column("Query", width=50)
+                gap_table.add_column("State", width=12)
+                gap_table.add_column("Date", width=20)
+                for i, g in enumerate(gaps, 1):
+                    gap_table.add_row(
+                        str(g["id"]),
+                        g["query"][:50],
+                        g["state"],
+                        g["created_at"][:19],
+                    )
+                console.print(gap_table)
+        except (IraError, Exception) as exc:
+            console.print(f"[red]Could not read gaps: {exc}[/red]")
+
+        # 2. Eval dataset summary
+        console.print("\n[bold cyan]Eval Dataset Summary[/bold cyan]\n")
+        try:
+            import json as _json
+            eval_path = Path(__file__).resolve().parents[3] / "tests" / "eval_dataset.json"
+            if eval_path.exists():
+                data = _json.loads(eval_path.read_text())
+                questions = data.get("questions", [])
+                categories: dict[str, int] = {}
+                for q in questions:
+                    cat = q.get("category", "uncategorized")
+                    categories[cat] = categories.get(cat, 0) + 1
+
+                eval_table = Table(title=f"{len(questions)} Eval Questions")
+                eval_table.add_column("Category", style="cyan")
+                eval_table.add_column("Count", style="green", justify="right")
+                for cat, count in sorted(categories.items()):
+                    eval_table.add_row(cat, str(count))
+                console.print(eval_table)
+                console.print(
+                    f"\n[dim]Run 'poetry run pytest tests/test_eval.py -v' "
+                    f"for full RAGAS scores.[/dim]"
+                )
+            else:
+                console.print("[yellow]tests/eval_dataset.json not found.[/yellow]")
+        except (IraError, Exception) as exc:
+            console.print(f"[red]Could not read eval dataset: {exc}[/red]")
+
+    asyncio.run(_run())
