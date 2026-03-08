@@ -172,6 +172,7 @@ class LLMClient:
         resolved_model = model or self._anthropic_model
 
         backoff = _RETRY_BACKOFF
+        last_exc: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 return await self._anthropic_instructor.messages.create(
@@ -185,6 +186,7 @@ class LLMClient:
                     messages=[{"role": "user", "content": user[:12_000]}],
                 )
             except Exception as exc:
+                last_exc = exc
                 status = getattr(getattr(exc, "response", None), "status_code", None)
                 if status in (429, 402):
                     logger.warning("Anthropic %d — quota/rate limit", status)
@@ -200,6 +202,8 @@ class LLMClient:
                     await asyncio.sleep(backoff)
                     backoff *= 2
 
+        if last_exc:
+            logger.error("Anthropic structured call failed: %s", last_exc)
         return response_model()
 
     # ── plain text output ─────────────────────────────────────────────────

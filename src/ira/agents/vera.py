@@ -3,7 +3,8 @@
 Verifies claims and statements against the knowledge base,
 flagging inaccuracies and providing corrections.
 Now operates via the ReAct loop with knowledge-search,
-external-verification, and Guardrails-based validation tools.
+external-verification, and Guardrails-based validation tools
+including competitor detection and confidentiality checks.
 """
 
 from __future__ import annotations
@@ -62,14 +63,39 @@ class Vera(BaseAgent):
         self.register_tool(AgentTool(
             name="check_faithfulness",
             description=(
-                "Check whether a response is faithful to its source context. "
-                "Detects unsupported claims and hallucinations."
+                "Check whether a response is faithful to its source context using "
+                "LLM-based entailment verification. Detects unsupported claims "
+                "and hallucinations with semantic understanding."
             ),
             parameters={
                 "response": "The response text to check",
                 "context": "The source context documents (pipe-separated if multiple)",
             },
             handler=self._tool_check_faithfulness,
+        ))
+
+        self.register_tool(AgentTool(
+            name="check_competitors",
+            description=(
+                "Check whether a response mentions or praises competitors. "
+                "Flags competitor names with surrounding context for review."
+            ),
+            parameters={"text": "The text to check for competitor mentions"},
+            handler=self._tool_check_competitors,
+        ))
+
+        self.register_tool(AgentTool(
+            name="check_confidentiality",
+            description=(
+                "Check whether a response leaks confidential internal data such as "
+                "margins, cost prices, salaries, or vendor pricing. Use for any "
+                "response that will be sent externally."
+            ),
+            parameters={
+                "text": "The text to check for confidential data",
+                "direction": "Target audience: 'external' (strict) or 'internal' (lenient)",
+            },
+            handler=self._tool_check_confidentiality,
         ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
@@ -110,3 +136,21 @@ class Vera(BaseAgent):
             return json.dumps(result, default=str)
         except Exception as exc:
             return f"Faithfulness check error: {exc}"
+
+    async def _tool_check_competitors(self, text: str) -> str:
+        try:
+            from ira.brain.guardrails import check_competitor_mentions
+            result = await check_competitor_mentions(text)
+            return json.dumps(result, default=str)
+        except Exception as exc:
+            return f"Competitor check error: {exc}"
+
+    async def _tool_check_confidentiality(
+        self, text: str, direction: str = "external"
+    ) -> str:
+        try:
+            from ira.brain.guardrails import check_confidentiality
+            result = await check_confidentiality(text, direction=direction)
+            return json.dumps(result, default=str)
+        except Exception as exc:
+            return f"Confidentiality check error: {exc}"

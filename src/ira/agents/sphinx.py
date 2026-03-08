@@ -13,6 +13,7 @@ from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import ClarityAssessment
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,25 @@ class Sphinx(BaseAgent):
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
+
+    async def assess_clarity(self, query: str) -> ClarityAssessment:
+        """Structured clarity check used by the task orchestrator.
+
+        Unlike ``handle()`` (which returns ``[CLEAR]``/``[CLARIFY]`` tagged
+        text via the ReAct loop), this method returns a validated Pydantic
+        model suitable for programmatic branching.
+        """
+        return await self._llm.generate_structured(
+            _SYSTEM_PROMPT,
+            (
+                f"Assess whether this request is clear enough to act on: {query}\n\n"
+                "If it IS clear, set clear=true. "
+                "If it is NOT clear, set clear=false, explain why in ambiguity_reason, "
+                "and provide 2-3 specific clarifying questions."
+            ),
+            ClarityAssessment,
+            name="sphinx.assess_clarity",
+        )
 
     async def _tool_analyze_query(self, query: str) -> str:
         return await self.call_llm(

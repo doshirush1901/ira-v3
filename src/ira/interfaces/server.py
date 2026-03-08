@@ -90,6 +90,18 @@ class EmailDraftRequest(BaseModel):
     tone: str = "professional"
 
 
+class TaskRequest(BaseModel):
+    goal: str
+    user_id: str | None = None
+    output_format: str = "markdown"
+
+
+class TaskClarificationRequest(BaseModel):
+    task_id: str
+    answer: str
+    user_id: str | None = None
+
+
 # ── Service registry ──────────────────────────────────────────────────────
 #
 # Populated during the lifespan startup phase and cleared on shutdown.
@@ -452,6 +464,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         redis_cache=redis_cache,
     )
     _services["pipeline"] = request_pipeline
+
+    # ── Task orchestrator ────────────────────────────────────────────
+    from ira.systems.task_orchestrator import TaskOrchestrator
+
+    task_orchestrator = TaskOrchestrator(
+        pantheon=pantheon,
+        redis_cache=redis_cache,
+        voice=voice,
+        pdfco=pdfco,
+    )
+    _services["task_orchestrator"] = task_orchestrator
 
     # ── Board meeting system ──────────────────────────────────────────
     from ira.systems.board_meeting import BoardMeeting
@@ -1118,3 +1141,138 @@ async def create_payable(req: dict[str, Any]) -> dict[str, Any]:
     vdb = _svc(SK.VENDOR_DB)
     payable = await vdb.create_payable(**req)
     return payable.to_dict()
+
+
+# ── Task orchestration endpoints ─────────────────────────────────────────
+
+
+@app.post("/api/task/stream")
+async def task_stream(req: TaskRequest) -> EventSourceResponse:
+    """Start a multi-phase task and stream progress via SSE.
+
+    Emits events: ``task_created``, ``clarity_checking``,
+    ``clarification_needed``, ``plan_created``, ``phase_started``,
+    ``phase_done``, ``report_generating``, ``report_ready``,
+    ``task_complete``, and ``task_error``.
+
+    If clarification is needed the stream ends after the
+    ``clarification_needed`` event.  Resume via ``/api/task/clarify``.
+    """
+    orchestrator = _svc("task_orchestrator")
+
+    async def _event_generator() -> AsyncIterator[dict[str, str]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def _on_progress(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        task_id = await orchestrator.create_task(
+            goal=req.goal,
+            user_id=req.user_id,
+            output_format=req.output_format,
+        )
+
+        async def _run() -> Any:
+            return await orchestrator.run_task(task_id, on_progress=_on_progress)
+
+        task = asyncio.create_task(_run())
+
+        while not task.done():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield {
+                    "event": event.get("type", "progress"),
+                    "data": _json.dumps(event, default=str),
+                }
+            except asyncio.TimeoutError:
+                continue
+
+        while not queue.empty():
+            event = queue.get_nowait()
+            yield {
+                "event": event.get("type", "progress"),
+                "data": _json.dumps(event, default=str),
+            }
+
+        try:
+            result = task.result()
+            yield {
+                "event": "task_result",
+                "data": _json.dumps({
+                    "task_id": result.task_id,
+                    "status": result.status,
+                    "summary": result.summary,
+                    "file_path": result.file_path,
+                    "file_format": result.file_format,
+                    "clarification_questions": result.clarification_questions,
+                }, default=str),
+            }
+        except Exception as exc:
+            logger.exception("Task stream failed")
+            yield {
+                "event": "task_error",
+                "data": _json.dumps({"error": str(exc)}),
+            }
+
+    return EventSourceResponse(_event_generator())
+
+
+@app.post("/api/task/clarify")
+async def task_clarify(req: TaskClarificationRequest) -> EventSourceResponse:
+    """Resume a task with a clarification answer, streaming progress via SSE.
+
+    Call this after receiving a ``clarification_needed`` event from
+    ``/api/task/stream``.  Pass the ``task_id`` and the user's answer.
+    """
+    orchestrator = _svc("task_orchestrator")
+
+    async def _event_generator() -> AsyncIterator[dict[str, str]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def _on_progress(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        async def _run() -> Any:
+            return await orchestrator.resume_with_clarification(
+                task_id=req.task_id,
+                answer=req.answer,
+                on_progress=_on_progress,
+            )
+
+        task = asyncio.create_task(_run())
+
+        while not task.done():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield {
+                    "event": event.get("type", "progress"),
+                    "data": _json.dumps(event, default=str),
+                }
+            except asyncio.TimeoutError:
+                continue
+
+        while not queue.empty():
+            event = queue.get_nowait()
+            yield {
+                "event": event.get("type", "progress"),
+                "data": _json.dumps(event, default=str),
+            }
+
+        try:
+            result = task.result()
+            yield {
+                "event": "task_result",
+                "data": _json.dumps({
+                    "task_id": result.task_id,
+                    "status": result.status,
+                    "summary": result.summary,
+                    "file_path": result.file_path,
+                    "file_format": result.file_format,
+                }, default=str),
+            }
+        except Exception as exc:
+            logger.exception("Task clarify stream failed")
+            yield {
+                "event": "task_error",
+                "data": _json.dumps({"error": str(exc)}),
+            }

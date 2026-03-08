@@ -1,0 +1,89 @@
+---
+description: Agent loop for complex Ira tasks — research, analysis, proposals, reports. Use when the user asks Ira to perform multi-step work, not simple questions.
+globs: 
+alwaysApply: false
+---
+
+# Ira Task Loop (Multi-Phase Agent Orchestration)
+
+When the user asks Ira to perform a complex, multi-step task — research, analysis, proposals, deal reviews, reports — use the Task Loop endpoints instead of a single `/api/query` call. The server orchestrates the full plan-execute-report cycle; Cursor acts as the presentation layer.
+
+## When to Use This
+
+Use the Task Loop when the user's request implies **multiple agents or a deliverable**:
+- "Do a full analysis of the Acme deal and draft a proposal"
+- "Research our PF1 lead times and write a report"
+- "Prepare a board briefing on Q1 pipeline"
+- "Investigate the quality issues on Project X and recommend fixes"
+
+Do **NOT** use the Task Loop for simple questions — use `/api/query/stream` instead:
+- "What's the lead time for a PF1?"
+- "Show me the sales pipeline"
+- "Who is our contact at Acme?"
+
+## Step 1: Start the Task
+
+POST to the streaming task endpoint:
+
+```bash
+curl -s -N -X POST http://localhost:8000/api/task/stream \
+  -H "Content-Type: application/json" \
+  -d '{"goal": "<user request>", "user_id": "rushabh_doshi", "output_format": "markdown"}'
+```
+
+Set `output_format` to `"pdf"` if the user explicitly asks for a PDF.
+
+## Step 2: Handle Clarification
+
+If the SSE stream emits a `clarification_needed` event:
+
+1. **Stop processing the stream.** The stream will end shortly after this event.
+2. **Present the questions** from the event's `questions` array to the user.
+3. **Wait for the user to reply.**
+4. **Resume the task** with their answer:
+
+```bash
+curl -s -N -X POST http://localhost:8000/api/task/clarify \
+  -H "Content-Type: application/json" \
+  -d '{"task_id": "<task_id from the task_created event>", "answer": "<user answer>"}'
+```
+
+This returns a new SSE stream with the remaining phases.
+
+## Step 3: Show Progress
+
+As SSE events arrive, display progress to the user:
+
+- `event: task_created` — "Task created, analyzing request..."
+- `event: clarity_checking` — "Checking if the request is clear..."
+- `event: planning` — "Creating execution plan..."
+- `event: plan_created` — Show the plan: "Here's the plan: Phase 1 (Clio): Research... Phase 2 (Prometheus): Analyze..."
+- `event: phase_started` — "Phase N: <agent> is working on <title>..."
+- `event: phase_done` — "Phase N complete."
+- `event: report_generating` — "Calliope is formatting the final report..."
+- `event: report_ready` — "Report saved to <file_path>."
+- `event: task_complete` — "Task complete."
+- `event: task_error` — Report the error to the user.
+
+The `task_result` event at the end contains the final summary with `file_path`.
+
+## Step 4: Deliver the Report
+
+When the `report_ready` event arrives:
+
+1. Read the file at the `file_path` from the event payload.
+2. Present the report content to the user as formatted Markdown.
+3. Mention the file path so they can find it later.
+
+## Fallback
+
+If the task stream errors or the connection is refused:
+- Fall back to a regular `/api/query/stream` call with the same goal.
+- Tell the user the task loop is unavailable and you're using the standard query path.
+
+## Important Rules
+
+- **Never fabricate task results.** Always execute the curl commands and return real output.
+- **Always capture the `task_id`** from the first `task_created` event — you need it for clarification.
+- **Show the plan to the user** when `plan_created` arrives, before execution begins.
+- If API_SECRET_KEY is set in .env, add `-H "Authorization: Bearer <key>"` to all curl commands.

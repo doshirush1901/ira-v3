@@ -36,12 +36,13 @@ _shared_services: dict[str, Any] = {}
 _pipeline: Any = None
 _retriever: Any = None
 _crm: Any = None
+_ingestor: Any = None
 _initialized = False
 
 
 async def _ensure_initialized() -> None:
     """Lazy-init the Ira subsystems on first tool call."""
-    global _pantheon, _shared_services, _pipeline, _retriever, _crm, _initialized
+    global _pantheon, _shared_services, _pipeline, _retriever, _crm, _ingestor, _initialized
     if _initialized:
         return
 
@@ -53,6 +54,11 @@ async def _ensure_initialized() -> None:
     _crm = _shared_services.get(SK.CRM)
 
     _pipeline, _ = await _build_pipeline(_pantheon, _shared_services)
+
+    digestive = _shared_services.get(SK.DIGESTIVE)
+    if digestive and hasattr(digestive, "_ingestor"):
+        _ingestor = digestive._ingestor
+
     _initialized = True
     logger.info("Ira MCP server initialized")
 
@@ -70,12 +76,15 @@ async def query_ira(question: str) -> str:
         return "Ira pipeline not available."
 
     try:
-        result = await _pipeline.process(
-            query=question,
-            user_id="mcp_user",
+        response, agents_used = await _pipeline.process_request(
+            raw_input=question,
             channel="mcp",
+            sender_id="mcp_user",
         )
-        return result.get("response", "(No response)")
+        suffix = ""
+        if agents_used:
+            suffix = f"\n\n[Agents consulted: {', '.join(agents_used)}]"
+        return response + suffix
     except Exception as exc:
         logger.exception("MCP query_ira failed")
         return f"Error: {exc}"
@@ -120,18 +129,32 @@ async def search_crm(query: str) -> str:
         return "CRM not available."
 
     try:
-        contacts = await _crm.search_contacts(query, limit=5)
-        companies = await _crm.search_companies(query, limit=5)
-        return json.dumps({
-            "contacts": [
-                {"name": c.name, "email": c.email, "company": c.company_name, "role": c.role}
-                for c in contacts
-            ],
-            "companies": [
-                {"name": co.name, "region": co.region, "industry": co.industry}
-                for co in companies
-            ],
-        }, indent=2, default=str)
+        contact_dicts = await _crm.search_contacts(query)
+        contacts = [
+            {
+                "name": c.get("name", ""),
+                "email": c.get("email", ""),
+                "company": c.get("company_name", ""),
+                "role": c.get("role", ""),
+            }
+            for c in contact_dicts[:10]
+        ]
+
+        all_companies = await _crm.list_companies()
+        query_lower = query.lower()
+        companies = [
+            {
+                "name": co.name,
+                "region": co.region or "",
+                "industry": co.industry or "",
+            }
+            for co in all_companies
+            if query_lower in (co.name or "").lower()
+               or query_lower in (co.region or "").lower()
+               or query_lower in (co.industry or "").lower()
+        ][:10]
+
+        return json.dumps({"contacts": contacts, "companies": companies}, indent=2, default=str)
     except Exception as exc:
         logger.exception("MCP search_crm failed")
         return f"Error: {exc}"
@@ -148,7 +171,7 @@ async def get_pipeline_summary() -> str:
         return "CRM not available."
 
     try:
-        summary = await _crm.pipeline_summary()
+        summary = await _crm.get_pipeline_summary()
         return json.dumps(summary, indent=2, default=str)
     except Exception as exc:
         logger.exception("MCP get_pipeline_summary failed")
@@ -190,19 +213,21 @@ async def ingest_document(file_path: str) -> str:
     try:
         from pathlib import Path
 
-        from ira.brain.document_ingestor import DocumentIngestor
-        from ira.brain.embeddings import EmbeddingService
-        from ira.brain.knowledge_graph import KnowledgeGraph
-        from ira.brain.qdrant_manager import QdrantManager
-
-        embedding = EmbeddingService()
-        qdrant = QdrantManager(embedding_service=embedding)
-        graph = KnowledgeGraph()
-        ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
-
         path = Path(file_path)
         if not path.exists():
             return f"File not found: {file_path}"
+
+        ingestor = _ingestor
+        if ingestor is None:
+            from ira.brain.document_ingestor import DocumentIngestor
+            from ira.brain.embeddings import EmbeddingService
+            from ira.brain.knowledge_graph import KnowledgeGraph
+            from ira.brain.qdrant_manager import QdrantManager
+
+            embedding = EmbeddingService()
+            qdrant = QdrantManager(embedding_service=embedding)
+            graph = KnowledgeGraph()
+            ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
 
         file_info = {
             "path": str(path),
@@ -227,7 +252,7 @@ async def get_agent_list() -> str:
 
     try:
         agents = []
-        for name, agent in _pantheon._agents.items():
+        for name, agent in _pantheon.agents.items():
             agents.append({
                 "name": name,
                 "role": getattr(agent, "role", ""),

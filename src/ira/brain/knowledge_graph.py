@@ -571,30 +571,42 @@ class KnowledgeGraph:
             api_key=openai_key,
         )
 
-        extractor = LLMEntityRelationExtractor(llm=llm, schema=schema)
+        extractor = LLMEntityRelationExtractor(
+            llm=llm, create_lexical_graph=False,
+        )
         chunks = TextChunks(chunks=[TextChunk(text=text[:12_000])])
-        graph_result = await extractor.run(chunks=chunks)
+        graph_result = await extractor.run(chunks=chunks, schema=schema)
+
+        _KEY_FIELDS = {
+            "Company": "name",
+            "Person": "email",
+            "Machine": "model",
+            "Quote": "quote_id",
+        }
 
         companies: list[dict[str, Any]] = []
         people: list[dict[str, Any]] = []
         machines: list[dict[str, Any]] = []
         relationships: list[dict[str, Any]] = []
 
+        node_by_id: dict[str, Any] = {}
+        for node in graph_result.nodes:
+            node_by_id[node.id] = node
+
         for node in graph_result.nodes:
             props = node.properties or {}
             label = node.label
-            name = normalize_entity_name(props.get("name", ""))
 
             if label == "Company":
                 companies.append({
-                    "name": name,
+                    "name": normalize_entity_name(props.get("name", "")),
                     "region": props.get("region", ""),
                     "industry": props.get("industry", ""),
                     "website": props.get("website", ""),
                 })
             elif label == "Person":
                 people.append({
-                    "name": name,
+                    "name": props.get("name", ""),
                     "email": props.get("email", ""),
                     "company": "",
                     "role": props.get("role", ""),
@@ -607,16 +619,25 @@ class KnowledgeGraph:
                 })
 
         for rel in graph_result.relationships:
+            start_node = node_by_id.get(rel.start_node_id)
+            end_node = node_by_id.get(rel.end_node_id)
+
+            def _node_key(n: Any) -> str:
+                if n is None:
+                    return ""
+                props = n.properties or {}
+                key_field = _KEY_FIELDS.get(n.label, "name")
+                raw = props.get(key_field, props.get("name", ""))
+                if n.label == "Company":
+                    return normalize_entity_name(raw)
+                return raw
+
             relationships.append({
-                "from_type": rel.start_node.label if rel.start_node else "",
-                "from_key": normalize_entity_name(
-                    (rel.start_node.properties or {}).get("name", "")
-                ) if rel.start_node else "",
+                "from_type": start_node.label if start_node else "",
+                "from_key": _node_key(start_node),
                 "rel": rel.type,
-                "to_type": rel.end_node.label if rel.end_node else "",
-                "to_key": normalize_entity_name(
-                    (rel.end_node.properties or {}).get("name", "")
-                ) if rel.end_node else "",
+                "to_type": end_node.label if end_node else "",
+                "to_key": _node_key(end_node),
             })
 
         return {

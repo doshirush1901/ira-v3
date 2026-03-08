@@ -15,6 +15,7 @@ from typing import Any
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.exceptions import IraError, ToolExecutionError
 from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import TaskPlan
 
 logger = logging.getLogger(__name__)
 
@@ -117,3 +118,36 @@ class Athena(BaseAgent):
             return "System health:\n" + "\n".join(lines)
         except (IraError, Exception) as exc:
             return f"Health check failed: {exc}"
+
+    # ── structured planning (used by TaskOrchestrator) ────────────────────
+
+    async def generate_plan(self, goal: str) -> TaskPlan:
+        """Generate a structured execution plan for a complex task.
+
+        Returns a :class:`TaskPlan` with ordered phases, each assigned to
+        a specialist agent.  Used by the task orchestrator — does not go
+        through the ReAct loop.
+        """
+        pantheon = self._services.get("pantheon")
+        if pantheon is not None:
+            agent_list = "\n".join(
+                f"- {a.name} ({a.role}): {a.description}"
+                for a in pantheon.agents.values()
+                if a.name != "athena"
+            )
+        else:
+            agent_list = "(agent list unavailable)"
+
+        return await self._llm.generate_structured(
+            _SYSTEM_PROMPT,
+            (
+                f"Create a step-by-step execution plan.\n\n"
+                f"Goal: {goal}\n\n"
+                f"Available agents:\n{agent_list}\n\n"
+                "Assign one agent per phase. Order phases logically: "
+                "research before analysis, analysis before writing. "
+                "Return 2-6 phases."
+            ),
+            TaskPlan,
+            name="athena.generate_plan",
+        )

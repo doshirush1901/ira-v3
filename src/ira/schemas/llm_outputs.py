@@ -360,3 +360,25 @@ class ConfidentialityResult(BaseModel):
     safe: bool = True
     leaked_categories: list[str] = Field(default_factory=list)
     flagged_snippets: list[str] = Field(default_factory=list)
+
+
+# ── Task orchestration ────────────────────────────────────────────────────
+
+
+class ClarityAssessment(BaseModel):
+    clear: bool = True
+    ambiguity_reason: str = ""
+    clarifying_questions: list[str] = Field(default_factory=list)
+
+
+class TaskPlanPhase(BaseModel):
+    title: str = ""
+    agent: str = ""
+    description: str = ""
+    depends_on: list[int] = Field(default_factory=list)
+
+
+class TaskPlan(BaseModel):
+    goal: str = ""
+    phases: list[TaskPlanPhase] = Field(default_factory=list)
+    reasoning: str = ""
