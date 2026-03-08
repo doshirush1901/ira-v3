@@ -334,7 +334,8 @@ class UnifiedRetriever:
 
         return await self._flashrank_rerank(query, results, limit)
 
-    _MAX_DOC_CHARS = 8000
+    _MAX_DOC_CHARS = 4000
+    _MAX_RERANK_DOCS = 100
 
     async def _voyage_rerank(
         self,
@@ -352,6 +353,7 @@ class UnifiedRetriever:
         if not filtered:
             return await self._flashrank_rerank(query, results, limit)
 
+        filtered = filtered[:self._MAX_RERANK_DOCS]
         original_indices, documents = zip(*filtered)
 
         async with httpx.AsyncClient(timeout=30) as client:
@@ -361,13 +363,18 @@ class UnifiedRetriever:
                     "query": query,
                     "documents": list(documents),
                     "model": self._voyage_rerank_model,
-                    "top_k": limit,
+                    "top_k": min(limit, len(documents)),
                 },
                 headers={
                     "Authorization": f"Bearer {self._voyage_key}",
                     "Content-Type": "application/json",
                 },
             )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "Voyage rerank returned %d: %s",
+                    resp.status_code, resp.text[:500],
+                )
             resp.raise_for_status()
 
         data = resp.json()
