@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Callable, Awaitable
 
 from ira.agents.alexandros import Alexandros
 from ira.agents.arachne import Arachne
@@ -114,7 +114,12 @@ class Pantheon:
 
     # ── main entry point ─────────────────────────────────────────────────
 
-    async def process(self, query: str, context: dict[str, Any] | None = None) -> str:
+    async def process(
+        self,
+        query: str,
+        context: dict[str, Any] | None = None,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> str:
         """Process a user query and return the final response.
 
         1. Try the deterministic router for a fast-path match.
@@ -125,9 +130,9 @@ class Pantheon:
 
         routing = self._router.route(query)
         if routing:
-            return await self._dispatch_routed(query, routing, ctx)
+            return await self._dispatch_routed(query, routing, ctx, on_progress)
 
-        return await self._dispatch_athena(query, ctx)
+        return await self._dispatch_athena(query, ctx, on_progress)
 
     # ── routing strategies ───────────────────────────────────────────────
 
@@ -136,6 +141,7 @@ class Pantheon:
         query: str,
         routing: dict[str, Any],
         context: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> str:
         """Dispatch to agents selected by the deterministic router."""
         agent_names = routing["required_agents"]
@@ -148,13 +154,20 @@ class Pantheon:
         if len(agent_names) == 1:
             agent = self._agents.get(agent_names[0])
             if agent:
-                return await agent.handle(query, context)
+                if on_progress:
+                    await on_progress({"type": "agent_started", "agent": agent_names[0], "role": getattr(agent, "role", "")})
+                result = await agent.handle(query, context)
+                if on_progress:
+                    await on_progress({"type": "agent_done", "agent": agent_names[0], "preview": result[:200]})
+                return result
 
-        responses = await self._gather_responses(agent_names, query, context)
+        responses = await self._gather_responses(agent_names, query, context, on_progress)
 
         if len(responses) == 1:
             return next(iter(responses.values()))
 
+        if on_progress:
+            await on_progress({"type": "synthesizing", "agent": "athena"})
         return await self._athena.handle(
             query, {"agent_responses": responses},
         )
@@ -163,19 +176,24 @@ class Pantheon:
         self,
         query: str,
         context: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> str:
         """Let Athena decide which agents to consult via LLM."""
         logger.info("LLM routing via Athena")
+        if on_progress:
+            await on_progress({"type": "routing", "agent": "athena"})
         routing_response = await self._athena.handle(query, context)
 
         agent_names = self._parse_agent_list(routing_response)
         if not agent_names:
             return routing_response
 
-        responses = await self._gather_responses(agent_names, query, context)
+        responses = await self._gather_responses(agent_names, query, context, on_progress)
         if len(responses) == 1:
             return next(iter(responses.values()))
 
+        if on_progress:
+            await on_progress({"type": "synthesizing", "agent": "athena"})
         return await self._athena.handle(
             query, {"agent_responses": responses},
         )
@@ -210,27 +228,44 @@ class Pantheon:
 
     # ── helpers ──────────────────────────────────────────────────────────
 
+    _AGENT_TIMEOUT = 60
+
     async def _gather_responses(
         self,
         agent_names: list[str],
         query: str,
         context: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, str]:
-        """Run agents in parallel and collect their responses."""
-        async def _run(name: str) -> tuple[str, str]:
+        """Run agents sequentially and collect their responses.
+
+        Each agent gets a per-agent timeout to prevent runaway execution.
+        An optional *on_progress* callback receives ``agent_started`` and
+        ``agent_done`` events for live streaming.
+        """
+        responses: dict[str, str] = {}
+        for name in agent_names:
             agent = self._agents.get(name)
             if not agent:
-                return name, f"(Agent '{name}' not found)"
+                responses[name] = f"(Agent '{name}' not found)"
+                continue
+            if on_progress:
+                await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
             try:
-                response = await agent.handle(query, context)
-                return name, response
+                response = await asyncio.wait_for(
+                    agent.handle(query, context),
+                    timeout=self._AGENT_TIMEOUT,
+                )
+                responses[name] = response
+            except asyncio.TimeoutError:
+                logger.warning("Agent '%s' timed out after %ds", name, self._AGENT_TIMEOUT)
+                responses[name] = f"(Agent '{name}' timed out after {self._AGENT_TIMEOUT}s)"
             except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed", name)
-                return name, f"(Agent '{name}' encountered an error)"
-
-        tasks = [_run(n) for n in agent_names]
-        results = await asyncio.gather(*tasks)
-        return dict(results)
+                responses[name] = f"(Agent '{name}' encountered an error)"
+            if on_progress:
+                await on_progress({"type": "agent_done", "agent": name, "preview": responses[name][:200]})
+        return responses
 
     def _parse_agent_list(self, routing_response: str) -> list[str]:
         """Try to extract agent names from Athena's routing JSON."""

@@ -6,12 +6,13 @@ and email drafting, then tears everything down gracefully on shutdown.
 
 Run with::
 
-    uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000
+    uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
 """
 
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import time
 
@@ -23,6 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from ira.middleware.auth import require_api_key
 from ira.middleware.request_context import RequestContextMiddleware, RequestIdFilter
@@ -664,6 +666,76 @@ async def query(req: QueryRequest) -> QueryResponse:
     return QueryResponse(response=response, agents_consulted=agents_consulted)
 
 
+@app.post("/api/query/stream")
+async def query_stream(req: QueryRequest) -> EventSourceResponse:
+    """Stream query progress via Server-Sent Events.
+
+    Emits events: ``routing``, ``agent_started``, ``agent_done``,
+    ``synthesizing``, ``final_answer``, and ``error``.
+    """
+    pipeline = _services.get("pipeline")
+    sender_id = req.user_id or "anonymous"
+    channel = (req.context or {}).get("channel", "API").upper()
+    metadata = req.context or {}
+
+    async def _event_generator() -> AsyncIterator[dict[str, str]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        async def _on_progress(event: dict[str, Any]) -> None:
+            await queue.put(event)
+
+        async def _run_pipeline() -> tuple[str, list[str] | None]:
+            if pipeline is not None:
+                return await pipeline.process_request(
+                    raw_input=req.query,
+                    channel=channel,
+                    sender_id=sender_id,
+                    metadata=metadata,
+                    on_progress=_on_progress,
+                )
+            pantheon = _svc(SK.PANTHEON)
+            ctx = metadata.copy()
+            resp = await pantheon.process(req.query, ctx, on_progress=_on_progress)
+            return resp, None
+
+        task = asyncio.create_task(_run_pipeline())
+
+        while not task.done():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                yield {
+                    "event": event.get("type", "progress"),
+                    "data": _json.dumps(event, default=str),
+                }
+            except asyncio.TimeoutError:
+                continue
+
+        while not queue.empty():
+            event = queue.get_nowait()
+            yield {
+                "event": event.get("type", "progress"),
+                "data": _json.dumps(event, default=str),
+            }
+
+        try:
+            response, agents = task.result()
+            yield {
+                "event": "final_answer",
+                "data": _json.dumps({
+                    "response": response,
+                    "agents_consulted": agents,
+                }, default=str),
+            }
+        except Exception as exc:
+            logger.exception("Streaming query failed")
+            yield {
+                "event": "error",
+                "data": _json.dumps({"error": str(exc)}),
+            }
+
+    return EventSourceResponse(_event_generator())
+
+
 @app.post("/api/feedback", response_model=FeedbackResponse)
 async def feedback(req: FeedbackRequest) -> FeedbackResponse:
     """Process a user correction through the feedback pipeline.
@@ -737,9 +809,8 @@ async def deep_health_check() -> dict[str, Any]:
     if mem0_key:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    "https://api.mem0.ai/v2/memories/search/",
-                    json={"query": "health", "filters": {"user_id": "health_check"}},
+                resp = await client.get(
+                    "https://api.mem0.ai/v1/ping/",
                     headers={"Authorization": f"Token {mem0_key}"},
                 )
                 checks["mem0"] = {"status": "healthy" if resp.status_code < 400 else "degraded"}

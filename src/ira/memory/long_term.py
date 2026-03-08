@@ -63,13 +63,12 @@ class LongTermMemory:
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
-                    f"{self._base_url}/v2/memories/search/",
+                    f"{self._base_url}/v1/memories/search/",
                     headers=self._headers,
                     json={
                         "query": query,
-                        "filters": {"user_id": user_id},
+                        "user_id": user_id,
                         "top_k": limit,
-                        "rerank": True,
                     },
                 )
                 resp.raise_for_status()
