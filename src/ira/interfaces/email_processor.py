@@ -44,6 +44,7 @@ _TRAINING_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 _OPERATIONAL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 _REPLY_INTENTS = frozenset({

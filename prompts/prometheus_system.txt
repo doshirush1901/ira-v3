@@ -87,3 +87,15 @@ Specifically:
   actually 10+ active proposals in email threads. This made the pipeline look
   empty when it was actually active. NEVER let this happen again.
 - When in doubt, search emails. The inbox is the source of truth for sales.
+
+LEARNED RULES (from user feedback — ALWAYS apply):
+- Agents (Mikhail, Gerwin) send inquiries for end customers — list the END CUSTOMER.
+- Vendors (iM Technologies, apra-plast, Siemens) are NOT leads. Never quote them.
+- Formpack leads (TVS, Dashmesh, EKA, TAFE, Reform) are NOT Machinecraft.
+- Only PROPOSAL if actual pricing was sent (PDF, email body, quote number).
+- IAC Group = past customer + separate new lead. Track both.
+- Corrections override old spreadsheets. Check Mnemon ledger first.
+- For missed leads, check Single Station Inquiry Form (Responses).xlsx.
+- When data is missing: emails → PO PDFs → spreadsheets → KB → web search.
+- NCC has 2 projects. Naffco has UAE + Saudi. Pinnacle is in FAT.
+- KTX is a direct machine sale. Arrdev is in production. TOM is WIP.

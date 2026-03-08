@@ -15,52 +15,212 @@
     }
   ],
   "existing_customers": [
-    {"name": "Jaquar", "machine": "Machine 1 (2015) + PF1-X-3030 for spas (2025, installed)", "note": "2 machines delivered. Outstanding service punch list items to clear. Long-standing client."},
-    {"name": "Arrdev Pools", "email": "info@arrdevpools.com", "machine": "Currently in production", "note": "Active client. Machine currently being built — NOT complete yet."},
-    {"name": "Thermic Energy RZ GmbH", "email": "praveen.kumar-sundarajan@thermic-energy.com", "machine": "PF1 (delivered)", "note": "Delivered machine. Now requesting spare parts."},
-    {"name": "Anatomic SITT AB", "email": "krister@anatomicsitt.com", "machine": "PF1-0810 S", "note": "Purchased at K2022 trade show. Past customer."},
-    {"name": "Pinnacle Industries", "email": "achangedia@pinnacleindustries.com", "machine": "PF1-X-5028", "note": "In final test (FAT) at factory. Awaiting payment before delivery."},
-    {"name": "ILPA-MP3 / ILIP Group", "email": "sdigennaro@ilpa-mp3.com", "machine": "PF1 750x750 (x2 POs)", "note": "Machine ready for dispatch. Chasing payment."},
-    {"name": "Nagoya Jushi", "machine": "In order book", "note": "Active order."},
-    {"name": "KTX Japan", "email": "uno@ktx.co.jp", "machine": "New type machine", "note": "Direct machine sale, active order."},
-    {"name": "NCC Russia", "email": "mnikitin@nccrussia.com", "machine": "2 projects ongoing", "note": "PO received, working on LC. TWO separate projects active."},
-    {"name": "DutchTides", "email": "jaap@dutch-tides.com", "machine": "PF1-X-6419", "note": "Delivered. Final payment negotiation (EUR 100K agreed)."},
-    {"name": "Dezet Plastics", "email": "info@dezet.nl", "machine": "PF1-X-1210 (K2025 show machine, installed) + K machine", "note": "K2025 machine is PF1-X-1310, already installed. EUR 120K paid. Chasing EUR 2,500 balance."},
-    {"name": "JoPlast", "email": "js@joplast.dk", "machine": "PF1-X-1006", "note": "Fully paid (3.0 Cr). Top clamp frame being supplied."},
-    {"name": "Plastisart SA", "email": "jf.deltenre@plastisart.com", "machine": "Machine (delivered)", "note": "Delivered. Parts dispatched. Transport Warmond to Fleurus done."},
-    {"name": "IAC Group", "email": "rushikesh.purkar@iacgroup.com", "machine": "1 machine delivered (~1 year ago)", "note": "PAST CUSTOMER for delivered machine (final payment received Feb 2026). Has NEW separate inquiry for 2nd machine (IMG thermoforming) — that is a NEW SALES LEAD."},
-    {"name": "Donite", "note": "Long-standing past client."},
-    {"name": "Batelaan", "email": "c.chrispijn@batelaan.nl", "note": "Two machines delivered 2018 and 2019. Past customer."},
-    {"name": "RAD Global / NRC Canada", "email": "eradovic@rgpmail.com", "machine": "PF1-0707-LAB", "note": "30% advance received ($48,306). Production kickoff sent."},
-    {"name": "FVF Osaka", "machine": "PF1-X-1325 + NGF 900x1200", "note": "Active order. Manufacturing in progress."},
-    {"name": "Venkateshwar", "machine": "PF1-C-3020", "note": "Complete, wet trial pending."},
-    {"name": "TOM India", "machine": "Work in progress", "note": "Active order. Machine currently being built."},
-    {"name": "Ridat", "machine": "ATF", "note": "Active order in fabrication."},
-    {"name": "Convertex", "machine": "AMV x2", "note": "Active order in fabrication."},
-    {"name": "Rafter", "machine": "ATF", "note": "Active order."},
-    {"name": "Nithya", "machine": "AM6050", "note": "Active order."},
-    {"name": "Efficient", "machine": "AM machine", "note": "Active order."},
-    {"name": "Geofabric", "machine": "Order 1.0 Cr", "note": "Active order. No payment yet. Next step: fabrication."},
-    {"name": "Reform", "machine": "Order 1.0 Cr", "note": "Active order."},
-    {"name": "Siemens", "machine": "Order 2.0 Cr", "note": "Active order."},
-    {"name": "JoPlast", "machine": "PF1-X-1006", "note": "Delivered and paid. Clamp frame supply ongoing."}
+    {
+      "name": "Jaquar",
+      "machine": "Machine 1 (2015) + PF1-X-3030 for spas (2025, installed)",
+      "note": "2 machines delivered. Outstanding service punch list items to clear. Long-standing client."
+    },
+    {
+      "name": "Arrdev Pools",
+      "email": "info@arrdevpools.com",
+      "machine": "Currently in production",
+      "note": "Active client. Machine currently being built — NOT complete yet."
+    },
+    {
+      "name": "Thermic Energy RZ GmbH",
+      "email": "praveen.kumar-sundarajan@thermic-energy.com",
+      "machine": "PF1 (delivered)",
+      "note": "Delivered machine. Now requesting spare parts."
+    },
+    {
+      "name": "Anatomic SITT AB",
+      "email": "krister@anatomicsitt.com",
+      "machine": "PF1-0810 S",
+      "note": "Purchased at K2022 trade show. Past customer."
+    },
+    {
+      "name": "Pinnacle Industries",
+      "email": "achangedia@pinnacleindustries.com",
+      "machine": "PF1-X-5028",
+      "note": "In final test (FAT) at factory. Awaiting payment before delivery."
+    },
+    {
+      "name": "ILPA-MP3 / ILIP Group",
+      "email": "sdigennaro@ilpa-mp3.com",
+      "machine": "PF1 750x750 (x2 POs)",
+      "note": "Machine ready for dispatch. Chasing payment."
+    },
+    {
+      "name": "Nagoya Jushi",
+      "machine": "In order book",
+      "note": "Active order."
+    },
+    {
+      "name": "KTX Japan",
+      "email": "uno@ktx.co.jp",
+      "machine": "New type machine",
+      "note": "Direct machine sale, active order."
+    },
+    {
+      "name": "NCC Russia",
+      "email": "mnikitin@nccrussia.com",
+      "machine": "2 projects ongoing",
+      "note": "PO received, working on LC. TWO separate projects active."
+    },
+    {
+      "name": "DutchTides",
+      "email": "jaap@dutch-tides.com",
+      "machine": "PF1-X-6419",
+      "note": "Delivered. Final payment negotiation (EUR 100K agreed)."
+    },
+    {
+      "name": "Dezet Plastics",
+      "email": "info@dezet.nl",
+      "machine": "PF1-X-1210 (K2025 show machine, installed) + K machine",
+      "note": "K2025 machine is PF1-X-1310, already installed. EUR 120K paid. Chasing EUR 2,500 balance."
+    },
+    {
+      "name": "JoPlast",
+      "email": "js@joplast.dk",
+      "machine": "PF1-X-1006",
+      "note": "Fully paid (3.0 Cr). Top clamp frame being supplied."
+    },
+    {
+      "name": "Plastisart SA",
+      "email": "jf.deltenre@plastisart.com",
+      "machine": "Machine (delivered)",
+      "note": "Delivered. Parts dispatched. Transport Warmond to Fleurus done."
+    },
+    {
+      "name": "IAC Group",
+      "email": "rushikesh.purkar@iacgroup.com",
+      "machine": "1 machine delivered (~1 year ago)",
+      "note": "PAST CUSTOMER for delivered machine (final payment received Feb 2026). Has NEW separate inquiry for 2nd machine (IMG thermoforming) — that is a NEW SALES LEAD."
+    },
+    {
+      "name": "Donite",
+      "note": "Long-standing past client."
+    },
+    {
+      "name": "Batelaan",
+      "email": "c.chrispijn@batelaan.nl",
+      "note": "Two machines delivered 2018 and 2019. Past customer."
+    },
+    {
+      "name": "RAD Global / NRC Canada",
+      "email": "eradovic@rgpmail.com",
+      "machine": "PF1-0707-LAB",
+      "note": "30% advance received ($48,306). Production kickoff sent."
+    },
+    {
+      "name": "FVF Osaka",
+      "machine": "PF1-X-1325 + NGF 900x1200",
+      "note": "Active order. Manufacturing in progress."
+    },
+    {
+      "name": "Venkateshwar",
+      "machine": "PF1-C-3020",
+      "note": "Complete, wet trial pending."
+    },
+    {
+      "name": "TOM India",
+      "machine": "Work in progress",
+      "note": "Active order. Machine currently being built."
+    },
+    {
+      "name": "Ridat",
+      "machine": "ATF",
+      "note": "Active order in fabrication."
+    },
+    {
+      "name": "Convertex",
+      "machine": "AMV x2",
+      "note": "Active order in fabrication."
+    },
+    {
+      "name": "Rafter",
+      "machine": "ATF",
+      "note": "Active order."
+    },
+    {
+      "name": "Nithya",
+      "machine": "AM6050",
+      "note": "Active order."
+    },
+    {
+      "name": "Efficient",
+      "machine": "AM machine",
+      "note": "Active order."
+    },
+    {
+      "name": "Geofabric",
+      "machine": "Order 1.0 Cr",
+      "note": "Active order. No payment yet. Next step: fabrication."
+    },
+    {
+      "name": "JoPlast",
+      "machine": "PF1-X-1006",
+      "note": "Delivered and paid. Clamp frame supply ongoing."
+    }
   ],
   "vendors": [
-    {"name": "iM Technologies Pvt. Ltd.", "contact": "Vinay Mandviya", "service": "CAD design services", "note": "Vendor, NOT a customer. Never quote them a machine."},
-    {"name": "apra-plast", "contact": "Andreas Lenarz", "email": "a.lenarz@apra-plast.de", "note": "Product management thermoform. No quotes sent to them."}
+    {
+      "name": "iM Technologies Pvt. Ltd.",
+      "contact": "Vinay Mandviya",
+      "service": "CAD design services",
+      "note": "Vendor, NOT a customer. Never quote them a machine."
+    },
+    {
+      "name": "apra-plast",
+      "contact": "Andreas Lenarz",
+      "email": "a.lenarz@apra-plast.de",
+      "note": "Product management thermoform. No quotes sent to them."
+    },
+    {
+      "name": "Siemens",
+      "note": "VENDOR of Machinecraft. Supplies components. NOT a customer."
+    }
   ],
   "defunct_companies": [
-    {"name": "Menschik GmbH & Co. KG", "note": "Company no longer exists. Quotes sent long ago, not relevant.", "verified": "2026-03-08"}
+    {
+      "name": "Menschik GmbH & Co. KG",
+      "note": "Company no longer exists. Quotes sent long ago, not relevant.",
+      "verified": "2026-03-08"
+    }
   ],
   "not_machinecraft": [
-    {"name": "Dashmesh", "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."},
-    {"name": "EKA", "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."},
-    {"name": "TAFE", "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."},
-    {"name": "ALP", "note": "ALP Bedliner project was completed 2 years ago. NOT a current customer or active order."},
-    {"name": "TVS Motor", "note": "Formpack lead (sister company), NOT Machinecraft."}
+    {
+      "name": "Dashmesh",
+      "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."
+    },
+    {
+      "name": "EKA",
+      "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."
+    },
+    {
+      "name": "TAFE",
+      "note": "FORMPACK lead, NOT Machinecraft. Do not include in Machinecraft pipeline."
+    },
+    {
+      "name": "ALP",
+      "note": "ALP Bedliner project was completed 2 years ago. NOT a current customer or active order."
+    },
+    {
+      "name": "TVS Motor",
+      "note": "Formpack lead (sister company), NOT Machinecraft."
+    },
+    {
+      "name": "Reform",
+      "note": "Old Formpack RFQ, NOT Machinecraft."
+    }
   ],
   "sister_companies": [
-    {"name": "Formpack", "domain": "formpack.in", "contact": "Alok Doshi", "note": "Sister company. Dashmesh, EKA, TAFE, TVS Motor leads belong to Formpack, not Machinecraft. Formpack also has its own active machine orders from Machinecraft."}
+    {
+      "name": "Formpack",
+      "domain": "formpack.in",
+      "contact": "Alok Doshi",
+      "note": "Sister company. Dashmesh, EKA, TAFE, TVS Motor leads belong to Formpack, not Machinecraft. Formpack also has its own active machine orders from Machinecraft."
+    }
   ],
   "_metadata": {
     "last_updated": "2026-03-08",

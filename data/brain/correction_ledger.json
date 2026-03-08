@@ -211,10 +211,141 @@
       ],
       "corrected_at": "2026-03-08",
       "source": "user_correction"
+    },
+    "pf1": {
+      "current_status": "500T",
+      "stale_values": [],
+      "corrected_at": "2026-03-08",
+      "source": "sleep_training"
+    },
+    "active order book": {
+      "current_status": "Siemens is a VENDOR of Machinecraft, NOT a customer or order. They supply components TO us. Never list Siemens as a customer order.",
+      "stale_values": [
+        "Siemens listed as active order Rs 2.0 Cr",
+        "Reform listed as active order Rs 1.0 Cr"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "feedback"
+    },
+    "siemens": {
+      "current_status": "VENDOR of Machinecraft. Supplies components TO us. NOT a customer or order.",
+      "stale_values": [
+        "Active order",
+        "Rs 2.0 Cr",
+        "Order 2.0 Cr"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
+    },
+    "reform": {
+      "current_status": "Old Formpack RFQ, NOT Machinecraft. Do not include in Machinecraft order book.",
+      "stale_values": [
+        "Active order",
+        "Rs 1.0 Cr",
+        "Order 1.0 Cr"
+      ],
+      "corrected_at": "2026-03-08",
+      "source": "user_correction"
     }
   },
   "_metadata": {
     "last_updated": "2026-03-08",
     "description": "Mnemon's correction ledger. Single source of truth for all user corrections. Overrides stale data from ingested documents."
+  },
+  "lead_classification_learnings": {
+    "last_updated": "2026-03-08",
+    "source": "rushabh_doshi_feedback_session",
+    "rules": [
+      {
+        "id": "L01",
+        "rule": "EXISTING CUSTOMER vs LEAD: If a company has EVER received a delivered machine from Machinecraft, they are an EXISTING CUSTOMER, not a lead. Even if they send a new inquiry, the new inquiry is a SEPARATE LEAD — but the company itself is a customer. Example: IAC Group is a past customer (1 machine delivered) AND has a new lead (2nd machine inquiry). Track both separately.",
+        "triggered_by": "IAC Group misclassified as only a lead"
+      },
+      {
+        "id": "L02",
+        "rule": "AGENTS vs LEADS: Mikhail Zraychenko (Russia) and Gerwin Pelle (Netherlands) are Machinecraft SALES AGENTS. They send inquiries ON BEHALF of end customers. Never list an agent as a lead. Always identify WHO the agent is asking for. Example: Mikhail sends inquiry for Domani-Spa (Vladimir) — the lead is Domani-Spa, not Mikhail.",
+        "triggered_by": "Mikhail and Gerwin listed as leads"
+      },
+      {
+        "id": "L03",
+        "rule": "VENDORS vs LEADS: Companies that supply services or parts TO Machinecraft are VENDORS, not customers. Never quote them a machine. Examples: iM Technologies (CAD design), apra-plast (product management), Siemens (component supplier).",
+        "triggered_by": "iM Technologies and Siemens listed as customers"
+      },
+      {
+        "id": "L04",
+        "rule": "QUOTE VERIFICATION: Only classify as PROPOSAL stage if there is EVIDENCE a quote was actually sent — PDF attachment, explicit pricing in email body, or quote number. Mere email discussion does NOT equal proposal sent. Example: eco-tad and Penda Plastic had discussions but no quote was ever sent.",
+        "triggered_by": "eco-tad and Penda Plastic listed as PROPOSAL leads"
+      },
+      {
+        "id": "L05",
+        "rule": "SISTER COMPANY SEPARATION: Formpack (Alok Doshi) is a SISTER COMPANY, not Machinecraft. Leads belonging to Formpack: TVS Motor, Dashmesh, EKA, TAFE, Reform. These must NEVER appear in Machinecraft pipeline or order book. Formpack also has its own machine orders FROM Machinecraft (PF1-C-3020, FCS XL) — those are valid Machinecraft orders.",
+        "triggered_by": "Dashmesh, EKA, TAFE, Reform, TVS listed as Machinecraft orders/leads"
+      },
+      {
+        "id": "L06",
+        "rule": "COMPANY VIABILITY: Before including a company in an active lead list, verify it still exists. Use web search (Iris agent). Example: Menschik GmbH no longer exists — quotes sent long ago are irrelevant.",
+        "triggered_by": "Menschik listed as active lead"
+      },
+      {
+        "id": "L07",
+        "rule": "STALE DATA OVERRIDE: Corrections from the user ALWAYS override data from ingested documents (spreadsheets, PDFs, KB chunks). Old spreadsheets may show 'Paint + Final Assy' for Dutch Tides when it's actually delivered. The correction ledger is the final source of truth. Mnemon must intercept stale data at every retrieval point.",
+        "triggered_by": "Dutch Tides and K2025 repeatedly shown with old status despite corrections"
+      },
+      {
+        "id": "L08",
+        "rule": "PAYMENT STATUS VERIFICATION: Do not report pending payments from old spreadsheets without verifying against recent emails. Payments may have been cleared. Example: JPCA, Zylog, IAC, Thermic had no pending payments despite the order book showing them.",
+        "triggered_by": "JPCA, Zylog, IAC, Thermic listed with pending payments"
+      },
+      {
+        "id": "L09",
+        "rule": "COMPLETED vs ACTIVE: Machines that are delivered and installed are COMPLETED PROJECTS, not active orders. Do not list them in the active order book. Example: Dutch Tides (delivered), K2025/Dezet (installed), JoPlast (delivered and paid), Plastisart (delivered).",
+        "triggered_by": "Delivered machines listed as active orders"
+      },
+      {
+        "id": "L10",
+        "rule": "OLD PROJECTS: Projects completed more than 1 year ago should not appear in current reports unless specifically asked for. Example: ALP Bedliner was completed 2 years ago.",
+        "triggered_by": "ALP listed as active order"
+      },
+      {
+        "id": "L11",
+        "rule": "MULTIPLE PROJECTS PER CUSTOMER: Some customers have multiple concurrent projects. Track each separately. Example: NCC Russia has 2 projects, Pinnacle has PF1-X-5028 (FAT) + PF1-A-2515 (fabrication), Venkateshwar has PF1-A-3020 + RT-4A 3020.",
+        "triggered_by": "NCC listed as single project"
+      },
+      {
+        "id": "L12",
+        "rule": "MACHINE STATUS ACCURACY: Always use the LATEST status from the Project Status Sheet, not from the Order Book (which may be months old). FAT > Fabrication > Design. Example: Pinnacle is in FAT (not fabrication), Jaquar PF1-X-3030 is installed (not PF1-W).",
+        "triggered_by": "Pinnacle shown as fabrication when actually in FAT"
+      },
+      {
+        "id": "L13",
+        "rule": "NAFFCO HAS MULTIPLE ENTITIES: Naffco UAE (Orwa Khabir, HDPE Benching $290K) and Naffco Saudi are SEPARATE projects. Track both. Also Naffco Flow Control (Ahmed Elbaroudy) is a related but different entity.",
+        "triggered_by": "Only one Naffco project found"
+      },
+      {
+        "id": "L14",
+        "rule": "USE ALL AVAILABLE DATA SOURCES: When data is missing, think 'where can I find this?' Sources in priority order: (1) Email threads (search_emails), (2) PO/quote PDFs in archive (Alexandros read_file), (3) Spreadsheets in imports (MCT Orders, Order Book, MC Deadlines), (4) Knowledge base (Clio), (5) Web search (Iris). NEVER leave a field blank without trying all sources.",
+        "triggered_by": "Reports with '—' and 'TBD' when data existed in PO files"
+      },
+      {
+        "id": "L15",
+        "rule": "MISSED LEADS SOURCE: The Single Station Inquiry Form (Responses).xlsx in data/imports/02_Orders_and_POs/ contains ALL inbound inquiries from the website/exhibitions. Cross-reference this with sent quotes to find missed leads. Also check inbound emails to contact@machinecraft.org and sales@machinecraft.org.",
+        "triggered_by": "Missed leads section was too shallow"
+      },
+      {
+        "id": "L16",
+        "rule": "KTX IS A MACHINE SALE: KTX Japan (Hidehiro Uno) is a direct machine sale (new type IMG Press), NOT a strategic partnership. Treat as active order.",
+        "triggered_by": "KTX listed as strategic partnership"
+      },
+      {
+        "id": "L17",
+        "rule": "JAQUAR HISTORY: Jaquar has 2 machines — Machine 1 from 2015 and PF1-X-3030 for spas (2025, installed). The old order book may show PF1-W 3000x3000 which is the same machine. They have outstanding service punch list items.",
+        "triggered_by": "Jaquar shown with unclear machine history"
+      },
+      {
+        "id": "L18",
+        "rule": "ARRDEV IS IN PRODUCTION: Arrdev Pools machine is currently being built (in production), NOT complete or delivered. They are an active client.",
+        "triggered_by": "Arrdev listed as completed"
+      }
+    ]
   }
 }
