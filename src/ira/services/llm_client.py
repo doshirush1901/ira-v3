@@ -39,12 +39,23 @@ class LLMClient:
         cfg = settings or get_settings()
         openai_key = cfg.llm.openai_api_key.get_secret_value()
         anthropic_key = cfg.llm.anthropic_api_key.get_secret_value()
+        helicone_key = cfg.helicone.api_key.get_secret_value()
+
+        openai_kwargs: dict[str, Any] = {"api_key": openai_key}
+        anthropic_kwargs: dict[str, Any] = {"api_key": anthropic_key}
+
+        if helicone_key:
+            openai_kwargs["base_url"] = "https://oai.helicone.ai/v1"
+            openai_kwargs["default_headers"] = {"Helicone-Auth": f"Bearer {helicone_key}"}
+            anthropic_kwargs["base_url"] = "https://anthropic.helicone.ai/v1"
+            anthropic_kwargs["default_headers"] = {"Helicone-Auth": f"Bearer {helicone_key}"}
+            logger.info("Helicone proxy enabled for OpenAI and Anthropic")
 
         self._openai: AsyncOpenAI | None = (
-            AsyncOpenAI(api_key=openai_key) if openai_key else None
+            AsyncOpenAI(**openai_kwargs) if openai_key else None
         )
         self._anthropic: AsyncAnthropic | None = (
-            AsyncAnthropic(api_key=anthropic_key) if anthropic_key else None
+            AsyncAnthropic(**anthropic_kwargs) if anthropic_key else None
         )
 
         self._openai_instructor = (

@@ -113,6 +113,14 @@ ira-v3-upgrade/
 archive/
 
 # ──────────────────────────────────────────────
+# Web UI build artifacts & local config
+# ──────────────────────────────────────────────
+web-ui/.next/
+web-ui/node_modules/
+web-ui/.env.local
+web-ui/tsconfig.tsbuildinfo
+
+# ──────────────────────────────────────────────
 # IDE workspace config (keep .cursor/rules/ tracked)
 # ──────────────────────────────────────────────
 .cursor/*

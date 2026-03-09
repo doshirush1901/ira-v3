@@ -62,7 +62,7 @@ Now, most people solve this one of two ways:
 
 Ira is a multi-agent AI system built for [Machinecraft](https://machinecraft.org) — an industrial machinery company that designs and manufactures thermoforming, panel forming, and packaging machines. But here's the thing that makes it different from every other "AI assistant" repo on GitHub:
 
-**Ira doesn't just answer questions. It reads your email, remembers your relationships, knows your products, tracks your deals, and gets smarter every day.** It has 24 specialist AI agents — each named after a figure from Greek mythology, each with a specific job — and they collaborate through an 11-stage pipeline that mimics how a real organization processes information.
+**Ira doesn't just answer questions. It reads your email, remembers your relationships, knows your products, tracks your deals, and gets smarter every day.** It has 27 specialist AI agents — each named after a figure from Greek mythology, each with a specific job — and they collaborate through an 11-stage pipeline that mimics how a real organization processes information.
 
 Think of it like this: you don't walk into a company and ask the receptionist to design your machine, draft your quote, check your invoice, *and* write your marketing email. You talk to the right person. Ira figures out who that person is, briefs them, and delivers the result.
 
@@ -197,7 +197,7 @@ The observe step is the key differentiator: after each phase, Athena reviews res
 
 ## The Pantheon
 
-Twenty-four agents. Each with a name from Greek mythology, a specific role, and their own set of tools.
+Twenty-seven agents. Each with a name from Greek mythology, a specific role, and their own set of tools.
 
 ### The C-Suite
 
@@ -232,6 +232,9 @@ Twenty-four agents. Each with a name from Greek mythology, a specific role, and 
 | **Atlas** | Project Manager | Project logbook, production schedules, milestone tracking |
 | **Asclepius** | Quality | Punch lists, installation tracking, quality dashboards |
 | **Hera** | Procurement | Vendor management, component taxonomy, lead times |
+| **Mnemon** | Memory Guardian | Correction authority — maintains the correction ledger, overrides stale data |
+| **Gapper** | Gap Resolver | Finds and fills missing data using email, documents, KB, and web search |
+| **Artemis** | Lead Hunter | Mailbox intelligence, historical email scanning, missed lead detection |
 
 Every agent runs a **ReAct loop** (Reason → Act → Observe) with up to 8 iterations, calling tools, reading results, and reasoning about next steps until they have a complete answer. Default tools include knowledge search, memory recall, inter-agent delegation, and — when Gmail is connected — `search_emails` and `read_email_thread` for pulling real email data into any agent's reasoning.
 
@@ -287,7 +290,7 @@ All three backends are searched **in parallel**, results are **reranked** with V
 
 ## Memory Architecture
 
-This is where it gets interesting. Ira has **nine memory subsystems**, modeled loosely after how human memory works:
+This is where it gets interesting. Ira has **ten memory subsystems**, modeled loosely after how human memory works:
 
 | Memory | Storage | What It Remembers |
 |:-------|:--------|:------------------|
@@ -340,7 +343,7 @@ Endocrine (behavioral modifiers like urgency and formality) and Musculoskeletal 
 
 ## Shared Identity
 
-Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 24 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 24 separate prompt files.
+Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 27 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 27 separate prompt files.
 
 Project priorities and architectural guardrails live in [`VISION.md`](VISION.md).
 
@@ -381,11 +384,11 @@ ira-v3/
 │   ├── rules/               # Cursor rules for Ira API, agent loop, conventions
 │   └── skills/              # Cursor skills: research, email, reports, sales pipeline
 ├── src/ira/
-│   ├── agents/              # 24 specialist agents + base_agent.py (~870 lines)
+│   ├── agents/              # 27 specialist agents + base_agent.py
 │   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing,
-│   │                        #   entity extraction (GLiNER + LLM), guardrails (30 modules)
-│   ├── memory/              # 9 memory subsystems + dream mode + goal sweep
-│   ├── systems/             # Body systems + extended systems (20 modules)
+│   │                        #   entity extraction (GLiNER + LLM), guardrails (32 modules)
+│   ├── memory/              # 10 memory subsystems + dream mode + goal sweep
+│   ├── systems/             # Body systems + extended systems (21 modules)
 │   ├── interfaces/          # CLI, FastAPI server, MCP server,
 │   │                        #   email processor, dashboard, cursor feedback
 │   ├── services/            # LLMClient (OpenAI + Anthropic SDK with Langfuse tracing)
@@ -399,9 +402,9 @@ ira-v3/
 │   ├── config.py            # Pydantic settings (all config from env)
 │   ├── context.py           # Unified context manager
 │   └── message_bus.py       # Inter-agent messaging
-├── prompts/                 # LLM prompt templates (70 files)
-├── scripts/                 # Operational scripts + training (shakti_train.sh)
-├── tests/                   # Test suite (24 files, ~11,200 lines)
+├── prompts/                 # LLM prompt templates (71 files)
+├── scripts/                 # Operational scripts + training
+├── tests/                   # Test suite (28 files, ~13,700 lines)
 ├── alembic/                 # Database migrations
 ├── docs/                    # Architecture and audit documentation
 ├── SOUL.md                  # Ira's identity, voice, and behavioral boundaries
@@ -519,6 +522,12 @@ ira pipeline       # Show pipeline stage timings
 | POST | `/api/email/draft` | Draft an email via Calliope |
 | POST | `/api/email/rescan` | Deep historical email scan with SSE progress |
 | GET | `/api/email/rescan` | Check status of running/last email rescan |
+| GET | `/api/corrections` | List recent corrections (filterable) |
+| GET | `/api/vendors` | List all vendors |
+| POST | `/api/vendors` | Create a vendor |
+| GET | `/api/vendors/payables` | Payables summary across all vendors |
+| GET | `/api/vendors/overdue` | Overdue vendor payables |
+| POST | `/api/vendors/payables` | Record a vendor payable/invoice |
 | GET | `/dashboard/` | Web dashboard (browser) |
 
 ## Running Tests

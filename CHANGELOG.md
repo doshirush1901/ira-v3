@@ -5,6 +5,28 @@ All notable changes to Ira are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.3.1] - 2026-03-09
+
+### Added
+- README files for all key subdirectories: `src/ira/`, `src/ira/agents/`, `src/ira/brain/`, `src/ira/memory/`, `src/ira/systems/`, `prompts/`, `tests/`, `scripts/`, `alembic/`, `web-ui/`, `docs/`.
+- Helicone LLM proxy support in `LLMClient` and `.env.example`.
+- Firecrawl web scraping support in `config.py` and `.env.example`.
+- Unstructured.io document parsing support in `config.py` and `.env.example`.
+- Sentry error monitoring support in `config.py` and `.env.example`.
+- Document AI invoice and form parser processor IDs in `.env.example`.
+
+### Changed
+- Root README updated: agent count 24 → 27, test count 24 → 28, memory count 9 → 10, added Mnemon/Gapper/Artemis to Pantheon table, added vendor and correction endpoints to API table.
+- `docs/ARCHITECTURE.md` agent count updated to 27.
+- `.gitignore` expanded with web-ui build artifacts and local config entries.
+- `BaseAgent` enhanced with improved tool dispatch.
+- `DocumentIngestor` enhanced with additional chunking options.
+
+### Fixed
+- Cleaned stray files from repo root (duplicate docs, backup files, orphaned PDFs moved to `docs/`).
+- Removed duplicate `AGENTS.md` and `SOUL.md` from `data/imports/`.
+- Purged `.DS_Store` files throughout the repository.
+
 ## [3.3.0] - 2026-03-08
 
 ### Added

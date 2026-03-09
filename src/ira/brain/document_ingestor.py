@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".docx", ".txt", ".csv", ".pptx", ".html", ".md"}
+_SUPPORTED_EXTENSIONS = {".pdf", ".xlsx", ".docx", ".txt", ".csv", ".pptx", ".html", ".md", ".eml"}
 _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_OVERLAP = 128
 _TIKTOKEN_ENCODING = "cl100k_base"
@@ -203,6 +203,55 @@ def read_xls(path: Path) -> str:
     return "\n".join(parts)
 
 
+def _read_with_unstructured(path: Path) -> str:
+    """Parse a document via the Unstructured.io API.
+
+    Handles PDF, DOCX, PPTX, XLSX, images, HTML, and EML with automatic
+    OCR, table extraction, and layout detection.  Returns empty string
+    when the API key is not configured or the call fails.
+    """
+    try:
+        from ira.config import get_settings
+
+        settings = get_settings()
+        api_key = settings.unstructured.api_key.get_secret_value()
+        api_url = settings.unstructured.api_url
+        if not api_key:
+            return ""
+
+        import httpx
+
+        with open(path, "rb") as f:
+            resp = httpx.post(
+                api_url,
+                headers={"unstructured-api-key": api_key},
+                files={"files": (path.name, f)},
+                data={"strategy": "auto"},
+                timeout=120,
+            )
+        resp.raise_for_status()
+        elements = resp.json()
+        parts: list[str] = []
+        for el in elements:
+            el_type = el.get("type", "")
+            text = el.get("text", "").strip()
+            if not text:
+                continue
+            if el_type == "Title":
+                parts.append(f"## {text}")
+            elif el_type == "Table":
+                html = el.get("metadata", {}).get("text_as_html", "")
+                parts.append(html if html else text)
+            else:
+                parts.append(text)
+        result = "\n\n".join(parts)
+        if len(result.strip()) >= _MIN_USEFUL_CHARS:
+            return result
+    except Exception:
+        logger.debug("Unstructured API failed for %s — falling back", path, exc_info=True)
+    return ""
+
+
 def _read_with_docling(path: Path) -> str:
     """Parse any supported document via Docling for high-fidelity extraction.
 
@@ -222,6 +271,7 @@ def _read_with_docling(path: Path) -> str:
     return ""
 
 
+_UNSTRUCTURED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md", ".eml"}
 _DOCLING_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md"}
 
 _LEGACY_READERS = {
@@ -236,7 +286,19 @@ _LEGACY_READERS = {
 
 
 def _get_reader(ext: str):
-    """Return a reader function: Docling-first for supported formats, else legacy."""
+    """Return a reader function: Unstructured → Docling → legacy."""
+    if ext in _UNSTRUCTURED_EXTENSIONS:
+        def _cascading_reader(path: Path) -> str:
+            text = _read_with_unstructured(path)
+            if text:
+                return text
+            if ext in _DOCLING_EXTENSIONS:
+                text = _read_with_docling(path)
+                if text:
+                    return text
+            legacy = _LEGACY_READERS.get(ext)
+            return legacy(path) if legacy else ""
+        return _cascading_reader
     if ext in _DOCLING_EXTENSIONS:
         def _docling_then_legacy(path: Path) -> str:
             text = _read_with_docling(path)
@@ -249,7 +311,7 @@ def _get_reader(ext: str):
 
 
 _READERS = {ext: _get_reader(ext) or fn for ext, fn in _LEGACY_READERS.items()}
-_READERS.update({ext: _get_reader(ext) for ext in _DOCLING_EXTENSIONS if ext not in _READERS})
+_READERS.update({ext: _get_reader(ext) for ext in _UNSTRUCTURED_EXTENSIONS | _DOCLING_EXTENSIONS if ext not in _READERS})
 
 
 # ── chunking ─────────────────────────────────────────────────────────────────

@@ -62,6 +62,7 @@ instructor = ">=1.14"
 ragas = ">=0.2"
 neo4j-graphrag = ">=1.0"
 mcp = ">=1.0"
+sentry-sdk = {version = ">=2.0", extras = ["fastapi"]}
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"

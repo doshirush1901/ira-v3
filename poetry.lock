@@ -7794,6 +7794,7 @@ files = [
 
 [package.dependencies]
 certifi = "*"
+fastapi = {version = ">=0.79.0", optional = true, markers = "extra == \"fastapi\""}
 urllib3 = ">=1.26.11"
 
 [package.extras]
@@ -9923,4 +9924,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "20f198142b8310e572fae6a6afe698c793aae19cc8e8ced26ab4212d478b1049"
+content-hash = "0b54b5b00bd21f804da6c4000cc6e47bc0a288d11acc365bd7a4019d8c792040"

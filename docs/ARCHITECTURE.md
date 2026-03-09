@@ -3,7 +3,7 @@
 ## Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes user
-requests through an 11-stage pipeline, delegates work to a pantheon of 24
+requests through an 11-stage pipeline, delegates work to a pantheon of 27
 specialist agents, and maintains persistent memory across conversations.
 
 ```

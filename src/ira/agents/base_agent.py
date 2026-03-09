@@ -833,10 +833,42 @@ class BaseAgent(ABC):
         """Send a message to another agent via the message bus."""
         await self._bus.send(self.name, to_agent, query, context)
 
-    # ── web scraping (Crawl4AI) ─────────────────────────────────────────
+    # ── web scraping (Firecrawl → Crawl4AI fallback) ────────────────────
 
     async def scrape_url(self, url: str, *, max_chars: int = 8000) -> str:
-        """Fetch a URL and return its content as clean markdown via Crawl4AI."""
+        """Fetch a URL and return its content as clean markdown.
+
+        Uses Firecrawl API when configured (JS rendering, anti-bot, clean
+        markdown output).  Falls back to Crawl4AI when the key is absent
+        or the Firecrawl call fails.
+        """
+        firecrawl_key = get_settings().firecrawl.api_key.get_secret_value()
+        if firecrawl_key:
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(
+                        "https://api.firecrawl.dev/v1/scrape",
+                        headers={
+                            "Authorization": f"Bearer {firecrawl_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"url": url, "formats": ["markdown"]},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json().get("data", {})
+                    text = data.get("markdown", "")
+                    if text:
+                        return text[:max_chars]
+            except Exception as exc:
+                logger.warning(
+                    "Firecrawl failed for %s in %s, falling back to Crawl4AI: %s",
+                    url, self.name, exc,
+                )
+
+        return await self._scrape_url_crawl4ai(url, max_chars=max_chars)
+
+    async def _scrape_url_crawl4ai(self, url: str, *, max_chars: int = 8000) -> str:
+        """Crawl4AI fallback for scrape_url."""
         try:
             from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
@@ -855,9 +887,9 @@ class BaseAgent(ABC):
                     return f"Failed to scrape {url}: {result.error_message or 'unknown error'}"
                 return text[:max_chars]
         except ImportError:
-            return "Crawl4AI not installed."
+            return "Crawl4AI not installed and Firecrawl not configured."
         except Exception as exc:
-            logger.warning("scrape_url failed for %s in %s: %s", url, self.name, exc)
+            logger.warning("scrape_url (Crawl4AI) failed for %s in %s: %s", url, self.name, exc)
             return f"Scrape error: {exc}"
 
     # ── web search ────────────────────────────────────────────────────────

@@ -126,6 +126,32 @@ class RedisConfig(BaseSettings):
     url: str = ""
 
 
+class HeliconeConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="HELICONE_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
+
+
+class FirecrawlConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="FIRECRAWL_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
+
+
+class UnstructuredConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="UNSTRUCTURED_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
+    api_url: str = "https://api.unstructuredapp.io/general/v0/general"
+
+
+class SentryConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SENTRY_", **_COMMON)
+
+    dsn: str = ""
+    traces_sample_rate: float = 0.1
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(**_COMMON)
 
@@ -166,6 +192,10 @@ class Settings(BaseSettings):
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
     search: SearchConfig = SearchConfig()
     langfuse: LangfuseConfig = LangfuseConfig()
+    helicone: HeliconeConfig = HeliconeConfig()
+    firecrawl: FirecrawlConfig = FirecrawlConfig()
+    unstructured: UnstructuredConfig = UnstructuredConfig()
+    sentry: SentryConfig = SentryConfig()
     app: AppConfig = AppConfig()
 
 

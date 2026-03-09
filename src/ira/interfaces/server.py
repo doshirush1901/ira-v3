@@ -126,6 +126,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Bootstrap all Ira subsystems on startup, tear down on shutdown."""
     settings = get_settings()
 
+    # ── Sentry (must be first so it captures all boot errors) ────
+    sentry_dsn = settings.sentry.dsn
+    if sentry_dsn:
+        try:
+            import sentry_sdk
+
+            sentry_sdk.init(
+                dsn=sentry_dsn,
+                traces_sample_rate=settings.sentry.traces_sample_rate,
+                environment=settings.app.environment,
+                send_default_pii=False,
+            )
+            logger.info("Sentry initialised (env=%s)", settings.app.environment)
+        except Exception:
+            logger.warning("Sentry init failed — continuing without error tracking", exc_info=True)
+
     logging.basicConfig(
         level=getattr(logging, settings.app.log_level, logging.INFO),
         format="%(asctime)s  %(name)-28s  %(levelname)-8s  [%(request_id)s]  %(message)s",
