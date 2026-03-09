@@ -2,6 +2,7 @@
 # Secrets & credentials
 # ──────────────────────────────────────────────
 .env
+.credentials/
 credentials.json
 credentials_rushabh.json
 client_secret_*.json
@@ -48,6 +49,7 @@ IRA_MASTER_PLAN.md
 OPERATIONS_MANUAL.md
 vision_map.md
 docs_ARCHITECTURE.md
+docs/internal/
 
 # ──────────────────────────────────────────────
 # Python
