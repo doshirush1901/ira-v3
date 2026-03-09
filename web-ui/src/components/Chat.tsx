@@ -14,6 +14,12 @@ import { Button } from "@/components/ui/button";
 import FeedbackForm from "@/components/FeedbackForm";
 import {
   streamQuery,
+  streamTask,
+  submitTaskClarification,
+  abortTask,
+  fetchTasks,
+  fetchTaskEvents,
+  streamTaskRetry,
   type SSEProgress,
   type SSEFinalAnswer,
 } from "@/lib/api";
@@ -25,6 +31,18 @@ interface Message {
   content: string;
   agents?: string[];
   precedingQuery?: string;
+}
+
+interface TaskSummary {
+  task_id: string;
+  status: string;
+  goal?: string;
+}
+
+interface TaskEvent {
+  type?: string;
+  timestamp?: string;
+  [key: string]: unknown;
 }
 
 interface StatusLine {
@@ -86,13 +104,21 @@ function progressToStatus(ev: SSEProgress): StatusLine {
 
 interface ChatProps {
   targetAgent: string;
+  runAsTaskLoop?: boolean;
 }
 
-export default function Chat({ targetAgent }: ChatProps) {
+export default function Chat({ targetAgent, runAsTaskLoop = false }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [statusLines, setStatusLines] = useState<StatusLine[]>([]);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [awaitingClarification, setAwaitingClarification] = useState(false);
+  const [recentTasks, setRecentTasks] = useState<TaskSummary[]>([]);
+  const [retryPhaseByTask, setRetryPhaseByTask] = useState<Record<string, string>>({});
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
+  const [eventFilter, setEventFilter] = useState("all");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -111,11 +137,30 @@ export default function Chat({ targetAgent }: ChatProps) {
     if (!streaming) inputRef.current?.focus();
   }, [streaming]);
 
+  useEffect(() => {
+    if (!runAsTaskLoop) return;
+    void fetchTasks(8)
+      .then((res) => {
+        setRecentTasks(
+          (res.tasks ?? []).map((t) => ({
+            task_id: String(t.task_id),
+            status: String(t.status ?? "unknown"),
+            goal: String(t.goal ?? ""),
+          })),
+        );
+      })
+      .catch(() => {});
+  }, [runAsTaskLoop, messages.length]);
+
   function handleStop() {
+    if (runAsTaskLoop && activeTaskId) {
+      void abortTask(activeTaskId);
+    }
     abortRef.current?.abort();
     abortRef.current = null;
     setStreaming(false);
     setStatusLines([]);
+    setAwaitingClarification(false);
   }
 
   function handleSubmit(e: FormEvent) {
@@ -129,43 +174,227 @@ export default function Chat({ targetAgent }: ChatProps) {
     setStreaming(true);
     setStatusLines([]);
 
-    const ctrl = streamQuery(trimmed, targetAgent, {
-      onProgress(ev: SSEProgress) {
-        setStatusLines((prev) => {
-          const next = progressToStatus(ev);
-          const exists = prev.some((s) => s.key === next.key);
-          return exists ? prev : [...prev.slice(-6), next];
+    const ctrl = runAsTaskLoop
+      ? (awaitingClarification && activeTaskId
+          ? submitTaskClarification(activeTaskId, trimmed, {
+              onProgress(ev) {
+                setStatusLines((prev) => {
+                  const key = String(ev.type ?? "progress");
+                  const label =
+                    ev.type === "phase_progress"
+                      ? `Phase ${String(ev.phase_index ?? "?")}/${String(ev.total_phases ?? "?")} - ${String(ev.progress_pct ?? 0)}%`
+                      : String(ev.type ?? "progress");
+                  const next = { key, text: label };
+                  const exists = prev.some((s) => s.key === next.key && s.text === next.text);
+                  return exists ? prev : [...prev.slice(-6), next];
+                });
+              },
+              onClarificationNeeded() {},
+              onResult(result) {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    role: "assistant",
+                    content: result.summary || result.file_path || "Task completed.",
+                    precedingQuery: trimmed,
+                  },
+                ]);
+                setStreaming(false);
+                setStatusLines([]);
+                setAwaitingClarification(false);
+              },
+              onError(error) {
+                setMessages((prev) => [
+                  ...prev,
+                  { role: "assistant", content: `**Error:** ${error}`, precedingQuery: trimmed },
+                ]);
+                setStreaming(false);
+                setStatusLines([]);
+              },
+            })
+          : streamTask(trimmed, {
+              onProgress(ev) {
+                if (ev.task_id) setActiveTaskId(String(ev.task_id));
+                setStatusLines((prev) => {
+                  const key = String(ev.type ?? "progress");
+                  const label =
+                    ev.type === "phase_progress"
+                      ? `Phase ${String(ev.phase_index ?? "?")}/${String(ev.total_phases ?? "?")} - ${String(ev.progress_pct ?? 0)}%`
+                      : String(ev.type ?? "progress");
+                  const next = { key, text: label };
+                  const exists = prev.some((s) => s.key === next.key && s.text === next.text);
+                  return exists ? prev : [...prev.slice(-6), next];
+                });
+              },
+              onClarificationNeeded(questions, taskId) {
+                setActiveTaskId(taskId || null);
+                setAwaitingClarification(true);
+                setStreaming(false);
+                setStatusLines([]);
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    role: "assistant",
+                    content: `Need clarification before continuing:\n\n- ${questions.join("\n- ")}`,
+                    precedingQuery: trimmed,
+                  },
+                ]);
+              },
+              onResult(result) {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    role: "assistant",
+                    content: result.summary || result.file_path || "Task completed.",
+                    precedingQuery: trimmed,
+                  },
+                ]);
+                setStreaming(false);
+                setStatusLines([]);
+                setAwaitingClarification(false);
+              },
+              onError(error) {
+                setMessages((prev) => [
+                  ...prev,
+                  { role: "assistant", content: `**Error:** ${error}`, precedingQuery: trimmed },
+                ]);
+                setStreaming(false);
+                setStatusLines([]);
+              },
+            }))
+      : streamQuery(trimmed, targetAgent, {
+          onProgress(ev: SSEProgress) {
+            setStatusLines((prev) => {
+              const next = progressToStatus(ev);
+              const exists = prev.some((s) => s.key === next.key);
+              return exists ? prev : [...prev.slice(-6), next];
+            });
+          },
+          onFinalAnswer(answer: SSEFinalAnswer) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                content: answer.response,
+                agents: answer.agents_consulted ?? undefined,
+                precedingQuery: trimmed,
+              },
+            ]);
+            setStatusLines([]);
+            setStreaming(false);
+          },
+          onError(error: string) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                content: `**Error:** ${error}`,
+                precedingQuery: trimmed,
+              },
+            ]);
+            setStatusLines([]);
+            setStreaming(false);
+          },
         });
-      },
-      onFinalAnswer(answer: SSEFinalAnswer) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: answer.response,
-            agents: answer.agents_consulted ?? undefined,
-            precedingQuery: trimmed,
-          },
-        ]);
-        setStatusLines([]);
-        setStreaming(false);
-      },
-      onError(error: string) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `**Error:** ${error}`,
-            precedingQuery: trimmed,
-          },
-        ]);
-        setStatusLines([]);
-        setStreaming(false);
-      },
-    });
 
     abortRef.current = ctrl;
   }
+
+  function runRetry(taskId: string) {
+    if (streaming) return;
+    const phaseRaw = retryPhaseByTask[taskId];
+    const phase = phaseRaw === undefined || phaseRaw === "" ? undefined : Number(phaseRaw);
+    setStreaming(true);
+    setStatusLines([]);
+    const ctrl = streamTaskRetry(
+      taskId,
+      {
+        onProgress(ev) {
+          if (ev.task_id) setActiveTaskId(String(ev.task_id));
+          setStatusLines((prev) => {
+            const key = String(ev.type ?? "progress");
+            const label =
+              ev.type === "phase_progress"
+                ? `Phase ${String(ev.phase_index ?? "?")}/${String(ev.total_phases ?? "?")} - ${String(ev.progress_pct ?? 0)}%`
+                : String(ev.type ?? "progress");
+            const next = { key, text: label };
+            const exists = prev.some((s) => s.key === next.key && s.text === next.text);
+            return exists ? prev : [...prev.slice(-6), next];
+          });
+        },
+        onClarificationNeeded(questions, taskIdFromEvent) {
+          setActiveTaskId(taskIdFromEvent || null);
+          setAwaitingClarification(true);
+          setStreaming(false);
+          setStatusLines([]);
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: `Retry needs clarification:\n\n- ${questions.join("\n- ")}` },
+          ]);
+        },
+        onResult(result) {
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: result.summary || result.file_path || "Retry completed." },
+          ]);
+          setStreaming(false);
+          setStatusLines([]);
+        },
+        onError(error) {
+          setMessages((prev) => [...prev, { role: "assistant", content: `**Error:** ${error}` }]);
+          setStreaming(false);
+          setStatusLines([]);
+        },
+      },
+      Number.isFinite(phase) ? phase : undefined,
+    );
+    abortRef.current = ctrl;
+  }
+
+  async function showTaskEvents(taskId: string) {
+    try {
+      const res = await fetchTaskEvents(taskId, 200);
+      setSelectedTaskId(taskId);
+      setTaskEvents((res.events || []) as TaskEvent[]);
+      setEventFilter("all");
+      if ((res.events || []).length === 0) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `No events found for task \`${taskId}\`.`,
+          },
+        ]);
+      }
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: `**Error:** ${String(err)}` },
+      ]);
+    }
+  }
+
+  function downloadTaskEvents() {
+    if (!selectedTaskId || taskEvents.length === 0) return;
+    const blob = new Blob([JSON.stringify(taskEvents, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `task_${selectedTaskId}_events.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const filteredTaskEvents =
+    eventFilter === "all"
+      ? taskEvents
+      : taskEvents.filter((ev) => String(ev.type ?? "unknown") === eventFilter);
+
+  const availableEventTypes = Array.from(
+    new Set(taskEvents.map((ev) => String(ev.type ?? "unknown"))),
+  ).sort();
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -179,6 +408,91 @@ export default function Chat({ targetAgent }: ChatProps) {
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto max-w-3xl space-y-4">
+          {runAsTaskLoop && recentTasks.length > 0 && (
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-3">
+              <p className="mb-2 text-xs text-[var(--text-secondary)]">Recent tasks</p>
+              <div className="space-y-2">
+                {recentTasks.slice(0, 5).map((t) => (
+                  <div key={t.task_id} className="flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="truncate text-[var(--text-primary)]">{t.task_id}</p>
+                      <p className="truncate text-[var(--text-secondary)]">{t.status}</p>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="from"
+                        value={retryPhaseByTask[t.task_id] ?? ""}
+                        onChange={(e) =>
+                          setRetryPhaseByTask((prev) => ({
+                            ...prev,
+                            [t.task_id]: e.target.value,
+                          }))
+                        }
+                        className="w-16 rounded border border-[var(--border)] bg-[var(--bg-primary)] px-1 py-1 text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => showTaskEvents(t.task_id)}
+                      >
+                        Events
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => runRetry(t.task_id)}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {selectedTaskId && (
+                <div className="mt-3 border-t border-[var(--border)] pt-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <p className="text-xs text-[var(--text-secondary)]">
+                      Timeline: {selectedTaskId}
+                    </p>
+                    <select
+                      className="rounded border border-[var(--border)] bg-[var(--bg-primary)] px-2 py-1 text-xs"
+                      value={eventFilter}
+                      onChange={(e) => setEventFilter(e.target.value)}
+                    >
+                      <option value="all">all</option>
+                      {availableEventTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={downloadTaskEvents}
+                    >
+                      Download JSON
+                    </Button>
+                  </div>
+                  <div className="max-h-36 overflow-auto rounded border border-[var(--border)] p-2 text-xs">
+                    {filteredTaskEvents.slice(-20).map((ev, idx) => (
+                      <p key={`${String(ev.type ?? "event")}-${idx}`} className="py-0.5">
+                        {String(ev.timestamp ?? "")} {String(ev.type ?? "event")}
+                      </p>
+                    ))}
+                    {filteredTaskEvents.length === 0 && (
+                      <p className="text-[var(--text-secondary)]">No events for selected filter.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center pt-32 text-center">
               <Bot className="mb-4 h-12 w-12 text-[var(--text-secondary)]" />

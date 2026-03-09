@@ -21,6 +21,7 @@ const FALLBACK_AGENTS: Agent[] = [
 export default function ChatPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selected, setSelected] = useState("athena");
+  const [runAsTaskLoop, setRunAsTaskLoop] = useState(false);
 
   useEffect(() => {
     fetchAgents()
@@ -58,9 +59,17 @@ export default function ChatPage() {
             {current.description}
           </span>
         )}
+        <label className="ml-auto flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <input
+            type="checkbox"
+            checked={runAsTaskLoop}
+            onChange={(e) => setRunAsTaskLoop(e.target.checked)}
+          />
+          Run as task loop
+        </label>
       </div>
 
-      <Chat targetAgent={selected} />
+      <Chat targetAgent={selected} runAsTaskLoop={runAsTaskLoop} />
     </div>
   );
 }

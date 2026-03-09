@@ -18,6 +18,8 @@ import type {
   BoardMeetingRequest,
   BoardMeetingResponse,
   TaskStreamCallbacks,
+  TaskListResponse,
+  TaskEventsResponse,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -245,26 +247,30 @@ export function streamTask(
       if (!ev.data) return;
       try {
         const data = JSON.parse(ev.data);
+        const payload = {
+          ...data,
+          type: data.type ?? ev.event ?? "progress",
+        };
 
         if (ev.event === "clarification_needed") {
           callbacks.onClarificationNeeded(
-            data.questions ?? [],
-            data.task_id ?? "",
+            payload.questions ?? [],
+            payload.task_id ?? "",
           );
           return;
         }
 
         if (ev.event === "task_result" || ev.event === "task_complete") {
-          callbacks.onResult(data);
+          callbacks.onResult(payload);
           return;
         }
 
         if (ev.event === "task_error") {
-          callbacks.onError(data.error ?? "Task failed");
+          callbacks.onError(payload.error ?? "Task failed");
           return;
         }
 
-        callbacks.onProgress(data);
+        callbacks.onProgress(payload);
       } catch {
         callbacks.onProgress({ type: ev.event || "progress" });
       }
@@ -302,18 +308,22 @@ export function submitTaskClarification(
       if (!ev.data) return;
       try {
         const data = JSON.parse(ev.data);
+        const payload = {
+          ...data,
+          type: data.type ?? ev.event ?? "progress",
+        };
 
         if (ev.event === "task_result" || ev.event === "task_complete") {
-          callbacks.onResult(data);
+          callbacks.onResult(payload);
           return;
         }
 
         if (ev.event === "task_error") {
-          callbacks.onError(data.error ?? "Task failed");
+          callbacks.onError(payload.error ?? "Task failed");
           return;
         }
 
-        callbacks.onProgress(data);
+        callbacks.onProgress(payload);
       } catch {
         callbacks.onProgress({ type: ev.event || "progress" });
       }
@@ -324,6 +334,81 @@ export function submitTaskClarification(
       throw err;
     },
 
+    openWhenHidden: true,
+  });
+
+  return ctrl;
+}
+
+export async function abortTask(taskId: string, reason = "Stopped from web UI"): Promise<void> {
+  const res = await fetch(`${API_URL}/api/task/abort`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ task_id: taskId, reason }),
+  });
+  if (!res.ok) throw new Error(`POST /api/task/abort failed: ${res.status}`);
+}
+
+export async function fetchTasks(limit = 20): Promise<TaskListResponse> {
+  const res = await fetch(`${API_URL}/api/tasks?limit=${limit}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET /api/tasks failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchTaskEvents(taskId: string, limit = 200): Promise<TaskEventsResponse> {
+  const res = await fetch(`${API_URL}/api/task/${taskId}/events?limit=${limit}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET /api/task/{id}/events failed: ${res.status}`);
+  return res.json();
+}
+
+export function streamTaskRetry(
+  taskId: string,
+  callbacks: TaskStreamCallbacks,
+  fromPhase?: number,
+): AbortController {
+  const ctrl = new AbortController();
+
+  fetchEventSource(`${API_URL}/api/task/retry/stream`, {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      task_id: taskId,
+      ...(fromPhase !== undefined ? { from_phase: fromPhase } : {}),
+    }),
+    signal: ctrl.signal,
+    onmessage(ev) {
+      if (!ev.data) return;
+      try {
+        const data = JSON.parse(ev.data);
+        const payload = {
+          ...data,
+          type: data.type ?? ev.event ?? "progress",
+        };
+        if (ev.event === "clarification_needed") {
+          callbacks.onClarificationNeeded(payload.questions ?? [], payload.task_id ?? "");
+          return;
+        }
+        if (ev.event === "task_result" || ev.event === "task_complete") {
+          callbacks.onResult(payload);
+          return;
+        }
+        if (ev.event === "task_error") {
+          callbacks.onError(payload.error ?? "Task failed");
+          return;
+        }
+        callbacks.onProgress(payload);
+      } catch {
+        callbacks.onProgress({ type: ev.event || "progress" });
+      }
+    },
+    onerror(err) {
+      callbacks.onError(err?.message ?? "Connection lost");
+      throw err;
+    },
     openWhenHidden: true,
   });
 

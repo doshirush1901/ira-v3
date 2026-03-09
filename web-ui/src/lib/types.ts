@@ -137,3 +137,23 @@ export interface TaskResult {
   file_path?: string;
   file_format?: string;
 }
+
+export interface TaskState {
+  task_id: string;
+  status: string;
+  goal?: string;
+  output_format?: string;
+  user_id?: string;
+  [key: string]: unknown;
+}
+
+export interface TaskListResponse {
+  count: number;
+  tasks: TaskState[];
+}
+
+export interface TaskEventsResponse {
+  task_id: string;
+  count: number;
+  events: TaskProgress[];
+}

@@ -7,12 +7,14 @@ import {
   BarChart3,
   Users,
   ClipboardList,
+  ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import HealthDot from "./HealthDot";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/tasks", label: "Tasks", icon: ListChecks },
   { href: "/crm", label: "CRM", icon: BarChart3 },
   { href: "/board-meeting", label: "Boardroom", icon: Users },
   { href: "/corrections", label: "Corrections", icon: ClipboardList },
