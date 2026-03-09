@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -406,6 +407,60 @@ class TestUntestedAgents:
         assert "get_project_status" in tool_names
         assert "log_project_event" in tool_names
         assert "get_overdue_milestones" in tool_names
+        assert "get_eto_daily_report" in tool_names
+
+    async def test_atlas_search_domain_knowledge_expands_alias_categories(self):
+        from ira.agents.atlas import Atlas
+        with self._mock_llm():
+            agent = Atlas(retriever=self.retriever, bus=self.bus)
+
+        self.retriever.search_by_category = AsyncMock(return_value=[])
+        self.retriever.search = AsyncMock(return_value=[])
+        await agent.search_domain_knowledge("shop floor build sequence", limit=8)
+
+        called_categories = [call.args[1] for call in self.retriever.search_by_category.await_args_list]
+        assert "production" in called_categories
+        assert "report" in called_categories
+        assert "manual" in called_categories
+        assert "technical_spec" in called_categories
+
+    async def test_atlas_search_domain_knowledge_falls_back_to_generic_search(self):
+        from ira.agents.atlas import Atlas
+        with self._mock_llm():
+            agent = Atlas(retriever=self.retriever, bus=self.bus)
+
+        self.retriever.search_by_category = AsyncMock(return_value=[])
+        self.retriever.search = AsyncMock(return_value=[{"content": "fallback fact", "score": 0.8}])
+        result = await agent.search_domain_knowledge("dispatch vacuum packing", limit=5)
+
+        self.retriever.search.assert_awaited_once()
+        assert result
+        assert result[0]["content"] == "fallback fact"
+
+    async def test_atlas_eto_daily_report_uses_asana_csv(self, tmp_path: Path):
+        from ira.agents.atlas import Atlas
+
+        asana_dir = tmp_path / "23_Asana"
+        asana_dir.mkdir(parents=True)
+        csv_path = asana_dir / "sample.csv"
+        csv_path.write_text(
+            "Task ID,Name,Section/Column,Projects,Created At,Completed At,Blocked By (Dependencies),Blocking (Dependencies)\n"
+            "o1,O: Bearings,RFQs,Project Alpha,2022-10-08,,,\n"
+            "r1,R: Bearings,RFQs,Project Alpha,2022-10-08,2022-10-20,,\n"
+            "a1,Assembly pre paint,Assembly,Project Alpha,2022-10-10,,dep-7,dep-9\n",
+            encoding="utf-8",
+        )
+
+        with self._mock_llm(), patch("ira.agents.atlas._ASANA_IMPORTS_DIR", asana_dir):
+            agent = Atlas(retriever=self.retriever, bus=self.bus)
+            payload = await agent.eto_daily_report(max_files=2)
+            report = json.loads(payload)
+
+        assert report["status"] == "ok"
+        assert report["source"]["tasks_scanned"] == 3
+        assert report["procurement"]["pairs_total"] == 1
+        assert report["procurement"]["pairs_received"] == 1
+        assert report["top_unblockers"]
 
     # ── Cadmus ────────────────────────────────────────────────────────
 

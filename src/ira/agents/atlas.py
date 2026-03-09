@@ -6,6 +6,8 @@ alerts on overdue payment milestones using a local SQLite logbook.
 
 from __future__ import annotations
 
+import asyncio
+import csv
 import json
 import logging
 from datetime import datetime, timezone
@@ -15,6 +17,7 @@ from typing import Any
 import aiosqlite
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.brain.asana_planning_mapper import normalize_task_record, pair_procurement_events
 from ira.exceptions import ToolExecutionError
 from ira.prompt_loader import load_prompt
 from ira.service_keys import ServiceKey as SK
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = load_prompt("atlas_system")
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "brain" / "atlas_logbook.db"
+_ASANA_IMPORTS_DIR = Path(__file__).resolve().parents[3] / "data" / "imports" / "23_Asana"
 
 _INIT_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -56,6 +60,17 @@ class Atlas(BaseAgent):
         "contracts_and_legal",
         "business plans",
     ]
+    # Bridge Atlas planning domains to imports metadata doc types so shop-floor
+    # datasets (e.g. Asana exports/gold sets) can be retrieved via category filters.
+    category_aliases: dict[str, list[str]] = {
+        "orders_and_pos": ["order", "invoice", "quote", "spreadsheet"],
+        "production": ["technical_spec", "manual", "report", "spreadsheet"],
+        "current machine orders": ["order", "spreadsheet"],
+        "project_case_studies": ["report", "presentation", "manual"],
+        "company_internal": ["report", "spreadsheet", "other"],
+        "contracts_and_legal": ["contract", "invoice"],
+        "business plans": ["presentation", "report"],
+    }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -93,6 +108,12 @@ class Atlas(BaseAgent):
             parameters={"project_id": "Optional project name to filter (empty for all)"},
             handler=self._tool_get_production_schedule,
         ))
+        self.register_tool(AgentTool(
+            name="get_eto_daily_report",
+            description="Generate a deterministic ETO daily report from 23_Asana exports.",
+            parameters={"max_files": "Optional number of recent CSV exports to scan (default 8)"},
+            handler=self._tool_get_eto_daily_report,
+        ))
 
         if self._services.get(SK.PANTHEON):
             self.register_tool(AgentTool(
@@ -115,6 +136,9 @@ class Atlas(BaseAgent):
 
     async def _tool_get_production_schedule(self, project_id: str = "") -> str:
         return await self.production_schedule()
+
+    async def _tool_get_eto_daily_report(self, max_files: int = 8) -> str:
+        return await self.eto_daily_report(max_files=max_files)
 
     async def _tool_ask_hephaestus(self, query: str) -> str:
         pantheon = self._services.get(SK.PANTHEON)
@@ -163,6 +187,9 @@ class Atlas(BaseAgent):
         if action == "payment_alerts":
             return await self.payment_alerts()
 
+        if action == "eto_daily_report":
+            return await self.eto_daily_report(int(ctx.get("max_files", 8)))
+
         if action == "meeting_notes":
             return await self.use_skill(
                 "generate_meeting_notes",
@@ -173,6 +200,151 @@ class Atlas(BaseAgent):
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
 
     # ── existing methods ──────────────────────────────────────────────────
+
+    def _atlas_search_categories(self) -> list[str]:
+        """Return Atlas categories expanded with imports/doc-type aliases."""
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for category in self.knowledge_categories:
+            for value in [category, *self.category_aliases.get(category, [])]:
+                cleaned = value.strip()
+                if cleaned and cleaned not in seen:
+                    seen.add(cleaned)
+                    ordered.append(cleaned)
+        return ordered
+
+    async def search_domain_knowledge(
+        self,
+        query: str,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        """Search Atlas planning categories with alias expansion and dedupe."""
+        categories = self._atlas_search_categories()
+        if not categories:
+            return await self.search_knowledge(query, limit=limit)
+
+        per_cat = max(2, limit // max(1, min(len(categories), limit)))
+        results_lists = await asyncio.gather(*(
+            self.search_category(query, cat, limit=per_cat)
+            for cat in categories
+        ))
+
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for results in results_lists:
+            for result in results:
+                key = result.get("source", "") + result.get("content", "")[:120]
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(result)
+
+        if not merged:
+            return await self.search_knowledge(query, limit=limit)
+
+        merged.sort(key=lambda r: r.get("score", 0), reverse=True)
+        return merged[:limit]
+
+    @staticmethod
+    def _read_csv_rows(filepath: Path) -> list[dict[str, str]]:
+        with filepath.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+            reader = csv.DictReader(fh)
+            return [dict(row) for row in reader]
+
+    async def eto_daily_report(self, max_files: int = 8) -> str:
+        """Build an ETO planning report from Asana project-export CSV files."""
+        if not _ASANA_IMPORTS_DIR.exists():
+            return json.dumps({
+                "status": "unavailable",
+                "reason": "23_Asana imports folder not found",
+            })
+
+        csv_files = sorted(
+            _ASANA_IMPORTS_DIR.glob("*.csv"),
+            key=lambda fp: fp.stat().st_mtime,
+            reverse=True,
+        )[:max(1, max_files)]
+        if not csv_files:
+            return json.dumps({
+                "status": "empty",
+                "reason": "No Asana CSV exports found",
+            })
+
+        rows: list[dict[str, str]] = []
+        for fp in csv_files:
+            try:
+                rows.extend(await asyncio.to_thread(self._read_csv_rows, fp))
+            except OSError:
+                logger.warning("Unable to read Asana CSV: %s", fp, exc_info=True)
+
+        normalized = [normalize_task_record(row) for row in rows]
+        completed = [task for task in normalized if task.completed_at is not None]
+        open_tasks = [task for task in normalized if task.completed_at is None]
+
+        gates: dict[str, dict[str, int]] = {}
+        for task in normalized:
+            gate = task.phase_std
+            stats = gates.setdefault(gate, {"total": 0, "completed": 0, "open": 0})
+            stats["total"] += 1
+            if task.completed_at is not None:
+                stats["completed"] += 1
+            else:
+                stats["open"] += 1
+
+        pairs = pair_procurement_events(rows)
+        received_pairs = [pair for pair in pairs if pair["status"] == "received"]
+        open_pairs = [pair for pair in pairs if pair["status"] == "open"]
+        lead_days = [int(pair["lead_time_days"]) for pair in received_pairs if pair["lead_time_days"] is not None]
+        avg_lead = round(sum(lead_days) / len(lead_days), 1) if lead_days else None
+
+        unblock_candidates: list[dict[str, Any]] = []
+        for row, task in zip(rows, normalized, strict=False):
+            if task.completed_at is not None:
+                continue
+            blocked = str(row.get("Blocked By (Dependencies)", "")).strip()
+            blocking = str(row.get("Blocking (Dependencies)", "")).strip()
+            if not blocked and not blocking:
+                continue
+            blocked_count = len([x for x in blocked.split(",") if x.strip()]) if blocked else 0
+            blocking_count = len([x for x in blocking.split(",") if x.strip()]) if blocking else 0
+            unblock_candidates.append({
+                "task_id": task.task_id,
+                "task_name": task.task_name,
+                "phase_std": task.phase_std,
+                "blocked_by_count": blocked_count,
+                "blocking_count": blocking_count,
+                "priority": (blocking_count * 2) + blocked_count,
+            })
+
+        unblock_candidates.sort(key=lambda item: item["priority"], reverse=True)
+
+        projects = {
+            str(row.get("Projects", "")).strip()
+            for row in rows
+            if str(row.get("Projects", "")).strip()
+        }
+        report = {
+            "status": "ok",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source": {
+                "folder": str(_ASANA_IMPORTS_DIR),
+                "csv_files_scanned": len(csv_files),
+                "tasks_scanned": len(rows),
+                "projects_scanned": len(projects),
+            },
+            "execution": {
+                "completed_tasks": len(completed),
+                "open_tasks": len(open_tasks),
+            },
+            "gate_status": gates,
+            "procurement": {
+                "pairs_total": len(pairs),
+                "pairs_received": len(received_pairs),
+                "pairs_open": len(open_pairs),
+                "avg_lead_time_days": avg_lead,
+            },
+            "top_unblockers": unblock_candidates[:10],
+        }
+        return json.dumps(report, indent=2)
 
     async def project_summary(self, project_name: str) -> str:
         """Combine KB data with logbook entries for a project summary."""

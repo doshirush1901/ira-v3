@@ -26,6 +26,12 @@ class Sophia(BaseAgent):
     name = "sophia"
     role = "Reflector / Learner"
     description = "Reviews past decisions and suggests improvements"
+    knowledge_categories = [
+        "company_internal",
+        "webcall transcripts",
+        "sales_and_crm",
+        "project_case_studies",
+    ]
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
@@ -45,6 +51,24 @@ class Sophia(BaseAgent):
                 "observation": "What was observed that needs improvement",
             },
             handler=self._tool_suggest_improvement,
+        ))
+        self.register_tool(AgentTool(
+            name="audit_decision_log",
+            description="Create auditable decision traces for reflective analysis.",
+            parameters={
+                "decision": "Decision/response text",
+                "evidence": "Optional supporting context",
+            },
+            handler=self._tool_audit_decision_log,
+        ))
+        self.register_tool(AgentTool(
+            name="validate_correction_consistency",
+            description="Check reflective statements against correction consistency constraints.",
+            parameters={
+                "statement": "Statement to validate",
+                "ledger_context": "Optional correction context",
+            },
+            handler=self._tool_validate_correction_consistency,
         ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
@@ -108,4 +132,22 @@ class Sophia(BaseAgent):
             f"Observation: {observation}\n"
             f"Recommended action: Review and adjust {agent_name}'s behaviour "
             f"based on the above observation."
+        )
+
+    async def _tool_audit_decision_log(self, decision: str, evidence: str = "") -> str:
+        return await self.use_skill(
+            "audit_decision_log",
+            decision=decision,
+            evidence=evidence,
+        )
+
+    async def _tool_validate_correction_consistency(
+        self,
+        statement: str,
+        ledger_context: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "validate_correction_consistency",
+            statement=statement,
+            ledger_context=ledger_context,
         )

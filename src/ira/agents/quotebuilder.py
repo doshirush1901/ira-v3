@@ -59,6 +59,12 @@ class Quotebuilder(BaseAgent):
     name = "quotebuilder"
     role = "Quote Builder"
     description = "Structured quote generation for single and multi-machine orders"
+    knowledge_categories = [
+        "quotes_and_proposals",
+        "product_catalogues",
+        "sales_and_crm",
+        "contracts_and_legal",
+    ]
 
     # ── tool registration ────────────────────────────────────────────────
 

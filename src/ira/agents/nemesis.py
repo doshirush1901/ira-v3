@@ -77,6 +77,12 @@ class Nemesis(BaseAgent):
     name = "nemesis"
     role = "Trainer / Adversarial"
     description = "Generates training scenarios and stress-tests agent responses"
+    knowledge_categories = [
+        "company_internal",
+        "sales_and_crm",
+        "market_research_and_analysis",
+        "project_case_studies",
+    ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -146,6 +152,24 @@ class Nemesis(BaseAgent):
             description="Get training statistics: correction counts, recent corrections, and store health.",
             parameters={},
             handler=self._tool_get_training_stats,
+        ))
+        self.register_tool(AgentTool(
+            name="audit_decision_log",
+            description="Generate an auditable decision trace for training outcomes.",
+            parameters={
+                "decision": "Decision or training outcome text",
+                "evidence": "Optional evidence context",
+            },
+            handler=self._tool_audit_decision_log,
+        ))
+        self.register_tool(AgentTool(
+            name="validate_correction_consistency",
+            description="Validate statements against correction consistency constraints.",
+            parameters={
+                "statement": "Statement to validate",
+                "ledger_context": "Optional correction context",
+            },
+            handler=self._tool_validate_correction_consistency,
         ))
 
     # ── tool handlers ────────────────────────────────────────────────────
@@ -254,6 +278,24 @@ class Nemesis(BaseAgent):
             return json.dumps(stats, default=str)
         except (DatabaseError, Exception) as exc:
             return f"Could not retrieve training stats: {exc}"
+
+    async def _tool_audit_decision_log(self, decision: str, evidence: str = "") -> str:
+        return await self.use_skill(
+            "audit_decision_log",
+            decision=decision,
+            evidence=evidence,
+        )
+
+    async def _tool_validate_correction_consistency(
+        self,
+        statement: str,
+        ledger_context: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "validate_correction_consistency",
+            statement=statement,
+            ledger_context=ledger_context,
+        )
 
     # ── correction ingestion ──────────────────────────────────────────────
 

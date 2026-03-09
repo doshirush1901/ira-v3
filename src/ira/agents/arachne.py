@@ -70,6 +70,25 @@ class Arachne(BaseAgent):
             parameters={"query": "The question or request for Cadmus"},
             handler=self._tool_ask_cadmus,
         ))
+        self.register_tool(AgentTool(
+            name="generate_social_post_skill",
+            description="Generate a social post via the canonical skill layer.",
+            parameters={
+                "topic": "Post topic",
+                "platform": "Target platform (default linkedin)",
+            },
+            handler=self._tool_generate_social_post_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="schedule_campaign_skill",
+            description="Create or schedule a campaign using canonical marketing skills.",
+            parameters={
+                "name": "Campaign name",
+                "segment": "Target segment description",
+                "start_date": "Optional start date",
+            },
+            handler=self._tool_schedule_campaign_skill,
+        ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -112,3 +131,27 @@ class Arachne(BaseAgent):
             return await cadmus.handle(query)
         except (ToolExecutionError, Exception) as exc:
             return f"Cadmus error: {exc}"
+
+    async def _tool_generate_social_post_skill(
+        self,
+        topic: str,
+        platform: str = "linkedin",
+    ) -> str:
+        return await self.use_skill(
+            "generate_social_post",
+            topic=topic,
+            platform=platform,
+        )
+
+    async def _tool_schedule_campaign_skill(
+        self,
+        name: str,
+        segment: str = "",
+        start_date: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "schedule_campaign",
+            name=name,
+            segment={"description": segment} if segment else {},
+            start_date=start_date,
+        )

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections import defaultdict
 from typing import Any
 
 from ira.exceptions import DatabaseError, IraError
@@ -22,6 +24,13 @@ from ira.skills import SKILL_MATRIX
 logger = logging.getLogger(__name__)
 
 _SERVICES: dict[str, Any] = {}
+_SKILL_STATS: dict[str, dict[str, Any]] = defaultdict(lambda: {
+    "calls": 0,
+    "success": 0,
+    "failure": 0,
+    "total_ms": 0.0,
+    "last_error": "",
+})
 
 
 def bind_services(services: dict[str, Any]) -> None:
@@ -32,6 +41,34 @@ def bind_services(services: dict[str, Any]) -> None:
 
 def _svc(name: str) -> Any | None:
     return _SERVICES.get(name)
+
+
+def get_skill_stats() -> dict[str, dict[str, Any]]:
+    """Return per-skill usage and reliability metrics."""
+    stats: dict[str, dict[str, Any]] = {}
+    for skill in sorted(SKILL_MATRIX):
+        raw = _SKILL_STATS[skill]
+        calls = int(raw["calls"])
+        success = int(raw["success"])
+        failure = int(raw["failure"])
+        total_ms = float(raw["total_ms"])
+        avg_ms = (total_ms / calls) if calls else 0.0
+        failure_rate = (failure / calls) if calls else 0.0
+        stats[skill] = {
+            "calls": calls,
+            "success": success,
+            "failure": failure,
+            "failure_rate": round(failure_rate, 4),
+            "avg_ms": round(avg_ms, 2),
+            "total_ms": round(total_ms, 2),
+            "last_error": str(raw.get("last_error", "")),
+        }
+    return stats
+
+
+def reset_skill_stats() -> None:
+    """Reset in-memory skill metrics (useful for tests)."""
+    _SKILL_STATS.clear()
 
 
 async def _llm_call(system: str, user: str, *, temperature: float = 0.3) -> str:
@@ -660,6 +697,201 @@ async def generate_org_chart(**kwargs: Any) -> str:
     )
 
 
+# ── Procurement, Quality, Governance & Memory ────────────────────────────
+
+
+async def evaluate_vendor_risk(**kwargs: Any) -> str:
+    vendor = kwargs.get("vendor", kwargs.get("supplier", ""))
+    context_notes = kwargs.get("context", "")
+    if not vendor:
+        return "Error: 'vendor' or 'supplier' argument required"
+
+    retriever = _svc(SK.RETRIEVER)
+    kb_context = ""
+    if retriever:
+        results = await retriever.search(
+            f"{vendor} supplier performance quality delays payment terms risk",
+            limit=8,
+        )
+        kb_context = "\n".join(r.get("content", "")[:300] for r in results)
+
+    return await _llm_call(
+        "You are a procurement risk analyst for Machinecraft. Evaluate supplier risk "
+        "across dimensions: delivery reliability, quality consistency, commercial "
+        "stability, and operational dependency.",
+        f"Vendor: {vendor}\n"
+        f"Context notes: {context_notes or '(none)'}\n\n"
+        f"Evidence:\n{kb_context or '(no historical evidence)'}\n\n"
+        "Return: risk score (1-10), risk tier, key risk factors, mitigation actions.",
+    )
+
+
+async def compare_supplier_quotes(**kwargs: Any) -> str:
+    requirement = kwargs.get("requirement", kwargs.get("part", ""))
+    quotes = kwargs.get("quotes", [])
+    quotes_text = json.dumps(quotes, indent=2, default=str) if quotes else "(none provided)"
+
+    retriever = _svc(SK.RETRIEVER)
+    kb_context = ""
+    if retriever and requirement:
+        results = await retriever.search(
+            f"{requirement} supplier quotes lead time quality history",
+            limit=6,
+        )
+        kb_context = "\n".join(r.get("content", "")[:250] for r in results)
+
+    return await _llm_call(
+        "You are a strategic sourcing specialist. Compare supplier offers using total "
+        "value, not just price. Include lead-time risk and quality confidence.",
+        f"Requirement: {requirement or '(unspecified)'}\n"
+        f"Supplier quotes:\n{quotes_text}\n\n"
+        f"Historical context:\n{kb_context or '(none)'}\n\n"
+        "Return a ranked comparison with recommendation and rationale.",
+    )
+
+
+async def forecast_component_lead_time(**kwargs: Any) -> str:
+    component = kwargs.get("component", kwargs.get("part", ""))
+    quantity = kwargs.get("quantity", 1)
+    if not component:
+        return "Error: 'component' or 'part' argument required"
+
+    retriever = _svc(SK.RETRIEVER)
+    kb_context = ""
+    if retriever:
+        results = await retriever.search(
+            f"{component} procurement lead time vendor delivery history quantity {quantity}",
+            limit=8,
+        )
+        kb_context = "\n".join(r.get("content", "")[:320] for r in results)
+
+    return await _llm_call(
+        "You are a supply-chain planner. Forecast lead time with a range and confidence "
+        "based on procurement history, supplier reliability, and quantity impact.",
+        f"Component: {component}\n"
+        f"Quantity: {quantity}\n\n"
+        f"Context:\n{kb_context or '(none)'}\n\n"
+        "Return expected lead-time range, confidence, risks, and contingency options.",
+    )
+
+
+async def triage_punch_list(**kwargs: Any) -> str:
+    items = kwargs.get("items", kwargs.get("punch_list", []))
+    if isinstance(items, str):
+        items_text = items
+    else:
+        items_text = json.dumps(items, indent=2, default=str)
+
+    if not items_text or items_text == "[]":
+        return "Error: 'items' or 'punch_list' argument required"
+
+    return await _llm_call(
+        "You are a quality manager. Triage punch-list items using severity, safety, "
+        "customer impact, and dispatch/FAT blocking risk.",
+        f"Punch-list items:\n{items_text}\n\n"
+        "Return priorities (P0/P1/P2), owners, recommended sequence, and blockers.",
+    )
+
+
+async def generate_fat_plan(**kwargs: Any) -> str:
+    machine_model = kwargs.get("machine_model", "")
+    standards = kwargs.get("standards", "")
+    if not machine_model:
+        return "Error: 'machine_model' argument required"
+
+    retriever = _svc(SK.RETRIEVER)
+    kb_context = ""
+    if retriever:
+        results = await retriever.search(
+            f"{machine_model} FAT checklist test plan acceptance criteria",
+            limit=8,
+        )
+        kb_context = "\n".join(r.get("content", "")[:320] for r in results)
+
+    return await _llm_call(
+        "You are an industrial QA specialist. Build a FAT execution plan with clear "
+        "acceptance criteria and evidence capture steps.",
+        f"Machine model: {machine_model}\n"
+        f"Applicable standards: {standards or '(none specified)'}\n\n"
+        f"Reference context:\n{kb_context or '(none)'}\n\n"
+        "Return pre-FAT checks, test sequence, pass/fail criteria, and sign-off checklist.",
+    )
+
+
+async def analyze_service_root_cause(**kwargs: Any) -> str:
+    issue = kwargs.get("issue", "")
+    observations = kwargs.get("observations", "")
+    if not issue:
+        return "Error: 'issue' argument required"
+
+    retriever = _svc(SK.RETRIEVER)
+    kb_context = ""
+    if retriever:
+        results = await retriever.search(
+            f"{issue} service failure root cause corrective action",
+            limit=8,
+        )
+        kb_context = "\n".join(r.get("content", "")[:300] for r in results)
+
+    return await _llm_call(
+        "You are a service reliability engineer. Perform root-cause analysis and "
+        "propose corrective and preventive actions.",
+        f"Issue: {issue}\n"
+        f"Field observations: {observations or '(none)'}\n\n"
+        f"Historical context:\n{kb_context or '(none)'}\n\n"
+        "Return likely root causes, confidence level, immediate containment, and CAPA actions.",
+    )
+
+
+async def run_governance_check(**kwargs: Any) -> str:
+    text = kwargs.get("text", kwargs.get("response", ""))
+    audience = kwargs.get("audience", "external")
+    if not text:
+        return "Error: 'text' or 'response' argument required"
+
+    return await _llm_call(
+        "You are a governance reviewer for Machinecraft AI outputs. Flag policy risks: "
+        "unverified claims, confidential disclosure, unauthorized commitments, and "
+        "actions requiring human approval.",
+        f"Audience: {audience}\n\n"
+        f"Text to review:\n{text[:8000]}\n\n"
+        "Return PASS/FAIL, detected risks, and exact remediation instructions.",
+        temperature=0.1,
+    )
+
+
+async def audit_decision_log(**kwargs: Any) -> str:
+    decision = kwargs.get("decision", kwargs.get("text", ""))
+    evidence = kwargs.get("evidence", "")
+    if not decision:
+        return "Error: 'decision' or 'text' argument required"
+
+    return await _llm_call(
+        "You are a decision-audit specialist. Convert decisions into an auditable "
+        "trace showing claims, evidence sources, assumptions, risks, and open gaps.",
+        f"Decision:\n{decision}\n\n"
+        f"Evidence/context:\n{evidence or '(none provided)'}\n\n"
+        "Return a structured audit log with risk level and follow-up actions.",
+        temperature=0.1,
+    )
+
+
+async def validate_correction_consistency(**kwargs: Any) -> str:
+    statement = kwargs.get("statement", kwargs.get("text", ""))
+    ledger_context = kwargs.get("ledger_context", "")
+    if not statement:
+        return "Error: 'statement' or 'text' argument required"
+
+    return await _llm_call(
+        "You are a correction-consistency checker. Determine whether a statement "
+        "conflicts with known corrections or appears stale relative to updated truth.",
+        f"Statement:\n{statement}\n\n"
+        f"Correction ledger context:\n{ledger_context or '(not provided)'}\n\n"
+        "Return CONSISTENT/CONFLICT/UNCERTAIN with reasoning and remediation.",
+        temperature=0.1,
+    )
+
+
 # ── Dispatcher ───────────────────────────────────────────────────────────
 
 _HANDLERS: dict[str, Any] = {
@@ -680,4 +912,16 @@ async def use_skill(skill_name: str, **kwargs: Any) -> str:
             f"Unknown skill '{skill_name}'. "
             f"Available skills: {sorted(SKILL_MATRIX)}"
         )
-    return await handler(**kwargs)
+    started = time.perf_counter()
+    _SKILL_STATS[skill_name]["calls"] += 1
+    try:
+        result = await handler(**kwargs)
+        _SKILL_STATS[skill_name]["success"] += 1
+        return result
+    except Exception as exc:
+        _SKILL_STATS[skill_name]["failure"] += 1
+        _SKILL_STATS[skill_name]["last_error"] = str(exc)[:500]
+        raise
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        _SKILL_STATS[skill_name]["total_ms"] += elapsed_ms

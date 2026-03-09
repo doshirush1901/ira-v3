@@ -86,4 +86,32 @@ SKILL_MATRIX: dict[str, str] = {
     "generate_org_chart": (
         "Build an organisational chart from current HR data."
     ),
+    # ── Procurement, Quality, Governance & Memory ───────────────────────
+    "evaluate_vendor_risk": (
+        "Assess supplier risk across quality, delivery reliability, and commercial exposure."
+    ),
+    "compare_supplier_quotes": (
+        "Compare supplier quotes on cost, lead time, and risk-adjusted value."
+    ),
+    "forecast_component_lead_time": (
+        "Estimate procurement lead time for a component under current constraints."
+    ),
+    "triage_punch_list": (
+        "Prioritize punch-list items by severity, customer impact, and dispatch readiness."
+    ),
+    "generate_fat_plan": (
+        "Generate a structured FAT checklist and execution plan for a machine."
+    ),
+    "analyze_service_root_cause": (
+        "Analyze a field/service issue and produce likely root causes with next checks."
+    ),
+    "run_governance_check": (
+        "Check output against policy boundaries, confidentiality, and approval requirements."
+    ),
+    "audit_decision_log": (
+        "Produce a decision trace with claims, evidence sources, risks, and open gaps."
+    ),
+    "validate_correction_consistency": (
+        "Verify whether statements conflict with known corrections or stale truths."
+    ),
 }

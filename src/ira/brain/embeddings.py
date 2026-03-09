@@ -231,6 +231,10 @@ class EmbeddingService:
         *,
         input_type: str,
     ) -> list[list[float]]:
+        if not self._api_key:
+            raise RuntimeError(
+                "Voyage API key is missing (set VOYAGE_API_KEY)."
+            )
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",

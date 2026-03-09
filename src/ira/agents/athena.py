@@ -26,6 +26,11 @@ class Athena(BaseAgent):
     name = "athena"
     role = "CEO / Orchestrator"
     description = "Routes queries and synthesises multi-agent responses"
+    knowledge_categories = [
+        "company_internal",
+        "business plans",
+        "sales_and_crm",
+    ]
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
@@ -55,6 +60,24 @@ class Athena(BaseAgent):
             description="Check the health status of all Ira subsystems.",
             parameters={},
             handler=self._tool_system_health,
+        ))
+        self.register_tool(AgentTool(
+            name="run_governance_check",
+            description="Check response text against governance and policy boundaries.",
+            parameters={
+                "text": "Candidate response text",
+                "audience": "Audience scope (external/internal)",
+            },
+            handler=self._tool_run_governance_check,
+        ))
+        self.register_tool(AgentTool(
+            name="audit_decision_log",
+            description="Create an auditable decision trace with evidence and risk notes.",
+            parameters={
+                "decision": "Decision or recommendation text",
+                "evidence": "Optional supporting evidence",
+            },
+            handler=self._tool_audit_decision_log,
         ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
@@ -119,6 +142,24 @@ class Athena(BaseAgent):
         except (IraError, Exception) as exc:
             return f"Health check failed: {exc}"
 
+    async def _tool_run_governance_check(
+        self,
+        text: str,
+        audience: str = "external",
+    ) -> str:
+        return await self.use_skill(
+            "run_governance_check",
+            text=text,
+            audience=audience,
+        )
+
+    async def _tool_audit_decision_log(self, decision: str, evidence: str = "") -> str:
+        return await self.use_skill(
+            "audit_decision_log",
+            decision=decision,
+            evidence=evidence,
+        )
+
     # ── structured planning (used by TaskOrchestrator) ────────────────────
 
     async def generate_plan(self, goal: str) -> TaskPlan:
@@ -139,7 +180,7 @@ class Athena(BaseAgent):
             agent_list = "(agent list unavailable)"
 
         return await self._llm.generate_structured(
-            _SYSTEM_PROMPT,
+            self._compose_system_prompt(_SYSTEM_PROMPT),
             (
                 f"Create a step-by-step execution plan.\n\n"
                 f"Goal: {goal}\n\n"

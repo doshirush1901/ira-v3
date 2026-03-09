@@ -30,6 +30,12 @@ class Delphi(BaseAgent):
     name = "delphi"
     role = "Classification Specialist"
     description = "Classifies emails by intent and contacts by relationship type"
+    knowledge_categories = [
+        "sales_and_crm",
+        "leads_and_contacts",
+        "webcall transcripts",
+        "company_internal",
+    ]
     timeout = 30
 
     _SHADOW_DIMENSIONS: list[str] = [
@@ -88,6 +94,15 @@ class Delphi(BaseAgent):
             },
             handler=self._tool_clone_voice,
         ))
+        self.register_tool(AgentTool(
+            name="run_governance_check",
+            description="Check response text against governance and policy boundaries.",
+            parameters={
+                "text": "Candidate response text",
+                "audience": "Audience scope (external/internal)",
+            },
+            handler=self._tool_run_governance_check,
+        ))
 
     # ── tool handlers ─────────────────────────────────────────────────────
 
@@ -140,6 +155,17 @@ class Delphi(BaseAgent):
             except (json.JSONDecodeError, ValueError):
                 ctx = {"raw_context": context}
         return await self.rushabh_voice(query, ctx)
+
+    async def _tool_run_governance_check(
+        self,
+        text: str,
+        audience: str = "external",
+    ) -> str:
+        return await self.use_skill(
+            "run_governance_check",
+            text=text,
+            audience=audience,
+        )
 
     # ── main handler ──────────────────────────────────────────────────────
 

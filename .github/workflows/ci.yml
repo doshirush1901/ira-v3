@@ -43,6 +43,11 @@ jobs:
         run: |
           poetry config virtualenvs.in-project true
           poetry install --no-interaction
+      - name: Run skill governance audit
+        run: poetry run ira audit skills --strict
+        env:
+          OPENAI_API_KEY: "test-key"
+          VOYAGE_API_KEY: "test-key"
       - name: Run tests
         run: poetry run pytest --tb=short -q
         env:

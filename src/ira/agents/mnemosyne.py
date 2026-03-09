@@ -25,6 +25,11 @@ class Mnemosyne(BaseAgent):
     name = "mnemosyne"
     role = "Memory Keeper"
     description = "Manages long-term memory storage and retrieval"
+    knowledge_categories = [
+        "company_internal",
+        "sales_and_crm",
+        "project_case_studies",
+    ]
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
@@ -73,6 +78,15 @@ class Mnemosyne(BaseAgent):
                 parameters={"contact_id": "Contact identifier"},
                 handler=self._tool_get_goals,
             ))
+        self.register_tool(AgentTool(
+            name="validate_correction_consistency",
+            description="Check whether a memory statement conflicts with known corrections.",
+            parameters={
+                "statement": "Statement to validate",
+                "ledger_context": "Optional correction ledger context",
+            },
+            handler=self._tool_validate_correction_consistency,
+        ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -126,3 +140,14 @@ class Mnemosyne(BaseAgent):
             "progress": goal.progress,
             "slots": goal.required_slots,
         }, default=str)
+
+    async def _tool_validate_correction_consistency(
+        self,
+        statement: str,
+        ledger_context: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "validate_correction_consistency",
+            statement=statement,
+            ledger_context=ledger_context,
+        )

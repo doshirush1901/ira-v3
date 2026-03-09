@@ -26,6 +26,12 @@ class Vera(BaseAgent):
     name = "vera"
     role = "Fact Checker"
     description = "Verifies claims against the knowledge base"
+    knowledge_categories = [
+        "company_internal",
+        "sales_and_crm",
+        "contracts_and_legal",
+        "project_case_studies",
+    ]
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
@@ -97,6 +103,24 @@ class Vera(BaseAgent):
             },
             handler=self._tool_check_confidentiality,
         ))
+        self.register_tool(AgentTool(
+            name="run_governance_check",
+            description="Run a governance policy check for externally-facing responses.",
+            parameters={
+                "text": "Response text",
+                "audience": "Audience scope (external/internal)",
+            },
+            handler=self._tool_run_governance_check,
+        ))
+        self.register_tool(AgentTool(
+            name="audit_decision_log",
+            description="Create an evidence-backed decision audit for verification outcomes.",
+            parameters={
+                "decision": "Decision statement to audit",
+                "evidence": "Optional evidence notes",
+            },
+            handler=self._tool_audit_decision_log,
+        ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -154,3 +178,21 @@ class Vera(BaseAgent):
             return json.dumps(result, default=str)
         except Exception as exc:
             return f"Confidentiality check error: {exc}"
+
+    async def _tool_run_governance_check(
+        self,
+        text: str,
+        audience: str = "external",
+    ) -> str:
+        return await self.use_skill(
+            "run_governance_check",
+            text=text,
+            audience=audience,
+        )
+
+    async def _tool_audit_decision_log(self, decision: str, evidence: str = "") -> str:
+        return await self.use_skill(
+            "audit_decision_log",
+            decision=decision,
+            evidence=evidence,
+        )

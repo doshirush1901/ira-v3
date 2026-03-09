@@ -7,6 +7,7 @@ Import all agent classes for convenient access::
 
 from ira.agents.alexandros import Alexandros
 from ira.agents.arachne import Arachne
+from ira.agents.artemis import Artemis
 from ira.agents.asclepius import Asclepius
 from ira.agents.athena import Athena
 from ira.agents.atlas import Atlas
@@ -16,10 +17,12 @@ from ira.agents.calliope import Calliope
 from ira.agents.chiron import Chiron
 from ira.agents.clio import Clio
 from ira.agents.delphi import Delphi
+from ira.agents.gapper import Gapper
 from ira.agents.hephaestus import Hephaestus
 from ira.agents.hera import Hera
 from ira.agents.hermes import Hermes
 from ira.agents.iris import Iris
+from ira.agents.mnemon import Mnemon
 from ira.agents.mnemosyne import Mnemosyne
 from ira.agents.nemesis import Nemesis
 from ira.agents.plutus import Plutus
@@ -35,6 +38,7 @@ __all__ = [
     "BaseAgent",
     "Alexandros",
     "Arachne",
+    "Artemis",
     "Asclepius",
     "Athena",
     "Atlas",
@@ -43,10 +47,12 @@ __all__ = [
     "Chiron",
     "Clio",
     "Delphi",
+    "Gapper",
     "Hephaestus",
     "Hera",
     "Hermes",
     "Iris",
+    "Mnemon",
     "Mnemosyne",
     "Nemesis",
     "Plutus",

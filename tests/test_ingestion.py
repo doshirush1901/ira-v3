@@ -228,6 +228,53 @@ class TestScanForUndigested:
 
         assert result == []
 
+    async def test_maps_23_asana_doc_types_to_atlas_categories(self, tmp_path: Path):
+        from ira.brain.ingestion_gatekeeper import scan_for_undigested
+
+        asana_file = tmp_path / "production.md"
+        asana_file.write_text("shop floor sequence")
+        index = {
+            "files": {
+                "23_Asana/asana_grounded_gold_sets/machine_building_process.md": {
+                    "path": str(asana_file),
+                    "hash": "h1",
+                    "doc_type": "report",
+                    "size_kb": 1,
+                },
+            },
+        }
+
+        with patch("ira.brain.ingestion_gatekeeper.load_index", new_callable=AsyncMock, return_value=index), \
+             patch("ira.brain.ingestion_gatekeeper.load_log", new_callable=AsyncMock, return_value={}), \
+             patch("ira.brain.ingestion_gatekeeper.needs_ingestion", return_value="new"):
+            result = await scan_for_undigested()
+
+        assert result[0]["category"] == "production"
+        assert result[0]["doc_type"] == "report"
+
+    async def test_non_asana_paths_keep_doc_type_as_category(self, tmp_path: Path):
+        from ira.brain.ingestion_gatekeeper import scan_for_undigested
+
+        generic_file = tmp_path / "contract.pdf"
+        generic_file.write_text("agreement")
+        index = {
+            "files": {
+                "05_misc/contract.pdf": {
+                    "path": str(generic_file),
+                    "hash": "h2",
+                    "doc_type": "contract",
+                    "size_kb": 1,
+                },
+            },
+        }
+
+        with patch("ira.brain.ingestion_gatekeeper.load_index", new_callable=AsyncMock, return_value=index), \
+             patch("ira.brain.ingestion_gatekeeper.load_log", new_callable=AsyncMock, return_value={}), \
+             patch("ira.brain.ingestion_gatekeeper.needs_ingestion", return_value="new"):
+            result = await scan_for_undigested()
+
+        assert result[0]["category"] == "contract"
+
 
 # ── Imports Fallback Retriever: extract_file_text ────────────────────────
 

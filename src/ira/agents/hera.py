@@ -67,6 +67,33 @@ class Hera(BaseAgent):
             parameters={"query": "Search query for vendor/procurement data"},
             handler=self._tool_search_vendor_data,
         ))
+        self.register_tool(AgentTool(
+            name="evaluate_vendor_risk",
+            description="Assess vendor risk across quality, delivery reliability, and commercial exposure.",
+            parameters={
+                "vendor": "Vendor/supplier name",
+                "context": "Optional context notes",
+            },
+            handler=self._tool_evaluate_vendor_risk,
+        ))
+        self.register_tool(AgentTool(
+            name="compare_supplier_quotes",
+            description="Compare supplier quotes on cost, lead time, and risk-adjusted value.",
+            parameters={
+                "requirement": "Part/component requirement",
+                "quotes": "JSON array of supplier quote objects",
+            },
+            handler=self._tool_compare_supplier_quotes,
+        ))
+        self.register_tool(AgentTool(
+            name="forecast_component_lead_time",
+            description="Estimate procurement lead-time range for a component.",
+            parameters={
+                "component": "Component/part name",
+                "quantity": "Requested quantity",
+            },
+            handler=self._tool_forecast_component_lead_time,
+        ))
 
         vdb = self._services.get(SK.VENDOR_DB)
         if vdb is not None:
@@ -120,6 +147,41 @@ class Hera(BaseAgent):
         return "\n".join(
             f"- [{r.get('source', '?')}] {r.get('content', '')[:400]}"
             for r in results
+        )
+
+    async def _tool_evaluate_vendor_risk(self, vendor: str, context: str = "") -> str:
+        return await self.use_skill(
+            "evaluate_vendor_risk",
+            vendor=vendor,
+            context=context,
+        )
+
+    async def _tool_compare_supplier_quotes(self, requirement: str, quotes: str = "") -> str:
+        parsed_quotes: Any = quotes
+        if quotes:
+            try:
+                parsed_quotes = json.loads(quotes)
+            except json.JSONDecodeError:
+                parsed_quotes = quotes
+        return await self.use_skill(
+            "compare_supplier_quotes",
+            requirement=requirement,
+            quotes=parsed_quotes,
+        )
+
+    async def _tool_forecast_component_lead_time(
+        self,
+        component: str,
+        quantity: str = "1",
+    ) -> str:
+        try:
+            qty = int(quantity)
+        except ValueError:
+            qty = 1
+        return await self.use_skill(
+            "forecast_component_lead_time",
+            component=component,
+            quantity=qty,
         )
 
     # ── vendor DB tool handlers ────────────────────────────────────────

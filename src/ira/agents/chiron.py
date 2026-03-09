@@ -119,6 +119,27 @@ class Chiron(BaseAgent):
             parameters={"query": "Question for Prometheus"},
             handler=self._tool_ask_prometheus,
         ))
+        self.register_tool(AgentTool(
+            name="generate_deal_summary_skill",
+            description="Generate deal summary using canonical sales skill.",
+            parameters={
+                "deal_id": "Optional deal ID",
+                "email": "Optional contact email",
+            },
+            handler=self._tool_generate_deal_summary_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="draft_outreach_email_skill",
+            description="Draft outreach email using canonical sales writing skill.",
+            parameters={
+                "email": "Recipient email",
+                "company": "Optional company",
+                "stage": "Sequence stage (default INTRO)",
+                "region": "Optional region",
+                "context": "Optional context notes",
+            },
+            handler=self._tool_draft_outreach_email_skill,
+        ))
 
     # ── tool handlers ────────────────────────────────────────────────────
 
@@ -174,6 +195,30 @@ class Chiron(BaseAgent):
         except (ToolExecutionError, Exception) as exc:
             logger.warning("Prometheus delegation failed: %s", exc)
             return f"Prometheus error: {exc}"
+
+    async def _tool_generate_deal_summary_skill(self, deal_id: str = "", email: str = "") -> str:
+        return await self.use_skill(
+            "generate_deal_summary",
+            deal_id=deal_id,
+            email=email,
+        )
+
+    async def _tool_draft_outreach_email_skill(
+        self,
+        email: str,
+        company: str = "",
+        stage: str = "INTRO",
+        region: str = "",
+        context: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "draft_outreach_email",
+            email=email,
+            company=company,
+            stage=stage,
+            region=region,
+            context=context,
+        )
 
     # ── existing methods ─────────────────────────────────────────────────
 

@@ -67,6 +67,25 @@ class BaseAgent(ABC):
     knowledge_categories: list[str] = []
     timeout: int | None = None
 
+    def _compose_system_prompt(
+        self,
+        system_prompt: str = "",
+        *,
+        allow_default: bool = True,
+    ) -> str:
+        """Build a system prompt with SOUL preamble injected exactly once."""
+        prompt = system_prompt.strip()
+        if not prompt and allow_default:
+            prompt = (
+                f"You are {self.name}, the {self.role} of the Machinecraft AI Pantheon. "
+                f"{self.description}"
+            )
+
+        soul = load_soul_preamble()
+        if soul and not prompt.startswith(soul):
+            return f"{soul}\n\n{prompt}" if prompt else soul
+        return prompt
+
     def __init__(
         self,
         retriever: UnifiedRetriever,
@@ -648,14 +667,7 @@ class BaseAgent(ABC):
         async with self._tools_lock:
             self._register_default_tools()
 
-        agent_prompt = system_prompt or (
-            f"You are {self.name}, the {self.role} of the Machinecraft AI Pantheon. "
-            f"{self.description}"
-        )
-
-        soul = load_soul_preamble()
-        if soul:
-            agent_prompt = f"{soul}\n\n{agent_prompt}"
+        agent_prompt = self._compose_system_prompt(system_prompt)
 
         scratchpad: list[dict[str, str]] = []
         self.state = AgentState.THINKING
@@ -749,7 +761,8 @@ class BaseAgent(ABC):
     ) -> str:
         """Call the primary LLM provider; fall back to the other on failure."""
         redis = self._services.get(SK.REDIS)
-        cache_key = self._llm_cache_key(system_prompt, user_message, temperature)
+        resolved_system_prompt = self._compose_system_prompt(system_prompt)
+        cache_key = self._llm_cache_key(resolved_system_prompt, user_message, temperature)
 
         if redis is not None and temperature <= 0.3:
             try:
@@ -762,7 +775,7 @@ class BaseAgent(ABC):
 
         primary = "anthropic" if self.model_provider == "anthropic" else "openai"
         result = await self._llm.generate_text_with_fallback(
-            system_prompt, user_message,
+            resolved_system_prompt, user_message,
             primary=primary, temperature=temperature,
             name=f"{self.name}.call_llm",
         )

@@ -51,6 +51,12 @@ class Gapper(BaseAgent):
         "Uses email search, document archive, knowledge base, web search, "
         "CRM, and inter-agent delegation to resolve every gap."
     )
+    knowledge_categories = [
+        "sales_and_crm",
+        "quotes_and_proposals",
+        "orders_and_pos",
+        "project_case_studies",
+    ]
     timeout = 120
 
     def _register_default_tools(self) -> None:
@@ -82,6 +88,27 @@ class Gapper(BaseAgent):
             },
             handler=self._tool_ask_specialist,
         ))
+        self.register_tool(AgentTool(
+            name="search_knowledge_base_skill",
+            description="Search internal knowledge for missing data resolution.",
+            parameters={"query": "Search query"},
+            handler=self._tool_search_knowledge_base_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="extract_key_facts_skill",
+            description="Extract structured missing facts from draft sections.",
+            parameters={"text": "Text block to extract facts from"},
+            handler=self._tool_extract_key_facts_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="run_governance_check",
+            description="Run governance policy checks before returning filled gaps.",
+            parameters={
+                "text": "Response text",
+                "audience": "Audience scope (external/internal)",
+            },
+            handler=self._tool_run_governance_check,
+        ))
 
     async def _tool_search_archive(self, query: str) -> str:
         pantheon = self._services.get(SK.PANTHEON)
@@ -111,6 +138,23 @@ class Gapper(BaseAgent):
         except Exception as exc:
             logger.warning("Gapper delegation to '%s' failed: %s", agent_name, exc)
             return f"Agent '{agent_name}' error: {exc}"
+
+    async def _tool_search_knowledge_base_skill(self, query: str) -> str:
+        return await self.use_skill("search_knowledge_base", query=query)
+
+    async def _tool_extract_key_facts_skill(self, text: str) -> str:
+        return await self.use_skill("extract_key_facts", text=text)
+
+    async def _tool_run_governance_check(
+        self,
+        text: str,
+        audience: str = "external",
+    ) -> str:
+        return await self.use_skill(
+            "run_governance_check",
+            text=text,
+            audience=audience,
+        )
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         """Resolve gaps in a draft response.

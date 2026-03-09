@@ -25,6 +25,12 @@ class Calliope(BaseAgent):
     name = "calliope"
     role = "Chief Writer"
     description = "Drafts emails, reports, proposals, and all external communication"
+    knowledge_categories = [
+        "quotes_and_proposals",
+        "project_case_studies",
+        "presentations",
+        "webcall transcripts",
+    ]
 
     # ── tool registration ────────────────────────────────────────────────
 

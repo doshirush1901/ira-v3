@@ -195,6 +195,24 @@ class Artemis(BaseAgent):
             parameters={"question": "Sales/pipeline question"},
             handler=self._tool_ask_prometheus,
         ))
+        self.register_tool(AgentTool(
+            name="qualify_lead_skill",
+            description="Qualify a lead using canonical CRM skill scoring.",
+            parameters={"email": "Lead contact email"},
+            handler=self._tool_qualify_lead_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="build_lead_report_skill",
+            description="Build stale-lead report using canonical lead report skill.",
+            parameters={"days": "Stale threshold days (default 14)"},
+            handler=self._tool_build_lead_report_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="search_knowledge_base_skill",
+            description="Search internal knowledge for lead/company enrichment context.",
+            parameters={"query": "Knowledge query"},
+            handler=self._tool_search_knowledge_base_skill,
+        ))
 
     # ── Tool implementations ─────────────────────────────────────────────
 
@@ -462,6 +480,19 @@ class Artemis(BaseAgent):
             return "Prometheus not available."
 
         return await prometheus.handle(question)
+
+    async def _tool_qualify_lead_skill(self, email: str) -> str:
+        return await self.use_skill("qualify_lead", email=email)
+
+    async def _tool_build_lead_report_skill(self, days: str = "14") -> str:
+        try:
+            age = int(days)
+        except ValueError:
+            age = 14
+        return await self.use_skill("build_lead_report", days=age)
+
+    async def _tool_search_knowledge_base_skill(self, query: str) -> str:
+        return await self.use_skill("search_knowledge_base", query=query)
 
     # ── Handle ───────────────────────────────────────────────────────────
 

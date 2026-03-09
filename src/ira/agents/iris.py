@@ -51,6 +51,12 @@ class Iris(BaseAgent):
             parameters={"query": "Internal knowledge search query"},
             handler=self._tool_search_internal_knowledge,
         ))
+        self.register_tool(AgentTool(
+            name="search_knowledge_base_skill",
+            description="Search the broader internal knowledge base through canonical skill routing.",
+            parameters={"query": "Search query"},
+            handler=self._tool_search_knowledge_base_skill,
+        ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -66,6 +72,9 @@ class Iris(BaseAgent):
     async def _tool_search_internal_knowledge(self, query: str) -> str:
         results = await self.search_domain_knowledge(query)
         return self._format_context(results)
+
+    async def _tool_search_knowledge_base_skill(self, query: str) -> str:
+        return await self.use_skill("search_knowledge_base", query=query)
 
     async def _fetch_news(self, query: str) -> list[str]:
         if not self._newsdata_key:

@@ -24,6 +24,11 @@ class Sphinx(BaseAgent):
     name = "sphinx"
     role = "Gatekeeper / Clarifier"
     description = "Asks clarifying questions when queries are ambiguous"
+    knowledge_categories = [
+        "company_internal",
+        "webcall transcripts",
+        "market_research_and_analysis",
+    ]
     timeout = 30
 
     def _register_default_tools(self) -> None:
@@ -48,6 +53,15 @@ class Sphinx(BaseAgent):
             parameters={"query": "The ambiguous query to generate clarifications for"},
             handler=self._tool_suggest_clarifications,
         ))
+        self.register_tool(AgentTool(
+            name="run_governance_check",
+            description="Check clarification text against governance/policy boundaries.",
+            parameters={
+                "text": "Clarification question or response draft",
+                "audience": "Audience scope (external/internal)",
+            },
+            handler=self._tool_run_governance_check,
+        ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -60,7 +74,7 @@ class Sphinx(BaseAgent):
         model suitable for programmatic branching.
         """
         return await self._llm.generate_structured(
-            _SYSTEM_PROMPT,
+            self._compose_system_prompt(_SYSTEM_PROMPT),
             (
                 f"Assess whether this request is clear enough to act on: {query}\n\n"
                 "If it IS clear, set clear=true. "
@@ -88,4 +102,15 @@ class Sphinx(BaseAgent):
                 "Generate 2-4 targeted clarifying questions that would resolve the ambiguity. "
                 'Return a JSON list: ["question1", "question2", ...]'
             ),
+        )
+
+    async def _tool_run_governance_check(
+        self,
+        text: str,
+        audience: str = "external",
+    ) -> str:
+        return await self.use_skill(
+            "run_governance_check",
+            text=text,
+            audience=audience,
         )

@@ -72,6 +72,16 @@ class Cadmus(BaseAgent):
             parameters={"query": "Question for Atlas"},
             handler=self._tool_ask_atlas,
         ))
+        self.register_tool(AgentTool(
+            name="draft_proposal_skill",
+            description="Draft a proposal using the canonical proposal skill layer.",
+            parameters={
+                "customer": "Customer or account name",
+                "machine_model": "Optional machine model",
+                "context": "Optional context notes",
+            },
+            handler=self._tool_draft_proposal_skill,
+        ))
 
     # ── tool handlers ────────────────────────────────────────────────────
 
@@ -145,6 +155,19 @@ class Cadmus(BaseAgent):
         except (ToolExecutionError, Exception) as exc:
             logger.warning("Atlas delegation failed: %s", exc)
             return f"Atlas error: {exc}"
+
+    async def _tool_draft_proposal_skill(
+        self,
+        customer: str,
+        machine_model: str = "",
+        context: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "draft_proposal",
+            customer=customer,
+            machine_model=machine_model,
+            context=context,
+        )
 
     # ── existing methods ─────────────────────────────────────────────────
 

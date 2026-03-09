@@ -1410,12 +1410,29 @@ def takeout_ingest(
             "entities": {"companies": 0, "people": 0, "machines": 0, "relationships": 0},
         }
 
+        target_total = max_messages if max_messages > 0 else None
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
             console=err_console,
         ) as progress:
-            task = progress.add_task("Processing takeout mbox...", total=None)
+            task = progress.add_task("Processing takeout mbox...", total=target_total)
+
+            def _update_progress(label: str) -> None:
+                progress.update(
+                    task,
+                    completed=stats["messages_processed"],
+                    description=(
+                        f"{label} | seen={stats['messages_seen']} "
+                        f"processed={stats['messages_processed']} "
+                        f"protein={stats['messages_with_protein']} "
+                        f"noise={stats['messages_skipped_noise']} "
+                        f"low_signal={stats['messages_skipped_low_signal']}"
+                    ),
+                )
 
             for mbox_path in mbox_files:
                 progress.update(task, description=f"Reading {mbox_path.name} ...")
@@ -1433,16 +1450,22 @@ def takeout_ingest(
 
                     if key in done_keys:
                         stats["messages_skipped_checkpoint"] += 1
+                        if stats["messages_seen"] % 250 == 0:
+                            _update_progress(mbox_path.name)
                         continue
 
                     body = _extract_message_body(msg)
                     if _is_noise_message(msg, sender, subject):
                         stats["messages_skipped_noise"] += 1
                         done_keys.add(key)
+                        if stats["messages_seen"] % 100 == 0:
+                            _update_progress(mbox_path.name)
                         continue
                     if not _has_machinecraft_protein_signal(sender, subject, body):
                         stats["messages_skipped_low_signal"] += 1
                         done_keys.add(key)
+                        if stats["messages_seen"] % 100 == 0:
+                            _update_progress(mbox_path.name)
                         continue
 
                     if max_messages > 0 and stats["messages_processed"] >= max_messages:
@@ -1487,13 +1510,7 @@ def takeout_ingest(
 
                     done_keys.add(key)
                     stats["messages_processed"] += 1
-                    progress.update(
-                        task,
-                        description=(
-                            f"{mbox_path.name}: processed={stats['messages_processed']} "
-                            f"protein={stats['messages_with_protein']} chunks={stats['chunks_created']}"
-                        ),
-                    )
+                    _update_progress(mbox_path.name)
 
                 if max_messages > 0 and stats["messages_processed"] >= max_messages:
                     break

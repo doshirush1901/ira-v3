@@ -68,6 +68,11 @@ class Mnemon(BaseAgent):
         "intercepts stale data at every retrieval point, overriding it "
         "with the corrected truth."
     )
+    knowledge_categories = [
+        "company_internal",
+        "sales_and_crm",
+        "project_case_studies",
+    ]
 
     def _register_default_tools(self) -> None:
         super()._register_default_tools()
@@ -93,6 +98,24 @@ class Mnemon(BaseAgent):
             description="List all entities in the correction ledger.",
             parameters={},
             handler=self._tool_list_all,
+        ))
+        self.register_tool(AgentTool(
+            name="validate_correction_consistency",
+            description="Check whether a statement conflicts with known corrections.",
+            parameters={
+                "statement": "Statement to validate against correction truth",
+                "ledger_context": "Optional correction context",
+            },
+            handler=self._tool_validate_correction_consistency,
+        ))
+        self.register_tool(AgentTool(
+            name="audit_decision_log",
+            description="Generate a decision trace for correction overrides and risk review.",
+            parameters={
+                "decision": "Decision/correction output text",
+                "evidence": "Optional evidence used in correction",
+            },
+            handler=self._tool_audit_decision_log,
         ))
 
     async def _tool_lookup_correction(self, entity: str) -> str:
@@ -123,6 +146,27 @@ class Mnemon(BaseAgent):
         for key, val in entities.items():
             lines.append(f"- **{key}**: {val.get('current_status', '')[:120]}")
         return "\n".join(lines)
+
+    async def _tool_validate_correction_consistency(
+        self,
+        statement: str,
+        ledger_context: str = "",
+    ) -> str:
+        if not ledger_context:
+            ledger = await asyncio.to_thread(_load_ledger)
+            ledger_context = json.dumps(ledger.get("entities", {}), default=str)[:4000]
+        return await self.use_skill(
+            "validate_correction_consistency",
+            statement=statement,
+            ledger_context=ledger_context,
+        )
+
+    async def _tool_audit_decision_log(self, decision: str, evidence: str = "") -> str:
+        return await self.use_skill(
+            "audit_decision_log",
+            decision=decision,
+            evidence=evidence,
+        )
 
     # ── core methods (called from pipeline, retriever, alexandros) ────────
 

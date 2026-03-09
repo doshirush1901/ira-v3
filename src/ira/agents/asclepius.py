@@ -91,6 +91,30 @@ class Asclepius(BaseAgent):
             parameters={"query": "Search query"},
             handler=self._tool_search_quality_docs,
         ))
+        self.register_tool(AgentTool(
+            name="triage_punch_list",
+            description="Prioritize punch-list items by severity, customer impact, and dispatch readiness.",
+            parameters={"items": "JSON list of punch-list items"},
+            handler=self._tool_triage_punch_list,
+        ))
+        self.register_tool(AgentTool(
+            name="generate_fat_plan",
+            description="Generate a structured FAT checklist and execution plan for a machine.",
+            parameters={
+                "machine_model": "Machine model identifier",
+                "standards": "Optional standards/requirements",
+            },
+            handler=self._tool_generate_fat_plan,
+        ))
+        self.register_tool(AgentTool(
+            name="analyze_service_root_cause",
+            description="Analyze field/service issue root causes and propose CAPA actions.",
+            parameters={
+                "issue": "Issue summary",
+                "observations": "Field observations and symptoms",
+            },
+            handler=self._tool_analyze_service_root_cause,
+        ))
 
     # ── tool handlers ─────────────────────────────────────────────────────
 
@@ -118,6 +142,37 @@ class Asclepius(BaseAgent):
     async def _tool_search_quality_docs(self, query: str) -> str:
         results = await self.search_domain_knowledge(query)
         return self._format_context(results)
+
+    async def _tool_triage_punch_list(self, items: str) -> str:
+        parsed_items: Any = items
+        if items:
+            try:
+                parsed_items = json.loads(items)
+            except json.JSONDecodeError:
+                parsed_items = items
+        return await self.use_skill("triage_punch_list", items=parsed_items)
+
+    async def _tool_generate_fat_plan(
+        self,
+        machine_model: str,
+        standards: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "generate_fat_plan",
+            machine_model=machine_model,
+            standards=standards,
+        )
+
+    async def _tool_analyze_service_root_cause(
+        self,
+        issue: str,
+        observations: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "analyze_service_root_cause",
+            issue=issue,
+            observations=observations,
+        )
 
     # ── DB setup ──────────────────────────────────────────────────────────
 

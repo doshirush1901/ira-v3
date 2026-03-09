@@ -95,6 +95,21 @@ class Plutus(BaseAgent):
             },
             handler=self._tool_generate_invoice,
         ))
+        self.register_tool(AgentTool(
+            name="calculate_quote_skill",
+            description="Calculate quote values via canonical pricing skill.",
+            parameters={
+                "machine_model": "Machine model identifier",
+                "configuration": "Optional JSON configuration",
+            },
+            handler=self._tool_calculate_quote_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="analyze_revenue_skill",
+            description="Analyze revenue and pipeline velocity via canonical skill.",
+            parameters={"filters": "Optional JSON filters"},
+            handler=self._tool_analyze_revenue_skill,
+        ))
 
         if self._services.get("pantheon"):
             self.register_tool(AgentTool(
@@ -127,6 +142,28 @@ class Plutus(BaseAgent):
         return await self.use_skill(
             "generate_invoice", customer=customer, quote_id=quote_id,
         )
+
+    async def _tool_calculate_quote_skill(self, machine_model: str, configuration: str = "") -> str:
+        parsed_config: Any = {}
+        if configuration:
+            try:
+                parsed_config = json.loads(configuration)
+            except json.JSONDecodeError:
+                parsed_config = {"raw_configuration": configuration}
+        return await self.use_skill(
+            "calculate_quote",
+            machine_model=machine_model,
+            configuration=parsed_config,
+        )
+
+    async def _tool_analyze_revenue_skill(self, filters: str = "") -> str:
+        parsed_filters: Any = None
+        if filters:
+            try:
+                parsed_filters = json.loads(filters)
+            except json.JSONDecodeError:
+                parsed_filters = {"raw_filters": filters}
+        return await self.use_skill("analyze_revenue", filters=parsed_filters)
 
     async def _tool_ask_prometheus(self, query: str) -> str:
         pantheon = self._services.get("pantheon")

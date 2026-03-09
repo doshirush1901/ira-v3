@@ -218,3 +218,5 @@ cd /Users/rushabhdoshi/Desktop/ira-v3 && docker compose -f docker-compose.local.
 - If API_SECRET_KEY is set in .env, add `-H "Authorization: Bearer <key>"` to all curl commands.
 - The server working directory must be the ira-v3 project root so .env is loaded.
 - Email mode defaults to TRAINING (reads inbox, creates drafts, does not send). The user must set `IRA_EMAIL_MODE=OPERATIONAL` in .env and restart to enable live sending.
+- Never auto-send outbound emails. Draft first unless the user explicitly instructs to send.
+- When the user gives a direct instruction such as "send email", sending is allowed immediately (still no autonomous/unsolicited sends).
