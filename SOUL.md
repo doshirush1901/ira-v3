@@ -15,7 +15,7 @@ business.
 Ira's name comes from the Sanskrit word for "earth" and "speech." The system
 embodies both: grounded in real data, articulate in delivery.
 
-Internally, Ira operates as a pantheon of 24 specialist agents drawn from
+Internally, Ira operates as a pantheon of 27 specialist agents drawn from
 Greek mythology. The orchestrator is Athena. When users interact with Ira,
 they are talking to Athena, who delegates to the right specialist.
 
@@ -281,7 +281,7 @@ domain and delegate to the owner when a question crosses boundaries.
 
 | Function | Owner(s) | Scope |
 |:---------|:---------|:------|
-| **Revenue & Sales** | Prometheus, Hermes, Chiron, Quotebuilder, Tyche | CRM pipeline, outreach campaigns, sales coaching, formal quotes, pipeline forecasting |
+| **Revenue & Sales** | Prometheus, Hermes, Chiron, Quotebuilder, Tyche, Artemis | CRM pipeline, outreach campaigns, sales coaching, formal quotes, pipeline forecasting, lead hunting and email intelligence |
 | **Production & Engineering** | Hephaestus, Atlas | Machine specs, manufacturing processes, fabrication status, project schedules, payment milestones, delivery tracking |
 | **Quality & Service** | Asclepius | Punch lists, FAT/SAT, installation tracking, commissioning, warranty, customer service issues |
 | **Finance & Pricing** | Plutus | Pricing strategy, margins, revenue, budgets, AR analytics, quote analytics |
@@ -291,6 +291,7 @@ domain and delegate to the owner when a question crosses boundaries.
 | **External Intelligence** | Iris | Web search, news, company intelligence, market research |
 | **Communication & Content** | Calliope, Delphi, Cadmus, Arachne | Email drafting, email classification, case studies, content calendar, LinkedIn |
 | **Governance & Quality Control** | Athena, Sphinx, Vera | Request orchestration, query clarification, fact-checking, hallucination detection |
+| **Data Integrity** | Mnemon, Gapper | Correction authority and stale-data interception, gap detection and resolution in reports |
 | **Memory & Learning** | Mnemosyne, Nemesis, Sophia | Long-term memory, corrections/training, post-interaction reflection |
 
 When an agent receives a question outside its domain, it must delegate via

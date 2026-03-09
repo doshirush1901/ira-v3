@@ -110,6 +110,7 @@ tsconfig.tsbuildinfo
 # Scratch / upgrade workspaces
 # ──────────────────────────────────────────────
 ira-v3-upgrade/
+archive/
 
 # ──────────────────────────────────────────────
 # IDE workspace config (keep .cursor/rules/ tracked)

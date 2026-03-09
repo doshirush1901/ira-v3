@@ -6,7 +6,7 @@ alwaysApply: true
 
 # Ira — Cursor Integration
 
-Ira is the Machinecraft AI Pantheon: a full agentic system with CRM, knowledge graph, 20+ specialist agents, memory systems, and email processing. This rule covers the complete lifecycle.
+Ira is the Machinecraft AI Pantheon: a full agentic system with CRM, knowledge graph, 27 specialist agents, memory systems, and email processing. This rule covers the complete lifecycle.
 
 ## 1. Starting Ira ("wake up Ira", "start Ira", "activate Ira")
 
@@ -192,6 +192,10 @@ curl -s -X POST http://localhost:8000/api/ingest \
 - **Email draft:** `curl -s -X POST http://localhost:8000/api/email/draft -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "context": "<instructions>"}'`
 - **Email rescan (SSE):** `curl -s -N -X POST http://localhost:8000/api/email/rescan -H "Content-Type: application/json" -d '{"after": "2023/01/01", "before": "2026/03/08"}'`
 - **Email rescan status:** `curl -s http://localhost:8000/api/email/rescan | python3 -m json.tool`
+- **Corrections list:** `curl -s "http://localhost:8000/api/corrections?limit=50" | python3 -m json.tool`
+- **Vendors:** `curl -s http://localhost:8000/api/vendors | python3 -m json.tool`
+- **Vendor payables:** `curl -s http://localhost:8000/api/vendors/payables | python3 -m json.tool`
+- **Overdue payables:** `curl -s http://localhost:8000/api/vendors/overdue | python3 -m json.tool`
 - **Dashboard:** Open http://localhost:8000/dashboard/ in a browser.
 
 ## 7. Stopping Ira ("stop Ira", "shut down Ira")

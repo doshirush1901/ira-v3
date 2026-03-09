@@ -1,8 +1,8 @@
 """Tests for the ira.brain package.
 
-Covers all eight brain modules: EmbeddingService, QdrantManager,
+Covers brain modules: EmbeddingService, QdrantManager,
 DocumentIngestor, UnifiedRetriever, DeterministicRouter,
-MachineIntelligence, PricingEngine, and SalesIntelligence.
+PricingEngine, and SalesIntelligence.
 
 External services (Voyage API, Qdrant, Neo4j, OpenAI, Newsdata) are
 mocked so the suite runs fully offline.
@@ -602,94 +602,7 @@ class TestDeterministicRouter:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 6. MachineIntelligence
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-class TestMachineIntelligence:
-
-    @pytest.fixture()
-    def machine_intel(self, mock_retriever_fixture, tmp_path):
-        from ira.brain.machine_intelligence import MachineIntelligence
-
-        knowledge = {
-            "machine_catalog": {
-                "PF1-C": {
-                    "category": "Panel Forming",
-                    "description": "Continuous panel forming line.",
-                    "key_features": ["Continuous lamination", "PU / PIR core"],
-                },
-            },
-            "truth_hints": {
-                "PF1-C lead time": "16-20 weeks",
-                "AM-Series max material thickness": "12 mm",
-            },
-        }
-        knowledge_file = tmp_path / "machine_knowledge.json"
-        knowledge_file.write_text(json.dumps(knowledge))
-
-        mock_llm = MagicMock()
-        with patch("ira.brain.machine_intelligence.get_llm_client", return_value=mock_llm):
-            mi = MachineIntelligence(
-                retriever=mock_retriever_fixture,
-                knowledge_path=knowledge_file,
-            )
-        return mi
-
-    def test_catalog_loaded(self, machine_intel):
-        assert "PF1-C" in machine_intel.machine_catalog
-        assert machine_intel.machine_catalog["PF1-C"]["category"] == "Panel Forming"
-
-    def test_truth_hints_loaded(self, machine_intel):
-        assert "PF1-C lead time" in machine_intel.truth_hints
-        assert machine_intel.truth_hints["PF1-C lead time"] == "16-20 weeks"
-
-    @pytest.mark.asyncio
-    async def test_get_machine_specs_merges_sources(self, machine_intel):
-        specs = await machine_intel.get_machine_specs("PF1-C")
-
-        assert specs["model"] == "PF1-C"
-        assert specs["catalog"]["category"] == "Panel Forming"
-        assert "PF1-C lead time" in specs["truth_hints"]
-        assert isinstance(specs["knowledge_base"], list)
-
-    @pytest.mark.asyncio
-    async def test_get_machine_specs_unknown_model(self, machine_intel):
-        specs = await machine_intel.get_machine_specs("UNKNOWN-99")
-        assert specs["model"] == "UNKNOWN-99"
-        assert specs["catalog"] == {}
-        assert specs["truth_hints"] == {}
-
-    @pytest.mark.asyncio
-    async def test_recommend_machine_with_llm_failure(self, machine_intel):
-        machine_intel._llm = MagicMock()
-        machine_intel._llm.generate_text = AsyncMock(return_value="(LLM call failed)")
-        result = await machine_intel.recommend_machine({"material": "steel", "thickness": "0.5mm"})
-        assert isinstance(result, list)
-        assert len(result) >= 1
-
-    @pytest.mark.asyncio
-    async def test_recommend_machine_with_llm(self, machine_intel):
-        llm_response = json.dumps([
-            {"model": "PF1-C", "reason": "Best fit", "caveats": "None", "budget_indication": "$500k"},
-        ])
-        with patch.object(machine_intel, "_llm_call", new_callable=AsyncMock, return_value=llm_response):
-            result = await machine_intel.recommend_machine({"material": "steel"})
-
-        assert result[0]["model"] == "PF1-C"
-
-    @pytest.mark.asyncio
-    async def test_compare_machines(self, machine_intel):
-        with patch.object(
-            machine_intel, "_llm_call", new_callable=AsyncMock, return_value="| Feature | PF1-C | PF2 |",
-        ):
-            result = await machine_intel.compare_machines("PF1-C", "PF2")
-
-        assert "PF1-C" in result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 7. PricingEngine
+# 6. PricingEngine
 # ═════════════════════════════════════════════════════════════════════════════
 
 

@@ -17,7 +17,7 @@ but by routing to specialists who each own their domain.
 
 ### What works
 
-- 24 specialist agents with ReAct loops and domain-specific tools
+- 27 specialist agents with ReAct loops and domain-specific tools
 - 11-stage request pipeline (perceive → remember → route → execute → learn)
 - Three-tier routing: deterministic → procedural memory → LLM
 - Hybrid retrieval across Qdrant (vectors), Neo4j (graph), and Mem0 (memory)
@@ -52,20 +52,20 @@ In order:
 
 1. **Reliability.** Fix silent failures, add retries, improve error messages.
    Ira should never return "I don't know" when the answer is in the KB.
-2. **Email workflow.** End-to-end email processing from inbox to sent folder,
+2. **Retrieval quality.** Better chunking, smarter query decomposition, tune
+   reranking.
+3. **Email workflow.** End-to-end email processing from inbox to sent folder,
    with human-in-the-loop approval.
-3. **Testing.** Increase coverage for body systems, memory, and the pipeline.
+4. **Testing.** Increase coverage for body systems, memory, and the pipeline.
    Add integration tests that exercise the full request flow.
-4. **Observability.** Dashboard for pipeline metrics, agent performance, and
+5. **Observability.** Dashboard for pipeline metrics, agent performance, and
    system health trends.
-5. **Web UI polish.** Authentication, conversation history persistence, and
-   mobile-responsive layout for the Next.js frontend.
 
 ## Architectural Principles
 
 ### The pantheon model is intentional
 
-Twenty-four agents is not accidental complexity. Each agent has a bounded
+Twenty-seven agents is not accidental complexity. Each agent has a bounded
 domain, its own tools, and its own system prompt. This makes the system:
 
 - **Debuggable.** When pricing is wrong, you look at Plutus. When a drip

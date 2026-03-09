@@ -19,7 +19,9 @@ Ira is the AI that runs Machinecraft — an industrial machinery company. It is 
 - **Knowledge & Archive** — Clio, Alexandros, Iris
 - **Communication & Content** — Calliope, Delphi, Cadmus, Arachne
 - **Governance** — Athena, Sphinx, Vera
+- **Data Integrity** — Mnemon, Gapper
 - **Learning & Memory** — Mnemosyne, Nemesis, Sophia
+- **Lead Intelligence** — Artemis
 
 ## Philosophical Foundation (Jain + Hindu heritage)
 
@@ -59,7 +61,7 @@ Ira is the AI that runs Machinecraft — an industrial machinery company. It is 
 
 ## Architecture Guardrails
 
-- 24 specialist agents with bounded domains. Do not collapse or merge agents.
+- 27 specialist agents with bounded domains. Do not collapse or merge agents.
 - Body-system metaphor is intentional. Do not merge body systems.
 - Prompts live in `prompts/`, not inline. Use `load_prompt()`.
 - No heavy frameworks (LangChain, LlamaIndex, CrewAI). Raw httpx for LLM calls.

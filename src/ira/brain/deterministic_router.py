@@ -66,7 +66,7 @@ ROUTING_TABLE: dict[IntentCategory, RoutingConfig] = {
     IntentCategory.MACHINE_SPECS: RoutingConfig(
         required_agents=("hephaestus", "clio"),
         optional_agents=("vera",),
-        required_tools=("retriever", "machine_intelligence"),
+        required_tools=("retriever",),
     ),
     IntentCategory.PRODUCTION_STATUS: RoutingConfig(
         required_agents=("hephaestus",),

@@ -7,16 +7,16 @@ Ira v3 codebase. For Ira's identity and behavioral principles, see
 ## Repository Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes requests
-through an 11-stage pipeline, delegates to 24 specialist agents, and maintains
+through an 11-stage pipeline, delegates to 27 specialist agents, and maintains
 persistent memory across conversations.
 
 ```
 src/ira/
-  agents/       # 24 specialist agents + BaseAgent
+  agents/       # 27 specialist agents + BaseAgent
   brain/        # Retrieval, embeddings, graph, routing, pricing,
-                #   entity extraction (GLiNER), guardrails (30 modules)
-  memory/       # 9 memory subsystems + dream mode + goal sweep
-  systems/      # Body-system metaphor (20 modules)
+                #   entity extraction (GLiNER), guardrails (32 modules)
+  memory/       # 10 memory subsystems + dream mode + goal sweep
+  systems/      # Body-system metaphor (21 modules)
   interfaces/   # FastAPI server, CLI, MCP server, email processor, dashboard
   data/         # CRM models, quote models
   middleware/   # Auth, request context
@@ -27,8 +27,8 @@ src/ira/
   pantheon.py   # Agent orchestrator + routing
   config.py     # Pydantic settings (all config from .env)
   message_bus.py # Inter-agent pub/sub messaging
-prompts/        # LLM prompt templates (69 files)
-tests/          # pytest test suite (23 files, ~10,600 lines)
+prompts/        # LLM prompt templates (75 files)
+tests/          # pytest test suite (28 files, ~13,700 lines)
 alembic/        # PostgreSQL migrations
 scripts/        # Operational + training scripts
 web-ui/         # Next.js web interface (App Router + Tailwind CSS)
@@ -220,6 +220,13 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 | POST | `/api/email/draft` | Draft an email via Calliope |
 | POST | `/api/email/rescan` | Deep historical scan with SSE progress streaming |
 | GET | `/api/email/rescan` | Check status of running/last rescan |
+| GET | `/api/corrections` | List recent corrections (filterable by status) |
+| GET | `/api/reingest-scanned` | Check reingest status |
+| GET | `/api/vendors` | List all vendors |
+| POST | `/api/vendors` | Create a vendor |
+| GET | `/api/vendors/payables` | Payables summary across all vendors |
+| GET | `/api/vendors/overdue` | Overdue vendor payables |
+| POST | `/api/vendors/payables` | Record a new vendor payable/invoice |
 
 ## MCP Tools (Cursor Integration)
 
@@ -257,8 +264,16 @@ Set `CORS_ORIGINS=http://localhost:3000` in the backend `.env`. If the
 backend has `API_SECRET_KEY` set, add `NEXT_PUBLIC_IRA_API_KEY=<key>` to
 `web-ui/.env.local`.
 
-Features: agent selector dropdown, real-time SSE progress indicators,
-Markdown/GFM table rendering, authenticated API calls.
+Pages:
+
+- `/chat` — Pantheon Chat with agent selector, SSE streaming, feedback buttons
+- `/crm` — Pipeline kanban, vendor payables table, email search
+- `/board-meeting` — Multi-agent strategic discussions with split-screen results
+- `/corrections` — Corrections log with stats and filtering
+
+Features: shadcn/ui components, SWR data fetching, real-time SSE progress
+indicators, Markdown/GFM table rendering, toast notifications, authenticated
+API calls.
 
 ## Important Rules
 
