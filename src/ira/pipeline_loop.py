@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -132,6 +133,10 @@ class AgentLoop:
         self._pantheon = pantheon
         self._athena = pantheon.get_agent("athena")
         self._plans: dict[str, Plan] = {}
+
+    def get_plan(self, plan_id: str) -> Plan | None:
+        """Return a previously created plan by id."""
+        return self._plans.get(plan_id)
 
     # ── Step 1: Plan ─────────────────────────────────────────────────
 
@@ -568,3 +573,88 @@ RULES:
                     f"{phase.result[:500]}"
                 )
         return "\n".join(lines)
+
+    def _parse_plan(self, request: str, raw_plan: str) -> Plan:
+        """Parse Athena plan JSON with safe fallbacks."""
+        data: dict[str, Any] | None = None
+
+        cleaned = (raw_plan or "").strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                data = parsed
+        except json.JSONDecodeError:
+            logger.warning("Could not parse plan JSON, using fallback plan")
+
+        plan_id = f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        if data:
+            plan_id = str(data.get("plan_id", plan_id))
+
+        goal = request
+        complexity = "moderate"
+        raw_phases: list[dict[str, Any]] = []
+        if data:
+            goal = str(data.get("goal") or request)
+            complexity = str(data.get("complexity") or "moderate")
+            phases_candidate = data.get("phases", [])
+            if isinstance(phases_candidate, list):
+                raw_phases = [p for p in phases_candidate if isinstance(p, dict)]
+
+        phases: list[Phase] = []
+        for idx, pd in enumerate(raw_phases, start=1):
+            phase_id = pd.get("id", idx)
+            if not isinstance(phase_id, int):
+                phase_id = idx
+            agents = pd.get("agents", [])
+            if not isinstance(agents, list):
+                agents = []
+            agents = [str(a).lower() for a in agents if str(a).strip()]
+            if not agents:
+                agents = ["clio"]
+            depends_on = pd.get("depends_on", [])
+            if not isinstance(depends_on, list):
+                depends_on = []
+            phases.append(
+                Phase(
+                    id=phase_id,
+                    title=str(pd.get("title") or f"Phase {idx}"),
+                    description=str(pd.get("description") or ""),
+                    agents=agents,
+                    delegation_type=str(pd.get("delegation_type") or "generic"),
+                    expected_output=str(pd.get("expected_output") or ""),
+                    depends_on=[d for d in depends_on if isinstance(d, int)],
+                )
+            )
+
+        if not phases:
+            phases = [
+                Phase(
+                    id=1,
+                    title="Research and Analyze",
+                    description=request,
+                    agents=["clio"],
+                    delegation_type="generic",
+                    expected_output="Grounded findings for the request",
+                ),
+                Phase(
+                    id=2,
+                    title="Synthesize Report",
+                    description="Compile findings into final response",
+                    agents=["calliope"],
+                    delegation_type="generic",
+                    expected_output="Final report",
+                    depends_on=[1],
+                ),
+            ]
+
+        return Plan(
+            plan_id=plan_id,
+            goal=goal,
+            original_request=request,
+            phases=phases[: self.MAX_PHASES],
+            complexity=complexity,
+            status="created",
+        )

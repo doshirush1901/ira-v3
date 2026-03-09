@@ -202,6 +202,30 @@ def mock_knowledge_graph(monkeypatch):
     return kg
 
 
+@pytest.fixture()
+def mock_task_orchestrator(monkeypatch):
+    orchestrator = AsyncMock()
+    orchestrator.get_task_state = AsyncMock(return_value={"task_id": "t1", "status": "executing"})
+    orchestrator.abort_task = AsyncMock(return_value=True)
+    orchestrator.list_tasks = AsyncMock(return_value=[
+        {"task_id": "t2", "status": "complete"},
+        {"task_id": "t1", "status": "executing"},
+    ])
+    orchestrator.get_task_events = AsyncMock(return_value=[
+        {"type": "task_created"},
+        {"type": "phase_started", "phase_index": 1},
+    ])
+    orchestrator.retry_task = AsyncMock(return_value=MagicMock(
+        task_id="t1",
+        status="complete",
+        summary="Retry completed",
+        file_path="data/reports/t1.md",
+        file_format="markdown",
+    ))
+    monkeypatch.setattr(mcp_mod, "_task_orchestrator", orchestrator)
+    return orchestrator
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Pipeline & Agent tests
 # ═══════════════════════════════════════════════════════════════════════════
@@ -638,6 +662,7 @@ def mock_agent_loop(monkeypatch):
         return plan
 
     loop.plan = AsyncMock(side_effect=mock_plan)
+    loop.get_plan = MagicMock(side_effect=lambda pid: loop._plans.get(pid))
 
     async def mock_execute(p, phase=None, on_progress=None):
         target = phase or p.current_phase
@@ -773,3 +798,49 @@ class TestGenerateReport:
         monkeypatch.chdir(tmp_path)
         await mcp_mod.generate_report(plan.plan_id, title="Q1 Revenue Report")
         loop.compile.assert_awaited_once_with(plan, title="Q1 Revenue Report")
+
+
+class TestTaskControlTools:
+    async def test_get_task_status_success(self, mock_task_orchestrator):
+        result = await mcp_mod.get_task_status("t1")
+        parsed = json.loads(result)
+        assert parsed["task_id"] == "t1"
+        assert parsed["status"] == "executing"
+
+    async def test_get_task_status_not_found(self, mock_task_orchestrator):
+        mock_task_orchestrator.get_task_state.return_value = None
+        result = await mcp_mod.get_task_status("missing")
+        parsed = json.loads(result)
+        assert "error" in parsed
+
+    async def test_abort_task_success(self, mock_task_orchestrator):
+        result = await mcp_mod.abort_task("t1", reason="operator stop")
+        parsed = json.loads(result)
+        assert parsed["status"] == "aborting"
+        mock_task_orchestrator.abort_task.assert_awaited_once_with("t1", reason="operator stop")
+
+    async def test_abort_task_not_found(self, mock_task_orchestrator):
+        mock_task_orchestrator.abort_task.return_value = False
+        result = await mcp_mod.abort_task("missing")
+        parsed = json.loads(result)
+        assert "error" in parsed
+
+    async def test_list_tasks_success(self, mock_task_orchestrator):
+        result = await mcp_mod.list_tasks(limit=10)
+        parsed = json.loads(result)
+        assert parsed["count"] == 2
+        assert parsed["tasks"][0]["task_id"] == "t2"
+
+    async def test_get_task_events_success(self, mock_task_orchestrator):
+        result = await mcp_mod.get_task_events("t1", limit=20)
+        parsed = json.loads(result)
+        assert parsed["task_id"] == "t1"
+        assert parsed["count"] == 2
+        assert parsed["events"][0]["type"] == "task_created"
+
+    async def test_retry_task_success(self, mock_task_orchestrator):
+        result = await mcp_mod.retry_task("t1", from_phase=1)
+        parsed = json.loads(result)
+        assert parsed["task_id"] == "t1"
+        assert parsed["status"] == "complete"
+        mock_task_orchestrator.retry_task.assert_awaited_once_with("t1", from_phase=1)

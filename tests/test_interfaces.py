@@ -759,6 +759,87 @@ class TestServerEndpoints:
         assert data["subject"] == "Follow-up"
         assert data["body"] == "Draft body text"
 
+    async def test_get_task_status_endpoint(self, server_app):
+        app, services = server_app
+        orchestrator = AsyncMock()
+        orchestrator.get_task_state = AsyncMock(return_value={
+            "task_id": "task_123",
+            "status": "executing",
+        })
+        services["task_orchestrator"] = orchestrator
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/task/task_123")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["task_id"] == "task_123"
+        assert data["status"] == "executing"
+
+    async def test_get_tasks_endpoint(self, server_app):
+        app, services = server_app
+        orchestrator = AsyncMock()
+        orchestrator.list_tasks = AsyncMock(return_value=[
+            {"task_id": "t2", "status": "complete"},
+            {"task_id": "t1", "status": "executing"},
+        ])
+        services["task_orchestrator"] = orchestrator
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/tasks?limit=5")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 2
+        assert data["tasks"][0]["task_id"] == "t2"
+
+    async def test_task_abort_endpoint(self, server_app):
+        app, services = server_app
+        orchestrator = AsyncMock()
+        orchestrator.abort_task = AsyncMock(return_value=True)
+        services["task_orchestrator"] = orchestrator
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/task/abort", json={
+                "task_id": "task_123",
+                "reason": "user requested stop",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "aborting"
+        orchestrator.abort_task.assert_awaited_once_with("task_123", reason="user requested stop")
+
+    async def test_get_task_events_endpoint(self, server_app):
+        app, services = server_app
+        orchestrator = AsyncMock()
+        orchestrator.get_task_state = AsyncMock(return_value={"task_id": "task_123", "status": "complete"})
+        orchestrator.get_task_events = AsyncMock(return_value=[
+            {"type": "task_created"},
+            {"type": "phase_started", "phase_index": 1},
+        ])
+        services["task_orchestrator"] = orchestrator
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/task/task_123/events?limit=50")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["task_id"] == "task_123"
+        assert data["count"] == 2
+        assert data["events"][0]["type"] == "task_created"
+
+    async def test_task_retry_stream_missing_task_returns_404(self, server_app):
+        app, services = server_app
+        orchestrator = AsyncMock()
+        orchestrator.get_task_state = AsyncMock(return_value=None)
+        services["task_orchestrator"] = orchestrator
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/api/task/retry/stream", json={"task_id": "missing"})
+
+        assert resp.status_code == 404
+
     async def test_query_returns_503_when_service_missing(self, server_app):
         app, services = server_app
 

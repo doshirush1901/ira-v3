@@ -42,6 +42,7 @@ class ServiceKey:
     PDFCO = "pdfco"
     DLP = "dlp"
     VENDOR_DB = "vendor_db"
+    OUTBOUND_APPROVALS = "outbound_approvals"
 
 
 ALL_SERVICE_KEYS = frozenset(

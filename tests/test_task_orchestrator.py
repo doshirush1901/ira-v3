@@ -181,6 +181,7 @@ class TestSimpleTaskFlow:
         assert len(phases) == 2
         assert phases[0]["agent"] == "clio"
         assert phases[1]["agent"] == "prometheus"
+        assert "depends_on" in phases[0]
 
     async def test_agents_called_with_accumulated_context(
         self, orchestrator, clio, prometheus, tmp_path,
@@ -195,6 +196,25 @@ class TestSimpleTaskFlow:
         prometheus_prompt = prometheus.handle.call_args[0][0]
         assert "Context from previous phases" in prometheus_prompt
         assert "clio" in prometheus_prompt.lower()
+
+    async def test_phase_progress_event_contains_metrics(self, orchestrator, tmp_path):
+        events: list[dict] = []
+
+        async def on_progress(event):
+            events.append(event)
+
+        with patch("ira.systems.task_orchestrator._REPORTS_DIR", tmp_path):
+            task_id = await orchestrator.create_task("Analyze task progress metrics")
+            await orchestrator.run_task(task_id, on_progress=on_progress)
+
+        progress_events = [e for e in events if e["type"] == "phase_progress"]
+        assert progress_events
+        first = progress_events[0]
+        assert "phase_index" in first
+        assert "total_phases" in first
+        assert "progress_pct" in first
+        assert "elapsed_ms" in first
+        assert "eta_ms" in first
 
     async def test_report_file_written(self, orchestrator, tmp_path):
         with patch("ira.systems.task_orchestrator._REPORTS_DIR", tmp_path):
@@ -357,6 +377,56 @@ class TestPhaseFailureHandling:
         # Calliope is called twice: once as a phase agent, once for report formatting
         assert calliope.handle.call_count == 2
 
+    async def test_dependency_cycle_returns_error(self, redis_and_store):
+        redis, _ = redis_and_store
+        sphinx = _mock_sphinx(clear=True)
+        # Cyclic dependencies: phase 0 depends on 2, phase 1 depends on 1
+        athena = _mock_athena(phases=[
+            TaskPlanPhase(title="P1", agent="clio", description="Do P1", depends_on=[2]),
+            TaskPlanPhase(title="P2", agent="prometheus", description="Do P2", depends_on=[1]),
+        ])
+        clio = _mock_agent("clio", "P1")
+        prometheus = _mock_agent("prometheus", "P2")
+        calliope = _mock_agent("calliope", "# Report")
+
+        agents = {
+            "sphinx": sphinx, "athena": athena,
+            "clio": clio, "prometheus": prometheus, "calliope": calliope,
+        }
+        pantheon = _mock_pantheon(agents)
+        orch = TaskOrchestrator(pantheon=pantheon, redis_cache=redis)
+
+        task_id = await orch.create_task("Cyclic dependency task")
+        result = await orch.run_task(task_id)
+        assert result.status == "error"
+        assert "Dependency cycle" in result.summary
+
+    async def test_dependency_ordering_respected(self, redis_and_store, tmp_path):
+        redis, _ = redis_and_store
+        sphinx = _mock_sphinx(clear=True)
+        athena = _mock_athena(phases=[
+            TaskPlanPhase(title="P2", agent="prometheus", description="Do second", depends_on=[1]),
+            TaskPlanPhase(title="P1", agent="clio", description="Do first", depends_on=[]),
+        ])
+        clio = _mock_agent("clio", "first-result")
+        prometheus = _mock_agent("prometheus", "second-result")
+        calliope = _mock_agent("calliope", "# Report")
+
+        agents = {
+            "sphinx": sphinx, "athena": athena,
+            "clio": clio, "prometheus": prometheus, "calliope": calliope,
+        }
+        pantheon = _mock_pantheon(agents)
+        orch = TaskOrchestrator(pantheon=pantheon, redis_cache=redis)
+
+        with patch("ira.systems.task_orchestrator._REPORTS_DIR", tmp_path):
+            task_id = await orch.create_task("Dependency order task")
+            result = await orch.run_task(task_id)
+
+        assert result.status == "complete"
+        clio.handle.assert_called_once()
+        prometheus.handle.assert_called_once()
+
 
 class TestRedisStatePersistence:
     """Task state round-trips through Redis correctly."""
@@ -412,6 +482,67 @@ class TestRedisStatePersistence:
 
         assert result.status == "error"
         assert "not found" in result.summary.lower()
+
+    async def test_get_task_state_returns_persisted_state(self, orchestrator):
+        task_id = await orchestrator.create_task("Status check task")
+        state = await orchestrator.get_task_state(task_id)
+        assert state is not None
+        assert state["task_id"] == task_id
+        assert state["status"] == "created"
+
+    async def test_abort_task_updates_state(self, orchestrator):
+        task_id = await orchestrator.create_task("Abort this task")
+        ok = await orchestrator.abort_task(task_id, reason="operator requested stop")
+        assert ok is True
+        state = await orchestrator.get_task_state(task_id)
+        assert state is not None
+        assert state["abort_requested"] is True
+        assert state["status"] == "aborting"
+        assert state["abort_reason"] == "operator requested stop"
+
+    async def test_list_tasks_returns_recent_first(self, orchestrator):
+        t1 = await orchestrator.create_task("Task one")
+        t2 = await orchestrator.create_task("Task two")
+        tasks = await orchestrator.list_tasks(limit=10)
+        assert len(tasks) == 2
+        assert tasks[0]["task_id"] == t2
+        assert tasks[1]["task_id"] == t1
+
+    async def test_retry_task_from_phase_uses_existing_phase_results(
+        self, redis_and_store, tmp_path,
+    ):
+        redis, _ = redis_and_store
+        sphinx = _mock_sphinx(clear=True)
+        athena = _mock_athena(phases=[
+            TaskPlanPhase(title="P1", agent="clio", description="Do first"),
+            TaskPlanPhase(title="P2", agent="prometheus", description="Do second"),
+        ])
+        clio = _mock_agent("clio", "first-result")
+        prometheus = _mock_agent("prometheus", "second-result")
+        calliope = _mock_agent("calliope", "# Report")
+
+        agents = {
+            "sphinx": sphinx, "athena": athena,
+            "clio": clio, "prometheus": prometheus, "calliope": calliope,
+        }
+        pantheon = _mock_pantheon(agents)
+        orch = TaskOrchestrator(pantheon=pantheon, redis_cache=redis)
+
+        with patch("ira.systems.task_orchestrator._REPORTS_DIR", tmp_path):
+            task_id = await orch.create_task("Retry test task")
+            first = await orch.run_task(task_id)
+            assert first.status == "complete"
+
+            # Reset call counters; retry from phase 1 should not re-run phase 0.
+            clio.handle.reset_mock()
+            prometheus.handle.reset_mock()
+            calliope.handle.reset_mock()
+
+            retried = await orch.retry_task(task_id, from_phase=1)
+
+        assert retried.status == "complete"
+        clio.handle.assert_not_called()
+        prometheus.handle.assert_called_once()
 
 
 class TestReportGeneration:

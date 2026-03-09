@@ -34,6 +34,7 @@ from ira.middleware.request_context import RequestContextMiddleware, RequestIdFi
 
 from ira.config import get_settings
 from ira.exceptions import ConfigurationError, IraError
+from ira.services.structured_logging import configure_root_logging
 from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,23 @@ class EmailDraftRequest(BaseModel):
     tone: str = "professional"
 
 
+class OutboundMessageRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+
+
+class OutboundDraftBatchRequest(BaseModel):
+    campaign_name: str
+    created_by: str
+    messages: list[OutboundMessageRequest]
+
+
+class OutboundApproveRequest(BaseModel):
+    batch_id: str
+    approved_by: str
+
+
 class TaskRequest(BaseModel):
     goal: str
     user_id: str | None = None
@@ -100,6 +118,16 @@ class TaskClarificationRequest(BaseModel):
     task_id: str
     answer: str
     user_id: str | None = None
+
+
+class TaskAbortRequest(BaseModel):
+    task_id: str
+    reason: str = ""
+
+
+class TaskRetryRequest(BaseModel):
+    task_id: str
+    from_phase: int | None = None
 
 
 # ── Service registry ──────────────────────────────────────────────────────
@@ -116,6 +144,14 @@ def _svc(name: str) -> Any:
     if svc is None:
         raise HTTPException(status_code=503, detail=f"Service '{name}' not available")
     return svc
+
+
+def _normalize_task_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Normalize task stream payloads to a stable event contract."""
+    normalized = dict(event)
+    normalized.setdefault("event_version", "v1")
+    normalized.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    return normalized
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────
@@ -142,13 +178,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Sentry init failed — continuing without error tracking", exc_info=True)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.app.log_level, logging.INFO),
-        format="%(asctime)s  %(name)-28s  %(levelname)-8s  [%(request_id)s]  %(message)s",
-        datefmt="%H:%M:%S",
+    configure_root_logging(
+        log_level=settings.app.log_level,
+        log_format=settings.app.log_format,
     )
     for handler in logging.root.handlers:
         handler.addFilter(RequestIdFilter())
+
+    from ira.systems.legacy_guard import enforce_legacy_quarantine
+
+    legacy_violations = enforce_legacy_quarantine(strict=settings.app.legacy_quarantine_strict)
+    if legacy_violations:
+        logger.warning(
+            "Legacy quarantine found %d runtime import violations",
+            len(legacy_violations),
+        )
 
     # ── Redis ─────────────────────────────────────────────────────────
     from ira.systems.redis_cache import RedisCache
@@ -532,8 +576,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ── Drip engine ────────────────────────────────────────────────────
     from ira.interfaces.email_processor import GmailDraftSender
     from ira.systems.drip_engine import AutonomousDripEngine
+    from ira.systems.outbound_approvals import OutboundApprovalService
 
     gmail_sender = GmailDraftSender(email_processor=email_processor)
+    outbound_approvals = OutboundApprovalService(
+        storage_path=Path("data/operations/outbound_approvals.json"),
+    )
+    _services[SK.OUTBOUND_APPROVALS] = outbound_approvals
     drip_engine = AutonomousDripEngine(
         crm=crm,
         quotes=quotes,
@@ -1157,6 +1206,50 @@ async def email_draft(req: EmailDraftRequest) -> dict[str, Any]:
     }
 
 
+@app.post("/api/outbound/campaigns/draft")
+async def outbound_campaign_draft(req: OutboundDraftBatchRequest) -> dict[str, Any]:
+    """Queue outbound messages for explicit approval before Gmail draft creation."""
+    approvals = _svc(SK.OUTBOUND_APPROVALS)
+    from ira.systems.outbound_approvals import OutboundMessage
+
+    batch = await approvals.create_batch(
+        campaign_name=req.campaign_name,
+        created_by=req.created_by,
+        messages=[OutboundMessage(**m.model_dump()) for m in req.messages],
+    )
+    return {
+        "status": "pending_approval",
+        "batch_id": batch["batch_id"],
+        "campaign_name": batch["campaign_name"],
+        "message_count": len(batch["messages"]),
+    }
+
+
+@app.post("/api/outbound/campaigns/approve")
+async def outbound_campaign_approve(req: OutboundApproveRequest) -> dict[str, Any]:
+    """Approve a queued batch and create Gmail drafts (never direct-send)."""
+    approvals = _svc(SK.OUTBOUND_APPROVALS)
+    email_processor = _svc(SK.EMAIL_PROCESSOR)
+    from ira.interfaces.email_processor import GmailDraftSender
+
+    gmail_sender = GmailDraftSender(email_processor=email_processor)
+    try:
+        batch = await approvals.approve_batch(
+            batch_id=req.batch_id,
+            approved_by=req.approved_by,
+            gmail_draft_sender=gmail_sender,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        "status": batch["status"],
+        "batch_id": batch["batch_id"],
+        "approved_by": batch["approved_by"],
+        "draft_count": len(batch.get("drafts", [])),
+    }
+
+
 # ── Email rescan endpoint ───────────────────────────────────────────────
 
 
@@ -1431,8 +1524,10 @@ async def task_stream(req: TaskRequest) -> EventSourceResponse:
 
     async def _event_generator() -> AsyncIterator[dict[str, str]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        event_seq = 0
 
         async def _on_progress(event: dict[str, Any]) -> None:
+            await orchestrator.append_task_event(task_id, _normalize_task_event(event))
             await queue.put(event)
 
         task_id = await orchestrator.create_task(
@@ -1449,23 +1544,45 @@ async def task_stream(req: TaskRequest) -> EventSourceResponse:
         while not task.done():
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                payload = _normalize_task_event(event)
+                event_seq += 1
                 yield {
-                    "event": event.get("type", "progress"),
-                    "data": _json.dumps(event, default=str),
+                    "id": str(event_seq),
+                    "event": payload.get("type", "progress"),
+                    "data": _json.dumps(payload, default=str),
                 }
             except asyncio.TimeoutError:
                 continue
 
         while not queue.empty():
             event = queue.get_nowait()
+            payload = _normalize_task_event(event)
+            event_seq += 1
             yield {
-                "event": event.get("type", "progress"),
-                "data": _json.dumps(event, default=str),
+                "id": str(event_seq),
+                "event": payload.get("type", "progress"),
+                "data": _json.dumps(payload, default=str),
             }
 
         try:
             result = task.result()
+            await orchestrator.append_task_event(
+                task_id,
+                _normalize_task_event(
+                    {
+                        "type": "task_result",
+                        "task_id": result.task_id,
+                        "status": result.status,
+                        "summary": result.summary,
+                        "file_path": result.file_path,
+                        "file_format": result.file_format,
+                        "clarification_questions": result.clarification_questions,
+                    }
+                ),
+            )
+            event_seq += 1
             yield {
+                "id": str(event_seq),
                 "event": "task_result",
                 "data": _json.dumps({
                     "task_id": result.task_id,
@@ -1478,7 +1595,13 @@ async def task_stream(req: TaskRequest) -> EventSourceResponse:
             }
         except Exception as exc:
             logger.exception("Task stream failed")
+            await orchestrator.append_task_event(
+                task_id,
+                _normalize_task_event({"type": "task_error", "error": str(exc)}),
+            )
+            event_seq += 1
             yield {
+                "id": str(event_seq),
                 "event": "task_error",
                 "data": _json.dumps({"error": str(exc)}),
             }
@@ -1497,8 +1620,10 @@ async def task_clarify(req: TaskClarificationRequest) -> EventSourceResponse:
 
     async def _event_generator() -> AsyncIterator[dict[str, str]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        event_seq = 0
 
         async def _on_progress(event: dict[str, Any]) -> None:
+            await orchestrator.append_task_event(req.task_id, _normalize_task_event(event))
             await queue.put(event)
 
         async def _run() -> Any:
@@ -1513,23 +1638,44 @@ async def task_clarify(req: TaskClarificationRequest) -> EventSourceResponse:
         while not task.done():
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                payload = _normalize_task_event(event)
+                event_seq += 1
                 yield {
-                    "event": event.get("type", "progress"),
-                    "data": _json.dumps(event, default=str),
+                    "id": str(event_seq),
+                    "event": payload.get("type", "progress"),
+                    "data": _json.dumps(payload, default=str),
                 }
             except asyncio.TimeoutError:
                 continue
 
         while not queue.empty():
             event = queue.get_nowait()
+            payload = _normalize_task_event(event)
+            event_seq += 1
             yield {
-                "event": event.get("type", "progress"),
-                "data": _json.dumps(event, default=str),
+                "id": str(event_seq),
+                "event": payload.get("type", "progress"),
+                "data": _json.dumps(payload, default=str),
             }
 
         try:
             result = task.result()
+            await orchestrator.append_task_event(
+                req.task_id,
+                _normalize_task_event(
+                    {
+                        "type": "task_result",
+                        "task_id": result.task_id,
+                        "status": result.status,
+                        "summary": result.summary,
+                        "file_path": result.file_path,
+                        "file_format": result.file_format,
+                    }
+                ),
+            )
+            event_seq += 1
             yield {
+                "id": str(event_seq),
                 "event": "task_result",
                 "data": _json.dumps({
                     "task_id": result.task_id,
@@ -1541,7 +1687,145 @@ async def task_clarify(req: TaskClarificationRequest) -> EventSourceResponse:
             }
         except Exception as exc:
             logger.exception("Task clarify stream failed")
+            await orchestrator.append_task_event(
+                req.task_id,
+                _normalize_task_event({"type": "task_error", "error": str(exc)}),
+            )
+            event_seq += 1
             yield {
+                "id": str(event_seq),
                 "event": "task_error",
                 "data": _json.dumps({"error": str(exc)}),
             }
+
+    return EventSourceResponse(_event_generator())
+
+
+@app.get("/api/task/{task_id}")
+async def task_status(task_id: str) -> dict[str, Any]:
+    """Return current persisted task state."""
+    orchestrator = _svc("task_orchestrator")
+    state = await orchestrator.get_task_state(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return state
+
+
+@app.get("/api/tasks")
+async def task_list(limit: int = 20) -> dict[str, Any]:
+    """List recent tasks for operator visibility."""
+    orchestrator = _svc("task_orchestrator")
+    tasks = await orchestrator.list_tasks(limit=limit)
+    return {"count": len(tasks), "tasks": tasks}
+
+
+@app.get("/api/task/{task_id}/events")
+async def task_events(task_id: str, limit: int = 200) -> dict[str, Any]:
+    """Return recent persisted events for a task."""
+    orchestrator = _svc("task_orchestrator")
+    state = await orchestrator.get_task_state(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    events = await orchestrator.get_task_events(task_id, limit=limit)
+    return {"task_id": task_id, "count": len(events), "events": events}
+
+
+@app.post("/api/task/abort")
+async def task_abort(req: TaskAbortRequest) -> dict[str, Any]:
+    """Request cancellation of an in-flight task."""
+    orchestrator = _svc("task_orchestrator")
+    ok = await orchestrator.abort_task(req.task_id, reason=req.reason)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Task '{req.task_id}' not found")
+    return {"task_id": req.task_id, "status": "aborting", "reason": req.reason}
+
+
+@app.post("/api/task/retry/stream")
+async def task_retry_stream(req: TaskRetryRequest) -> EventSourceResponse:
+    """Retry a prior task from a specific phase, streaming progress via SSE."""
+    orchestrator = _svc("task_orchestrator")
+    state = await orchestrator.get_task_state(req.task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Task '{req.task_id}' not found")
+
+    async def _event_generator() -> AsyncIterator[dict[str, str]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        event_seq = 0
+
+        async def _on_progress(event: dict[str, Any]) -> None:
+            await orchestrator.append_task_event(req.task_id, _normalize_task_event(event))
+            await queue.put(event)
+
+        async def _run() -> Any:
+            return await orchestrator.retry_task(
+                task_id=req.task_id,
+                from_phase=req.from_phase,
+                on_progress=_on_progress,
+            )
+
+        task = asyncio.create_task(_run())
+
+        while not task.done():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                payload = _normalize_task_event(event)
+                event_seq += 1
+                yield {
+                    "id": str(event_seq),
+                    "event": payload.get("type", "progress"),
+                    "data": _json.dumps(payload, default=str),
+                }
+            except asyncio.TimeoutError:
+                continue
+
+        while not queue.empty():
+            event = queue.get_nowait()
+            payload = _normalize_task_event(event)
+            event_seq += 1
+            yield {
+                "id": str(event_seq),
+                "event": payload.get("type", "progress"),
+                "data": _json.dumps(payload, default=str),
+            }
+
+        try:
+            result = task.result()
+            await orchestrator.append_task_event(
+                req.task_id,
+                _normalize_task_event(
+                    {
+                        "type": "task_result",
+                        "task_id": result.task_id,
+                        "status": result.status,
+                        "summary": result.summary,
+                        "file_path": result.file_path,
+                        "file_format": result.file_format,
+                    }
+                ),
+            )
+            event_seq += 1
+            yield {
+                "id": str(event_seq),
+                "event": "task_result",
+                "data": _json.dumps({
+                    "task_id": result.task_id,
+                    "status": result.status,
+                    "summary": result.summary,
+                    "file_path": result.file_path,
+                    "file_format": result.file_format,
+                }, default=str),
+            }
+        except Exception as exc:
+            logger.exception("Task retry stream failed")
+            await orchestrator.append_task_event(
+                req.task_id,
+                _normalize_task_event({"type": "task_error", "error": str(exc)}),
+            )
+            event_seq += 1
+            yield {
+                "id": str(event_seq),
+                "event": "task_error",
+                "data": _json.dumps({"error": str(exc)}),
+            }
+
+    return EventSourceResponse(_event_generator())

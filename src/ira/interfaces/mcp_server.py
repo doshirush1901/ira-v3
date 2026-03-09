@@ -112,7 +112,7 @@ async def _ensure_initialized() -> None:
     try:
         from ira.systems.task_orchestrator import TaskOrchestrator
 
-        redis_cache = _shared_services.get(SK.REDIS_CACHE)
+        redis_cache = _shared_services.get(SK.REDIS)
         voice = _shared_services.get(SK.VOICE)
         _task_orchestrator = TaskOrchestrator(
             pantheon=_pantheon,
@@ -939,7 +939,7 @@ async def execute_phase(plan_id: str, phase_id: int) -> str:
     if _agent_loop is None:
         return json.dumps({"error": "Agent loop not available"})
 
-    plan = _agent_loop._plans.get(plan_id)
+    plan = _agent_loop.get_plan(plan_id)
     if plan is None:
         return json.dumps({"error": f"Plan '{plan_id}' not found. Call plan_task first."})
 
@@ -991,7 +991,7 @@ async def generate_report(
     if _agent_loop is None:
         return json.dumps({"error": "Agent loop not available"})
 
-    plan = _agent_loop._plans.get(plan_id)
+    plan = _agent_loop.get_plan(plan_id)
     if plan is None:
         return json.dumps({"error": f"Plan '{plan_id}' not found."})
 
@@ -1016,6 +1016,81 @@ async def generate_report(
     except Exception as exc:
         logger.exception("generate_report failed")
         return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def get_task_status(task_id: str) -> str:
+    """Get current state for a server-side task orchestrator task."""
+    await _ensure_initialized()
+    if _task_orchestrator is None:
+        return json.dumps({"error": "Task orchestrator not available"})
+    state = await _task_orchestrator.get_task_state(task_id)
+    if state is None:
+        return json.dumps({"error": f"Task '{task_id}' not found"})
+    return json.dumps(state, indent=2, default=str)
+
+
+@mcp.tool()
+async def abort_task(task_id: str, reason: str = "") -> str:
+    """Request cancellation for a running server-side task."""
+    await _ensure_initialized()
+    if _task_orchestrator is None:
+        return json.dumps({"error": "Task orchestrator not available"})
+    ok = await _task_orchestrator.abort_task(task_id, reason=reason)
+    if not ok:
+        return json.dumps({"error": f"Task '{task_id}' not found"})
+    return json.dumps(
+        {"task_id": task_id, "status": "aborting", "reason": reason},
+        indent=2,
+        default=str,
+    )
+
+
+@mcp.tool()
+async def list_tasks(limit: int = 20) -> str:
+    """List recent server-side task states for operator visibility."""
+    await _ensure_initialized()
+    if _task_orchestrator is None:
+        return json.dumps({"error": "Task orchestrator not available"})
+    tasks = await _task_orchestrator.list_tasks(limit=limit)
+    return json.dumps({"count": len(tasks), "tasks": tasks}, indent=2, default=str)
+
+
+@mcp.tool()
+async def get_task_events(task_id: str, limit: int = 200) -> str:
+    """Fetch recent event timeline for a task."""
+    await _ensure_initialized()
+    if _task_orchestrator is None:
+        return json.dumps({"error": "Task orchestrator not available"})
+    state = await _task_orchestrator.get_task_state(task_id)
+    if state is None:
+        return json.dumps({"error": f"Task '{task_id}' not found"})
+    events = await _task_orchestrator.get_task_events(task_id, limit=limit)
+    return json.dumps(
+        {"task_id": task_id, "count": len(events), "events": events},
+        indent=2,
+        default=str,
+    )
+
+
+@mcp.tool()
+async def retry_task(task_id: str, from_phase: int = 0) -> str:
+    """Retry a server-side task from a specific phase index."""
+    await _ensure_initialized()
+    if _task_orchestrator is None:
+        return json.dumps({"error": "Task orchestrator not available"})
+    result = await _task_orchestrator.retry_task(task_id, from_phase=from_phase)
+    return json.dumps(
+        {
+            "task_id": result.task_id,
+            "status": result.status,
+            "summary": result.summary,
+            "file_path": result.file_path,
+            "file_format": result.file_format,
+        },
+        indent=2,
+        default=str,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
