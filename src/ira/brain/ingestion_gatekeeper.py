@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,12 +33,39 @@ from ira.brain.ingestion_log import (
     record_ingestion,
     save_log,
 )
-
+from ira.brain.source_identity import make_source_id
 from ira.exceptions import IngestionError, IraError
+from ira.memory.long_term import LongTermMemory
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY = 5
+
+_ASANA_IMPORT_MARKERS = ("23_asana", "asana_grounded_gold_sets")
+_ASANA_DOC_TYPE_TO_CATEGORY: dict[str, str] = {
+    "order": "orders_and_pos",
+    "invoice": "orders_and_pos",
+    "quote": "orders_and_pos",
+    "contract": "contracts_and_legal",
+    "technical_spec": "production",
+    "manual": "production",
+    "report": "production",
+    "spreadsheet": "production",
+    "presentation": "project_case_studies",
+}
+
+
+def _resolve_source_category(rel_path: str, meta: dict[str, Any]) -> str:
+    """Map imports metadata to an ingestion category.
+
+    For the Asana gold-set package we prefer Atlas-friendly operational
+    categories so category-filtered retrieval can find shop-floor context.
+    """
+    doc_type = str(meta.get("doc_type", "other")).strip().lower() or "other"
+    rel_lower = rel_path.lower()
+    if any(marker in rel_lower for marker in _ASANA_IMPORT_MARKERS):
+        return _ASANA_DOC_TYPE_TO_CATEGORY.get(doc_type, "production")
+    return doc_type
 
 
 async def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
@@ -66,12 +93,14 @@ async def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
 
         reason = needs_ingestion(log, rel_path, current_hash, force=force)
         if reason:
+            doc_type = meta.get("doc_type", "other")
             queue.append({
                 "rel_path": rel_path,
                 "path": str(filepath),
                 "hash": current_hash,
                 "reason": reason,
-                "category": meta.get("doc_type", "other"),
+                "category": _resolve_source_category(rel_path, meta),
+                "doc_type": doc_type,
                 "extension": meta.get("extension", filepath.suffix.lower()),
                 "name": meta.get("name", filepath.name),
                 "size_kb": meta.get("size_kb", 0),
@@ -113,7 +142,7 @@ async def run_ingestion_cycle(
     *progress_callback(done, total, filename, file_result)* is called
     after each file finishes so the CLI can update a progress bar.
     """
-    from ira.brain.document_ingestor import DocumentIngestor, _READERS
+    from ira.brain.document_ingestor import _READERS, DocumentIngestor
     from ira.brain.embeddings import EmbeddingService
     from ira.brain.knowledge_graph import KnowledgeGraph
     from ira.brain.qdrant_manager import QdrantManager
@@ -156,14 +185,50 @@ async def run_ingestion_cycle(
     failed = 0
     total_chunks = 0
     total_entities: dict[str, int] = {"companies": 0, "people": 0, "machines": 0}
+    memory_written = 0
+    memory_attempted = 0
     errors: list[str] = []
     done_count = 0
 
+    long_term_memory = LongTermMemory()
+
+    async def _store_ingestion_memory(
+        *,
+        file_info: dict[str, Any],
+        source_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Write a compact learning fact to long-term memory for this source."""
+        chunks = int(result.get("chunks_created", 0))
+        entities = result.get("entities_found", {})
+        content = (
+            f"Ingested source {file_info.get('name', 'unknown')} "
+            f"(category={file_info.get('category', 'other')}, source_id={source_id}) "
+            f"with {chunks} chunks and entities={entities}."
+        )
+        metadata = {
+            "type": "ingested_source",
+            "source_id": source_id,
+            "source_path": file_info.get("path", ""),
+            "source_name": file_info.get("name", ""),
+            "source_category": file_info.get("category", "other"),
+            "doc_type": file_info.get("doc_type", "other"),
+            "chunk_count": chunks,
+            "entities": entities,
+        }
+        memories = await long_term_memory.store(content, user_id="global", metadata=metadata)
+        return {
+            "attempted": True,
+            "status": "stored" if memories else "not_stored",
+            "count": len(memories),
+        }
+
     async def _process_one(file_info: dict[str, Any]) -> None:
-        nonlocal processed, skipped, failed, total_chunks, done_count
+        nonlocal processed, skipped, failed, total_chunks, done_count, memory_written, memory_attempted
 
         rel_path = file_info["rel_path"]
         filepath = Path(file_info["path"])
+        source_id = make_source_id(str(filepath), file_info["hash"])
 
         try:
             reader = _READERS.get(file_info["extension"])
@@ -188,13 +253,39 @@ async def run_ingestion_cycle(
                 raw_data=text,
                 source=str(filepath),
                 source_category=file_info["category"],
+                source_id=source_id,
             )
 
             chunks = result.get("chunks_created", 0)
             async with lock:
                 done_count += 1
                 if chunks > 0:
-                    record_ingestion(log, rel_path, file_info["hash"], result, collection)
+                    memory_result: dict[str, Any]
+                    try:
+                        memory_result = await _store_ingestion_memory(
+                            file_info=file_info,
+                            source_id=source_id,
+                            result=result,
+                        )
+                    except Exception:
+                        logger.warning("Memory write failed for %s", rel_path, exc_info=True)
+                        memory_result = {
+                            "attempted": True,
+                            "status": "error",
+                            "count": 0,
+                        }
+                    result["memory_write"] = memory_result
+                    memory_attempted += 1 if memory_result.get("attempted") else 0
+                    memory_written += 1 if memory_result.get("status") == "stored" else 0
+
+                    record_ingestion(
+                        log,
+                        rel_path,
+                        file_info["hash"],
+                        result,
+                        collection,
+                        source_id=source_id,
+                    )
                     await save_log(log)
                     processed += 1
                     total_chunks += chunks
@@ -224,7 +315,7 @@ async def run_ingestion_cycle(
     try:
         await asyncio.gather(*[_guarded(f) for f in batch])
 
-        log["last_full_scan"] = datetime.now(timezone.utc).isoformat()
+        log["last_full_scan"] = datetime.now(UTC).isoformat()
         await save_log(log)
     finally:
         for closeable in [qdrant, graph]:
@@ -244,6 +335,8 @@ async def run_ingestion_cycle(
         "files_remaining": len(queue) - batch_total,
         "total_chunks": total_chunks,
         "total_entities": total_entities,
+        "memory_attempted": memory_attempted,
+        "memory_written": memory_written,
         "errors": errors,
         "pipeline": CURRENT_PIPELINE,
         "batch_size": batch_total,

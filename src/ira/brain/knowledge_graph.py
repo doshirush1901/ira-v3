@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, ClassVar
 
 from langfuse.decorators import observe
 from neo4j import AsyncGraphDatabase
@@ -52,9 +52,10 @@ class KnowledgeGraph:
     ) -> None:
         cfg = config or get_settings().neo4j
         app_cfg = get_settings().app
+        neo4j_user, neo4j_password = cfg.resolved_auth()
         self._driver = AsyncGraphDatabase.driver(
             cfg.uri,
-            auth=(cfg.user, cfg.password.get_secret_value()),
+            auth=(neo4j_user, neo4j_password),
             max_connection_pool_size=app_cfg.neo4j_max_pool_size,
             connection_acquisition_timeout=60.0,
         )
@@ -229,7 +230,7 @@ class KnowledgeGraph:
     # from_type / to_type are validated against this dict before
     # interpolation — never add entries without reviewing the Cypher
     # injection implications.
-    _KEY_FIELDS: dict[str, str] = {
+    _KEY_FIELDS: ClassVar[dict[str, str]] = {
         "Company": "name",
         "Person": "email",
         "Machine": "model",

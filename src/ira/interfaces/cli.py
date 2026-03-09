@@ -17,15 +17,21 @@ Usage::
     ira pipeline
     ira health
     ira agents
+    ira audit skills
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import mailbox
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
+from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -57,6 +63,9 @@ app = typer.Typer(
 
 email_app = typer.Typer(help="Email drafting and learning commands.")
 app.add_typer(email_app, name="email")
+
+takeout_app = typer.Typer(help="Google Takeout ingestion commands.")
+app.add_typer(takeout_app, name="takeout")
 
 system_app = typer.Typer(help="System lifecycle commands (inhale/exhale).")
 app.add_typer(system_app, name="system")
@@ -91,6 +100,101 @@ def _configure_logging(verbose: bool = False) -> None:
         format="%(asctime)s  %(name)-28s  %(levelname)-8s  %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _render_progress_event(event: dict[str, Any]) -> tuple[str, str | None]:
+    """Map pipeline progress events to CLI status and detail lines."""
+    etype = str(event.get("type", "")).strip()
+    agent = str(event.get("agent", "")).strip()
+    role = str(event.get("role", "")).strip()
+
+    if etype == "perceiving":
+        return "Perceiving input...", "• Perceiving input"
+    if etype == "remembering":
+        return "Recalling context...", "• Recalling memory and conversation context"
+    if etype == "fast_path":
+        category = event.get("category") or "general"
+        return f"Fast path matched ({category})", f"• Fast path category: {category}"
+    if etype == "sphinx_checking":
+        return "Checking query clarity...", "• Sphinx is checking clarity"
+    if etype == "sphinx_clarifying":
+        return "Generating clarification...", "• Sphinx requested clarification"
+    if etype == "routing":
+        method = event.get("method") or "agent routing"
+        return f"Routing request ({method})...", f"• Routing method: {method}"
+    if etype == "enriching":
+        return "Enriching context...", "• Building enriched execution context"
+    if etype == "agent_started":
+        role_suffix = f" ({role})" if role else ""
+        return f"Consulting {agent}{role_suffix}...", f"• Started: {agent}{role_suffix}"
+    if etype == "agent_thinking":
+        iteration = event.get("iteration") or "?"
+        return f"{agent} thinking (iter {iteration})...", f"  ↳ {agent} thinking, iteration {iteration}"
+    if etype == "tool_called":
+        tool = event.get("tool") or "tool"
+        return f"{agent} using {tool}...", f"  ↳ {agent} called tool: {tool}"
+    if etype == "agent_done":
+        return f"{agent} finished", f"✓ Completed: {agent}"
+    if etype == "synthesizing":
+        return "Synthesizing agent outputs...", "• Athena is synthesizing responses"
+    if etype == "gap_resolving":
+        gaps = event.get("gaps")
+        if isinstance(gaps, int):
+            return f"Resolving gaps ({gaps})...", f"• Gapper resolving {gaps} gap(s)"
+        return "Resolving response gaps...", "• Gapper resolving response gaps"
+    if etype == "faithfulness_check":
+        return "Running fact-faithfulness checks...", "• Verifying response faithfulness"
+    if etype == "assessing":
+        return "Assessing confidence...", "• Metacognition is assessing confidence"
+    if etype == "reflecting":
+        return "Reflecting...", "• Sophia reflection pass"
+    if etype == "shaping":
+        return "Shaping final response...", "• Applying voice and channel shaping"
+
+    fallback = etype.replace("_", " ").strip() or "working"
+    return f"{fallback}...", None
+
+
+async def _process_request_with_live_progress(
+    pipeline: Any,
+    *,
+    raw_input: str,
+    sender_id: str,
+    channel: str = "cli",
+) -> tuple[str, list[str]]:
+    """Run pipeline with a Manus-style live progress feed in terminal."""
+    last_status = ""
+    step_no = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=err_console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task("[bold green]Initializing request...[/bold green]", total=None)
+
+        async def on_progress(event: dict[str, Any]) -> None:
+            nonlocal last_status, step_no
+            status, detail = _render_progress_event(event)
+            if status and status != last_status:
+                step_no += 1
+                progress.update(
+                    task_id,
+                    description=f"[bold green][step {step_no}] {status}[/bold green]",
+                )
+                last_status = status
+            if detail:
+                err_console.print(f"[dim]{detail}[/dim]")
+
+        response, agents_used = await pipeline.process_request(
+            raw_input=raw_input,
+            channel=channel,
+            sender_id=sender_id,
+            on_progress=on_progress,
+        )
+        progress.update(task_id, description="[bold green]Done[/bold green]")
+        return response, agents_used
 
 
 def _build_pantheon() -> tuple[Any, dict[str, Any]]:
@@ -444,18 +548,12 @@ def chat(
                     except (IraError, Exception):
                         logger.debug("Feedback detection failed", exc_info=True)
 
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold green]Consulting agents..."),
-                    console=err_console,
-                    transient=True,
-                ) as progress:
-                    progress.add_task("thinking", total=None)
-                    response, agents_used = await pipeline.process_request(
-                        raw_input=text,
-                        channel="cli",
-                        sender_id=user_id,
-                    )
+                response, agents_used = await _process_request_with_live_progress(
+                    pipeline,
+                    raw_input=text,
+                    sender_id=user_id,
+                    channel="cli",
+                )
 
                 last_exchange = {
                     "query": text,
@@ -487,18 +585,12 @@ def ask(
         async with pantheon:
             pipeline, _feedback = await _build_pipeline(pantheon, shared_services)
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[bold green]Thinking..."),
-                console=err_console,
-                transient=True,
-            ) as progress:
-                progress.add_task("thinking", total=None)
-                response, _agents = await pipeline.process_request(
-                    raw_input=query,
-                    channel="cli",
-                    sender_id=user_id,
-                )
+            response, _agents = await _process_request_with_live_progress(
+                pipeline,
+                raw_input=query,
+                sender_id=user_id,
+                channel="cli",
+            )
 
         console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
@@ -1189,6 +1281,264 @@ def email_drip(
     _run(_drip())
 
 
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "batch"
+
+
+def _extract_message_body(msg: mailbox.mboxMessage) -> str:
+    """Extract a plain-text body from an mbox message."""
+    if msg.is_multipart():
+        parts: list[str] = []
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if part.get_content_disposition() == "attachment":
+                continue
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text = payload.decode(charset, errors="replace")
+            except LookupError:
+                text = payload.decode("utf-8", errors="replace")
+            if text.strip():
+                parts.append(text)
+        return "\n\n".join(parts)
+
+    payload = msg.get_payload(decode=True)
+    if payload is None:
+        raw = msg.get_payload()
+        return raw if isinstance(raw, str) else ""
+    charset = msg.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def _is_noise_message(msg: mailbox.mboxMessage, sender: str, subject: str) -> bool:
+    """Deterministically drop obvious junk/non-business messages."""
+    sender_l = sender.lower()
+    subject_l = subject.lower()
+
+    if any(x in sender_l for x in ("noreply", "no-reply", "donotreply", "do-not-reply")):
+        return True
+    if any(x in subject_l for x in ("unsubscribe", "newsletter", "digest", "promotion", "sale")):
+        return True
+
+    precedence = str(msg.get("Precedence", "")).lower()
+    auto_submitted = str(msg.get("Auto-Submitted", "")).lower()
+    list_unsub = str(msg.get("List-Unsubscribe", "")).strip()
+    if "bulk" in precedence or "list" in precedence:
+        return True
+    if auto_submitted and auto_submitted != "no":
+        return True
+    if list_unsub:
+        return True
+    return False
+
+
+def _has_machinecraft_protein_signal(sender: str, subject: str, body: str) -> bool:
+    text = f"{sender}\n{subject}\n{body}".lower()
+    patterns = (
+        "rfq", "request for quote", "quote", "quotation", "po ", "purchase order",
+        "inquiry", "lead time", "delivery", "dispatch", "pricing", "price",
+        "machine", "thermoform", "vacuum form", "tooling", "spec", "specification",
+        "machinecraft", "client", "customer", "payment terms", "invoice",
+    )
+    return any(p in text for p in patterns)
+
+
+@takeout_app.command("ingest")
+def takeout_ingest(
+    source_dir: str = typer.Option("data/takeout_ingest", "--source-dir", help="Folder containing .mbox files."),
+    batch_name: str = typer.Option("batch_takeout", "--batch-name", help="Logical batch name for checkpointing."),
+    profile: str = typer.Option(
+        "machinecraft_protein_strict",
+        "--profile",
+        help="Ingestion profile. Supported: machinecraft_protein_strict",
+    ),
+    max_messages: int = typer.Option(0, "--max-messages", help="Max candidate messages to process (0 = all)."),
+    mem0_user_id: str = typer.Option("global", "--mem0-user-id", help="Mem0 user_id for stored memories."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Classify/filter only, do not write Qdrant/Neo4j/Mem0."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Ingest Google Takeout mbox with a protein-first Machinecraft profile."""
+    _configure_logging(verbose)
+
+    if profile != "machinecraft_protein_strict":
+        console.print(f"[red]Unsupported profile:[/red] {profile}")
+        raise typer.Exit(2)
+
+    source_path = Path(source_dir)
+    if not source_path.exists():
+        console.print(f"[red]Source directory not found:[/red] {source_dir}")
+        raise typer.Exit(2)
+
+    mbox_files = sorted(source_path.glob("*.mbox"))
+    if not mbox_files:
+        console.print(f"[yellow]No .mbox files found in {source_dir}[/yellow]")
+        raise typer.Exit(0)
+
+    checkpoint_path = Path("data/brain") / f"takeout_ingest_{_slugify(batch_name)}.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    if checkpoint_path.exists():
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            checkpoint = {}
+    else:
+        checkpoint = {}
+    done_keys: set[str] = set(checkpoint.get("done_keys", []))
+
+    digestive, ingestor, _qdrant = _build_digestive()
+    from ira.memory.long_term import LongTermMemory
+    memory = LongTermMemory()
+
+    async def _run_ingest() -> None:
+        stats = {
+            "mbox_files": len(mbox_files),
+            "messages_seen": 0,
+            "messages_skipped_checkpoint": 0,
+            "messages_skipped_noise": 0,
+            "messages_skipped_low_signal": 0,
+            "messages_processed": 0,
+            "messages_with_protein": 0,
+            "chunks_created": 0,
+            "mem0_written": 0,
+            "entities": {"companies": 0, "people": 0, "machines": 0, "relationships": 0},
+        }
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=err_console,
+        ) as progress:
+            task = progress.add_task("Processing takeout mbox...", total=None)
+
+            for mbox_path in mbox_files:
+                progress.update(task, description=f"Reading {mbox_path.name} ...")
+                mbox = mailbox.mbox(str(mbox_path))
+                for idx, msg in enumerate(mbox):
+                    stats["messages_seen"] += 1
+
+                    sender = parseaddr(str(msg.get("From", "")))[1] or str(msg.get("From", ""))
+                    subject = str(msg.get("Subject", "")).strip()
+                    msg_id = str(msg.get("Message-ID", "")).strip()
+                    if not msg_id:
+                        date_raw = str(msg.get("Date", ""))
+                        msg_id = f"{mbox_path.name}:{idx}:{date_raw}:{subject}:{sender}"
+                    key = hashlib.sha256(msg_id.encode("utf-8", errors="ignore")).hexdigest()
+
+                    if key in done_keys:
+                        stats["messages_skipped_checkpoint"] += 1
+                        continue
+
+                    body = _extract_message_body(msg)
+                    if _is_noise_message(msg, sender, subject):
+                        stats["messages_skipped_noise"] += 1
+                        done_keys.add(key)
+                        continue
+                    if not _has_machinecraft_protein_signal(sender, subject, body):
+                        stats["messages_skipped_low_signal"] += 1
+                        done_keys.add(key)
+                        continue
+
+                    if max_messages > 0 and stats["messages_processed"] >= max_messages:
+                        break
+
+                    source = f"{mbox_path}:{idx}"
+                    source_id = key[:24]
+
+                    nutrients = await digestive._extract_nutrients(body)
+                    nutrients = await digestive._summarize_nutrients(nutrients)
+                    protein_statements = [p for p in nutrients.get("protein", []) if isinstance(p, str) and p.strip()]
+                    protein_only = {"protein": protein_statements, "carbs": [], "waste": nutrients.get("waste", [])}
+
+                    if not protein_statements:
+                        done_keys.add(key)
+                        stats["messages_processed"] += 1
+                        continue
+
+                    stats["messages_with_protein"] += 1
+                    if not dry_run:
+                        chunks = await digestive._absorb(
+                            protein_only,
+                            source=source,
+                            source_category="takeout_email_protein",
+                            source_id=source_id,
+                        )
+                        stats["chunks_created"] += int(chunks)
+
+                        entities = await digestive._extract_entities("\n".join(protein_statements))
+                        for k in ("companies", "people", "machines", "relationships"):
+                            stats["entities"][k] += int(entities.get(k, 0))
+
+                        top_facts = protein_statements[:8]
+                        for fact in top_facts:
+                            stored = await memory.store_fact(
+                                fact=fact,
+                                source=source,
+                                confidence=0.85,
+                            )
+                            if stored:
+                                stats["mem0_written"] += 1
+
+                    done_keys.add(key)
+                    stats["messages_processed"] += 1
+                    progress.update(
+                        task,
+                        description=(
+                            f"{mbox_path.name}: processed={stats['messages_processed']} "
+                            f"protein={stats['messages_with_protein']} chunks={stats['chunks_created']}"
+                        ),
+                    )
+
+                if max_messages > 0 and stats["messages_processed"] >= max_messages:
+                    break
+
+        checkpoint_payload = {
+            "batch_name": batch_name,
+            "profile": profile,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "done_keys": sorted(done_keys),
+            "stats": stats,
+        }
+        checkpoint_path.write_text(json.dumps(checkpoint_payload, indent=2), encoding="utf-8")
+
+        summary = Table(title="Takeout Protein Ingestion Summary")
+        summary.add_column("Metric", style="cyan")
+        summary.add_column("Value", style="green", justify="right")
+        for key in (
+            "mbox_files",
+            "messages_seen",
+            "messages_skipped_checkpoint",
+            "messages_skipped_noise",
+            "messages_skipped_low_signal",
+            "messages_processed",
+            "messages_with_protein",
+            "chunks_created",
+            "mem0_written",
+        ):
+            summary.add_row(key, str(stats[key]))
+        summary.add_row("entities.companies", str(stats["entities"]["companies"]))
+        summary.add_row("entities.people", str(stats["entities"]["people"]))
+        summary.add_row("entities.machines", str(stats["entities"]["machines"]))
+        summary.add_row("entities.relationships", str(stats["entities"]["relationships"]))
+        summary.add_row("dry_run", str(dry_run))
+        console.print(summary)
+        console.print(f"[green]Checkpoint:[/green] {checkpoint_path}")
+
+    try:
+        _run(_run_ingest())
+    finally:
+        try:
+            ingestor.close()
+        except Exception:
+            logger.debug("Failed to close ingestor in takeout ingest", exc_info=True)
+
+
 # ── System sub-commands ──────────────────────────────────────────────────
 
 
@@ -1311,6 +1661,240 @@ def index_imports(
 
 
 # ── Ingestion ─────────────────────────────────────────────────────────────
+
+
+@app.command(name="audit-ingestion")
+def audit_ingestion(
+    output: str = typer.Option(
+        "data/brain/ingestion_audit_latest.json",
+        "--output",
+        "-o",
+        help="Write JSON audit report to this path.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Audit imports-to-knowledge coverage across index, logs, Qdrant, Neo4j, and memory.
+
+    Read-only command. Does not ingest or mutate any data.
+    """
+    _configure_logging(verbose)
+
+    from ira.brain.ingestion_audit import run_ingestion_audit, write_audit_report
+
+    report = _run(run_ingestion_audit())
+    summary = report.get("summary", {})
+
+    imports_summary = summary.get("imports", {})
+    console.print(
+        Panel(
+            f"[bold]Imports dir:[/bold] {imports_summary.get('imports_dir', 'data/imports')}\n"
+            f"[bold]Supported files:[/bold] {imports_summary.get('supported_file_count', 0)}",
+            title="Ingestion Audit",
+            border_style="blue",
+        )
+    )
+
+    coverage_table = Table(title="Coverage by Layer")
+    coverage_table.add_column("Layer", style="cyan")
+    coverage_table.add_column("Matched", style="green", justify="right")
+    coverage_table.add_column("Coverage %", style="green", justify="right")
+    coverage_table.add_row(
+        "Metadata Index",
+        str(summary.get("metadata_index", {}).get("matched_import_files", 0)),
+        str(summary.get("metadata_index", {}).get("coverage_pct", 0)),
+    )
+    coverage_table.add_row(
+        "Ingestion Log",
+        str(summary.get("ingestion_log", {}).get("matched_import_files", 0)),
+        str(summary.get("ingestion_log", {}).get("coverage_pct", 0)),
+    )
+    coverage_table.add_row(
+        "Qdrant Sources",
+        str(summary.get("qdrant", {}).get("matched_import_files", 0)),
+        str(summary.get("qdrant", {}).get("coverage_pct", 0)),
+    )
+    coverage_table.add_row(
+        "Neo4j Sources",
+        str(summary.get("neo4j", {}).get("matched_import_files", 0)),
+        str(summary.get("neo4j", {}).get("coverage_pct", 0)),
+    )
+    console.print(coverage_table)
+
+    status_table = Table(title="Store Health")
+    status_table.add_column("Store", style="cyan")
+    status_table.add_column("Status", style="green")
+    status_table.add_column("Detail", style="white")
+    qdrant_status = str(summary.get("qdrant", {}).get("status", "unknown"))
+    qdrant_detail = (
+        f"collection={summary.get('qdrant', {}).get('collection', '?')}, "
+        f"count_estimate={summary.get('qdrant', {}).get('count_estimate', '?')}"
+        if qdrant_status == "ok"
+        else str(summary.get("qdrant", {}).get("error", "unavailable"))
+    )
+    neo4j_status = str(summary.get("neo4j", {}).get("status", "unknown"))
+    neo4j_detail = (
+        f"nodes={summary.get('neo4j', {}).get('nodes', 0)}, "
+        f"relationships={summary.get('neo4j', {}).get('relationships', 0)}"
+        if neo4j_status == "ok"
+        else str(summary.get("neo4j", {}).get("error", "unavailable"))
+    )
+    memory_status = str(summary.get("memory", {}).get("status", "unknown"))
+    memory_detail = str(summary.get("memory", {}).get("detail", ""))
+
+    status_table.add_row("Qdrant", qdrant_status, qdrant_detail)
+    status_table.add_row("Neo4j", neo4j_status, neo4j_detail)
+    status_table.add_row("Memory", memory_status, memory_detail)
+    console.print(status_table)
+
+    gatekeeper = summary.get("gatekeeper", {})
+    console.print(
+        f"[bold]Gatekeeper pending files:[/bold] {gatekeeper.get('needs_ingestion_count', 0)} "
+        f"(by reason: {gatekeeper.get('by_reason', {})})"
+    )
+
+    gaps = report.get("gaps", [])
+    if gaps:
+        console.print("[yellow]Gaps detected:[/yellow] " + ", ".join(gaps))
+    else:
+        console.print("[green]No gaps detected.[/green]")
+
+    out_path = Path(output)
+    _run(write_audit_report(report, out_path))
+    console.print(f"[green]Audit report written:[/green] {out_path}")
+
+
+@app.command(name="reconcile-ingestion")
+def reconcile_ingestion(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply reconciliation actions. Without this flag, runs in dry-run mode.",
+    ),
+    batch_size: int = typer.Option(
+        712,
+        "--batch",
+        "-n",
+        help="Max files to process if ingestion cycle is triggered.",
+    ),
+    concurrency: int = typer.Option(
+        3,
+        "--workers",
+        "-w",
+        help="Parallel workers for ingestion if applied.",
+    ),
+    no_llm_reindex: bool = typer.Option(
+        False,
+        "--no-llm-reindex",
+        help="Use local-only metadata reindexing if index rebuild is needed.",
+    ),
+    output: str = typer.Option(
+        "data/brain/ingestion_reconcile_latest.json",
+        "--output",
+        "-o",
+        help="Write reconciliation report JSON to this path.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Plan or apply audit-driven ingestion reconciliation actions."""
+    _configure_logging(verbose)
+    from ira.brain.ingestion_reconcile import reconcile_ingestion
+
+    mode = "APPLY" if apply else "DRY-RUN"
+    console.print(
+        Panel(
+            f"[bold]Mode:[/bold] {mode}\n"
+            f"[bold]Batch size:[/bold] {batch_size}\n"
+            f"[bold]Workers:[/bold] {concurrency}",
+            title="Ingestion Reconciliation",
+            border_style="blue",
+        )
+    )
+
+    result = _run(
+        reconcile_ingestion(
+            batch_size=batch_size,
+            concurrency=concurrency,
+            apply=apply,
+            use_llm_for_reindex=not no_llm_reindex,
+            output_path=output,
+        )
+    )
+
+    planned_actions = result.get("planned_actions", [])
+    if planned_actions:
+        console.print("[bold]Planned actions:[/bold] " + ", ".join(planned_actions))
+    else:
+        console.print("[green]No reconciliation actions needed.[/green]")
+
+    before_gaps = result.get("before", {}).get("gaps", [])
+    after_gaps = result.get("after", {}).get("gaps", [])
+    console.print(f"[bold]Gaps before:[/bold] {before_gaps}")
+    console.print(f"[bold]Gaps after:[/bold]  {after_gaps}")
+
+    if apply:
+        action_results = result.get("action_results", {})
+        if action_results:
+            table = Table(title="Applied Actions")
+            table.add_column("Action", style="cyan")
+            table.add_column("Result Summary", style="green")
+            for action, payload in action_results.items():
+                table.add_row(action, str(payload)[:200])
+            console.print(table)
+        console.print("[green]Reconciliation applied.[/green]")
+    else:
+        console.print(
+            "[yellow]Dry-run only. Re-run with --apply to execute reconciliation actions.[/yellow]"
+        )
+
+    console.print(f"[green]Reconciliation report written:[/green] {output}")
+
+
+@app.command(name="seed-neo4j")
+def seed_neo4j(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview Neo4j writes without applying them.",
+    ),
+    apply_schema: bool = typer.Option(
+        False,
+        "--apply-schema",
+        help="Apply scripts/neo4j_schema_v1.cypher before seeding.",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Seed Neo4j lineage nodes from ingestion and correction stores."""
+    _configure_logging(verbose)
+
+    script_path = Path("scripts/seed_neo4j_from_ingestion_log.py")
+    if not script_path.exists():
+        console.print(f"[red]Seed script not found:[/red] {script_path}")
+        raise typer.Exit(1)
+
+    cmd = [sys.executable, str(script_path)]
+    if dry_run:
+        cmd.append("--dry-run")
+    if apply_schema:
+        cmd.append("--apply-schema")
+
+    mode = "DRY-RUN" if dry_run else "APPLY"
+    console.print(
+        Panel(
+            f"[bold]Mode:[/bold] {mode}\n"
+            f"[bold]Apply schema:[/bold] {'yes' if apply_schema else 'no'}",
+            title="Neo4j Seeding",
+            border_style="blue",
+        )
+    )
+
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+    if result.stdout:
+        console.print(result.stdout.strip())
+    if result.returncode != 0:
+        if result.stderr:
+            console.print(f"[red]{result.stderr.strip()}[/red]")
+        raise typer.Exit(result.returncode)
+    console.print("[green]Neo4j seeding completed.[/green]")
 
 
 @app.command()
@@ -2630,3 +3214,100 @@ def audit_knowledge(
             console.print(f"[red]Could not read eval dataset: {exc}[/red]")
 
     asyncio.run(_run())
+
+
+@audit_app.command("skills")
+def audit_skills(
+    strict: bool = typer.Option(
+        True,
+        "--strict/--no-strict",
+        help="Exit non-zero when any skill audit issue is found.",
+    ),
+) -> None:
+    """Audit skill matrix, handlers, and per-agent required skill wiring."""
+    import ast
+
+    from ira.pantheon import _AGENT_CLASSES
+    from ira.skills import SKILL_MATRIX
+    from ira.skills.coverage import AGENT_SKILL_COVERAGE, validate_coverage
+    import ira.skills.handlers as handlers
+
+    console.print(Panel("[bold]Ira Skill Coverage Audit[/bold]", style="blue"))
+
+    runtime_agents = {cls.name for cls in _AGENT_CLASSES}
+    coverage_agents = set(AGENT_SKILL_COVERAGE)
+
+    issues: list[str] = []
+
+    missing_from_coverage = sorted(runtime_agents - coverage_agents)
+    extra_in_coverage = sorted(coverage_agents - runtime_agents)
+    if missing_from_coverage:
+        issues.append(f"Missing in AGENT_SKILL_COVERAGE: {', '.join(missing_from_coverage)}")
+    if extra_in_coverage:
+        issues.append(f"Extra in AGENT_SKILL_COVERAGE: {', '.join(extra_in_coverage)}")
+
+    ref_errors = validate_coverage()
+    issues.extend(ref_errors)
+
+    missing_handlers: list[str] = []
+    for skill in SKILL_MATRIX:
+        if not callable(getattr(handlers, skill, None)):
+            missing_handlers.append(skill)
+    if missing_handlers:
+        issues.append(f"Skills missing handlers: {', '.join(sorted(missing_handlers))}")
+
+    agents_dir = Path(__file__).resolve().parents[1] / "agents"
+
+    def _explicit_agent_skills(agent_name: str) -> set[str]:
+        path = agents_dir / f"{agent_name}.py"
+        if not path.exists():
+            return set()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        wired: set[str] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+                and node.func.attr == "use_skill"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                wired.add(node.args[0].value)
+        return wired
+
+    wiring_gaps: dict[str, list[str]] = {}
+    for agent, profile in AGENT_SKILL_COVERAGE.items():
+        wired = _explicit_agent_skills(agent)
+        missing = sorted(set(profile.required) - wired)
+        if missing:
+            wiring_gaps[agent] = missing
+
+    if wiring_gaps:
+        for agent, missing in sorted(wiring_gaps.items()):
+            issues.append(f"{agent}: missing required wiring -> {', '.join(missing)}")
+
+    summary = Table(title="Skill Audit Summary")
+    summary.add_column("Check", style="cyan")
+    summary.add_column("Status", style="green")
+    summary.add_row("Runtime agents", str(len(runtime_agents)))
+    summary.add_row("Coverage entries", str(len(coverage_agents)))
+    summary.add_row("Skill matrix entries", str(len(SKILL_MATRIX)))
+    summary.add_row("Missing skill handlers", str(len(missing_handlers)))
+    summary.add_row("Agents with wiring gaps", str(len(wiring_gaps)))
+    summary.add_row("Total issues", str(len(issues)))
+    console.print(summary)
+
+    if issues:
+        issue_table = Table(title="Issues Found")
+        issue_table.add_column("#", style="dim", width=4)
+        issue_table.add_column("Issue", style="red")
+        for i, issue in enumerate(issues, 1):
+            issue_table.add_row(str(i), issue)
+        console.print(issue_table)
+        if strict:
+            raise typer.Exit(code=1)
+    else:
+        console.print("[green]Skill audit passed with no issues.[/green]")

@@ -14,7 +14,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -61,12 +61,13 @@ def record_ingestion(
     file_hash: str,
     result: dict[str, Any],
     collection: str,
+    source_id: str = "",
 ) -> None:
     """Record a successful ingestion in the log."""
     nutrients = result.get("nutrients_extracted", {})
     log["files"][rel_path] = {
         "hash": file_hash,
-        "ingested_at": datetime.now(timezone.utc).isoformat(),
+        "ingested_at": datetime.now(UTC).isoformat(),
         "chunks_created": result.get("chunks_created", 0),
         "protein_items": nutrients.get("protein", 0),
         "carbs_items": nutrients.get("carbs", 0),
@@ -74,6 +75,8 @@ def record_ingestion(
         "entities": result.get("entities_found", {}),
         "collection": collection,
         "pipeline": CURRENT_PIPELINE,
+        "source_id": source_id or result.get("source_id", ""),
+        "memory_write": result.get("memory_write", {}),
     }
     log["total_ingested"] = len(log["files"])
 

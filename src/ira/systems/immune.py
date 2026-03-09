@@ -54,8 +54,7 @@ class ImmuneSystem:
         self._database_url = settings.database.url
         self._qdrant_url = settings.qdrant.url
         self._neo4j_uri = settings.neo4j.uri
-        self._neo4j_user = settings.neo4j.user
-        self._neo4j_password = settings.neo4j.password.get_secret_value()
+        self._neo4j_user, self._neo4j_password = settings.neo4j.resolved_auth()
 
         self._langfuse_public_key = settings.langfuse.public_key
         self._langfuse_secret_key = settings.langfuse.secret_key.get_secret_value()
@@ -86,7 +85,7 @@ class ImmuneSystem:
         names = ["qdrant", "neo4j", "postgresql", "openai", "voyage", "langfuse"]
         report: dict[str, dict[str, Any]] = {}
 
-        for name, result in zip(names, checks):
+        for name, result in zip(names, checks, strict=False):
             if isinstance(result, Exception):
                 report[name] = {
                     "status": "unhealthy",
@@ -211,7 +210,7 @@ class ImmuneSystem:
         if len(self._error_tracker[service]) >= _ERROR_THRESHOLD:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.send_alert(
+                _alert_task = loop.create_task(self.send_alert(
                     f"Service `{service}` has {len(self._error_tracker[service])} errors in the last {_ERROR_WINDOW_SECONDS}s",
                     severity="critical",
                 ))

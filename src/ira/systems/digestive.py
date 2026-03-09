@@ -159,6 +159,7 @@ class DigestiveSystem:
         nutrients: dict[str, list[str]],
         source: str,
         source_category: str,
+        source_id: str = "",
     ) -> int:
         """Chunk protein + carbs and upsert into Qdrant."""
         protein_text = "\n".join(nutrients.get("protein", []))
@@ -173,7 +174,11 @@ class DigestiveSystem:
                         source=source,
                         source_category=source_category,
                         content=chunk,
-                        metadata={"nutrient": "protein", "chunk_index": i},
+                        metadata={
+                            "nutrient": "protein",
+                            "chunk_index": i,
+                            "source_id": source_id,
+                        },
                     )
                 )
 
@@ -184,7 +189,11 @@ class DigestiveSystem:
                         source=source,
                         source_category=source_category,
                         content=chunk,
-                        metadata={"nutrient": "carbs", "chunk_index": i},
+                        metadata={
+                            "nutrient": "carbs",
+                            "chunk_index": i,
+                            "source_id": source_id,
+                        },
                     )
                 )
 
@@ -274,6 +283,7 @@ class DigestiveSystem:
         raw_data: str,
         source: str,
         source_category: str,
+        source_id: str = "",
     ) -> dict[str, Any]:
         """Run the full ingestion pipeline on raw text."""
         start = time.monotonic()
@@ -297,7 +307,12 @@ class DigestiveSystem:
         nutrients = await self._summarize_nutrients(nutrients)
 
         # SMALL INTESTINE
-        chunks_created = await self._absorb(nutrients, source, source_category)
+        chunks_created = await self._absorb(
+            nutrients,
+            source,
+            source_category,
+            source_id=source_id,
+        )
 
         # LIVER
         protein_text = "\n".join(nutrients.get("protein", []))
@@ -314,6 +329,7 @@ class DigestiveSystem:
             "chunks_created": chunks_created,
             "entities_found": entities_found,
             "processing_time": round(elapsed, 3),
+            "source_id": source_id,
         }
 
     @observe()
