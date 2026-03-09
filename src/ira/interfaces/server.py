@@ -1360,6 +1360,42 @@ async def create_payable(req: dict[str, Any]) -> dict[str, Any]:
     return payable.to_dict()
 
 
+# ── Corrections endpoints ────────────────────────────────────────────────
+
+
+@app.get("/api/corrections")
+async def list_corrections(
+    status: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """List recent corrections from the correction store."""
+    store = _svc("correction_store")
+    db = store._db
+    if db is None:
+        raise HTTPException(503, "Correction store not initialised")
+
+    where = "WHERE status = ?" if status else ""
+    params: tuple = (status,) if status else ()
+    cursor = await db.execute(
+        f"SELECT id, entity, category, severity, old_value, new_value, source, created_at, status "
+        f"FROM corrections {where} ORDER BY created_at DESC LIMIT ?",
+        (*params, limit),
+    )
+    rows = await cursor.fetchall()
+    await cursor.close()
+
+    corrections = [
+        {
+            "id": r[0], "entity": r[1], "category": r[2], "severity": r[3],
+            "old_value": r[4], "new_value": r[5], "source": r[6],
+            "created_at": r[7], "status": r[8],
+        }
+        for r in rows
+    ]
+    stats = await store.get_stats()
+    return {"corrections": corrections, "count": len(corrections), "stats": stats}
+
+
 # ── Task orchestration endpoints ─────────────────────────────────────────
 
 

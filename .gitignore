@@ -91,7 +91,20 @@ scripts/migrate_neo4j.py
 # Board meetings & reports (private business data)
 # ──────────────────────────────────────────────
 data/board_meetings/
+data/reports/
+data/.deep_scan_checkpoint.json
 docs/*.txt
+
+# ──────────────────────────────────────────────
+# Backup files
+# ──────────────────────────────────────────────
+*.bak
+*.bak.*
+
+# ──────────────────────────────────────────────
+# TypeScript build info
+# ──────────────────────────────────────────────
+tsconfig.tsbuildinfo
 
 # ──────────────────────────────────────────────
 # Scratch / upgrade workspaces

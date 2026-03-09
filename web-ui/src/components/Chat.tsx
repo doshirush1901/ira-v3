@@ -9,7 +9,9 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Send, Loader2, Bot, User } from "lucide-react";
+import { Send, Loader2, Bot, User, Square } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import FeedbackForm from "@/components/FeedbackForm";
 import {
   streamQuery,
   type SSEProgress,
@@ -22,6 +24,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   agents?: string[];
+  precedingQuery?: string;
 }
 
 interface StatusLine {
@@ -108,6 +111,13 @@ export default function Chat({ targetAgent }: ChatProps) {
     if (!streaming) inputRef.current?.focus();
   }, [streaming]);
 
+  function handleStop() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+    setStatusLines([]);
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = input.trim();
@@ -134,6 +144,7 @@ export default function Chat({ targetAgent }: ChatProps) {
             role: "assistant",
             content: answer.response,
             agents: answer.agents_consulted ?? undefined,
+            precedingQuery: trimmed,
           },
         ]);
         setStatusLines([]);
@@ -145,6 +156,7 @@ export default function Chat({ targetAgent }: ChatProps) {
           {
             role: "assistant",
             content: `**Error:** ${error}`,
+            precedingQuery: trimmed,
           },
         ]);
         setStatusLines([]);
@@ -197,10 +209,12 @@ export default function Chat({ targetAgent }: ChatProps) {
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <div className="markdown-body">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
+                  <div>
+                    <div className="markdown-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
                     {msg.agents && msg.agents.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[var(--border)] pt-2">
                         {msg.agents.map((a) => (
@@ -213,6 +227,10 @@ export default function Chat({ targetAgent }: ChatProps) {
                         ))}
                       </div>
                     )}
+                    <FeedbackForm
+                      previousQuery={msg.precedingQuery ?? ""}
+                      previousResponse={msg.content}
+                    />
                   </div>
                 ) : (
                   <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -264,17 +282,27 @@ export default function Chat({ targetAgent }: ChatProps) {
             rows={1}
             className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-secondary)] outline-none transition-colors focus:border-[var(--accent)] disabled:opacity-50"
           />
-          <button
-            type="submit"
-            disabled={streaming || !input.trim()}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--accent)] text-white transition-colors hover:bg-[var(--accent-hover)] disabled:opacity-40"
-          >
-            {streaming ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
+          {streaming ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-xl"
+              onClick={handleStop}
+              title="Stop generation"
+            >
+              <Square className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              disabled={!input.trim()}
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-xl"
+            >
               <Send className="h-4 w-4" />
-            )}
-          </button>
+            </Button>
+          )}
         </form>
       </div>
     </div>

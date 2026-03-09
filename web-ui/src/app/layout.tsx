@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import NavBar from "@/components/NavBar";
+import ToastContainer from "@/components/Toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +15,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <div className="flex h-screen flex-col bg-[var(--bg-primary)]">
+          <NavBar />
+          <main className="flex flex-1 flex-col overflow-hidden">
+            {children}
+          </main>
+          <ToastContainer />
+        </div>
+      </body>
     </html>
   );
 }
