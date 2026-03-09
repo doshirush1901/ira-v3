@@ -1,0 +1,27 @@
+---
+description: Email drafting and sending safety rules for Ira agents
+alwaysApply: true
+---
+
+# Ira Email Safety
+
+## Sending Policy
+
+- Default behavior: draft only, do not auto-send.
+- Sending is allowed only on explicit user instruction or approved operational workflow.
+- In TRAINING mode, never represent drafts as sent.
+
+## Content Safety
+
+- Do not disclose confidential deal terms, internal costs, HR data, or vendor-sensitive information.
+- Do not include unverified technical specs, pricing, or delivery commitments.
+- Mark uncertain claims and request confirmation before externalizing.
+
+## Approval Metadata
+
+- Draft outputs should include: recipient, purpose, assumptions, and unresolved unknowns.
+- For commercial or technical commitments, require specialist confirmation (`plutus`/`hephaestus`/`atlas`) before send.
+
+## Auditability
+
+- Keep traceable linkage from sent/drafted email to source evidence (thread IDs, document references).

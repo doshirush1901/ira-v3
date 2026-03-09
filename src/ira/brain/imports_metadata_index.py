@@ -31,6 +31,12 @@ from ira.brain.document_ingestor import (
     read_xls,
     read_xlsx,
 )
+from ira.brain.imports_intents import (
+    INTENT_TAGS,
+    infer_document_role,
+    infer_intents_from_text,
+    normalize_intent_tags,
+)
 from ira.exceptions import IngestionError, IraError, LLMError
 from ira.schemas.llm_outputs import DocumentMetadata
 from ira.services.llm_client import get_llm_client
@@ -91,6 +97,7 @@ def _file_fingerprint(filepath: Path) -> str:
 async def _generate_metadata_llm(filename: str, text_preview: str) -> dict[str, Any] | None:
     """Use GPT-4.1-mini to produce structured metadata from a file preview."""
     system = "Extract structured metadata from documents. Return only valid JSON."
+    intents_csv = ", ".join(INTENT_TAGS)
     user = f"""Analyze this document and return structured metadata as JSON.
 
 FILENAME: {filename}
@@ -105,7 +112,11 @@ Return ONLY valid JSON with these fields:
     "machines": ["list of machine models mentioned, e.g. PF1-C-2015, AM-5060"],
     "topics": ["list from: pricing, specs, customer, application, lead, order, contract, presentation, marketing, technical, installation, warranty, shipping, competitor, market_research, training"],
     "entities": ["company names, person names, countries mentioned"],
-    "keywords": ["5-10 important searchable terms from the document"]
+    "keywords": ["5-10 important searchable terms from the document"],
+    "intent_tags": ["zero or more from: {intents_csv}"],
+    "counterparty_type": "one of: customer, vendor, internal, unknown",
+    "document_role": "single best role using intent taxonomy",
+    "intent_confidence": {{"intent_tag": 0.0}}
 }}"""
 
     try:
@@ -114,7 +125,26 @@ Return ONLY valid JSON with these fields:
             system, user, DocumentMetadata,
             model="gpt-4.1-mini", name="imports.metadata",
         )
-        return result.model_dump()
+        payload = result.model_dump()
+        normalized_intents = normalize_intent_tags(payload.get("intent_tags", []))
+        if not normalized_intents:
+            normalized_intents, inferred_counterparty, inferred_role, inferred_conf = infer_intents_from_text(
+                f"{filename} {text_preview[:800]}",
+                doc_type=payload.get("doc_type", ""),
+            )
+        else:
+            inferred_counterparty = "unknown"
+            inferred_role = infer_document_role(normalized_intents)
+            inferred_conf = {}
+        payload["intent_tags"] = normalized_intents
+        payload["counterparty_type"] = payload.get("counterparty_type", "") or inferred_counterparty
+        payload["document_role"] = payload.get("document_role", "") or inferred_role
+        payload["intent_confidence"] = {
+            k: float(v) for k, v in (payload.get("intent_confidence", {}) or {}).items() if k in normalized_intents
+        }
+        if not payload["intent_confidence"]:
+            payload["intent_confidence"] = inferred_conf
+        return payload
     except (LLMError, Exception) as exc:
         logger.warning("LLM metadata failed for %s: %s", filename, exc)
         return None
@@ -149,6 +179,11 @@ def _generate_metadata_local(filename: str, text_preview: str) -> dict[str, Any]
             doc_type = dtype
             break
 
+    merged = filename + " " + text_preview[:500]
+    intent_tags, counterparty_type, document_role, intent_confidence = infer_intents_from_text(
+        merged, doc_type=doc_type,
+    )
+
     words = re.findall(r"\b\w{4,}\b", (filename + " " + text_preview[:300]).lower())
     keywords = list(set(words))[:10]
 
@@ -159,6 +194,10 @@ def _generate_metadata_local(filename: str, text_preview: str) -> dict[str, Any]
         "topics": [],
         "entities": [],
         "keywords": keywords,
+        "intent_tags": intent_tags,
+        "counterparty_type": counterparty_type,
+        "document_role": document_role,
+        "intent_confidence": intent_confidence,
     }
 
 
@@ -316,6 +355,9 @@ async def search_index(
     query: str,
     limit: int = 10,
     doc_type_filter: str = "",
+    intent_filters: list[str] | None = None,
+    counterparty_filter: str = "",
+    role_filter: str = "",
 ) -> list[dict[str, Any]]:
     """Score files against a query using metadata fields.
 
@@ -330,6 +372,7 @@ async def search_index(
 
     query_lower = query.lower()
     query_words = _stem_words(set(re.findall(r"\b\w{3,}\b", query_lower)))
+    intent_filters = normalize_intent_tags(intent_filters)
 
     query_machines = {
         m.upper().replace(" ", "-")
@@ -344,8 +387,18 @@ async def search_index(
     for rel_path, meta in index["files"].items():
         if doc_type_filter and meta.get("doc_type", "") != doc_type_filter:
             continue
+        file_intents = normalize_intent_tags(meta.get("intent_tags", []))
+        if intent_filters and not any(intent in file_intents for intent in intent_filters):
+            continue
+        if counterparty_filter and meta.get("counterparty_type", "unknown") != counterparty_filter:
+            continue
+        if role_filter and meta.get("document_role", "other") != role_filter:
+            continue
 
         score = 0.0
+        if intent_filters or counterparty_filter or role_filter:
+            # Ensure intent-filtered lookups return relevant candidates even with sparse query terms.
+            score += 0.4
 
         file_machines = {m.upper() for m in meta.get("machines", [])}
         score += len(query_machines & file_machines) * 5.0
@@ -362,6 +415,9 @@ async def search_index(
             if entity.lower() in query_lower:
                 score += 3.0
 
+        if intent_filters:
+            score += len(set(intent_filters) & set(file_intents)) * 4.0
+
         summary = meta.get("summary", "").lower()
         score += sum(0.5 for w in query_words if w in summary and len(w) > 3)
 
@@ -377,6 +433,9 @@ async def search_index(
                 "doc_type": meta.get("doc_type", ""),
                 "machines": meta.get("machines", []),
                 "topics": meta.get("topics", []),
+                "intent_tags": file_intents,
+                "counterparty_type": meta.get("counterparty_type", "unknown"),
+                "document_role": meta.get("document_role", "other"),
             })
 
     results.sort(key=lambda x: -x["score"])
@@ -395,10 +454,13 @@ async def get_index_stats() -> dict[str, Any]:
 
     doc_types: dict[str, int] = {}
     all_machines: set[str] = set()
+    intent_covered = 0
     for meta in files.values():
         dt = meta.get("doc_type", "other")
         doc_types[dt] = doc_types.get(dt, 0) + 1
         all_machines.update(meta.get("machines", []))
+        if normalize_intent_tags(meta.get("intent_tags", [])):
+            intent_covered += 1
 
     on_disk = sum(
         1 for f in IMPORTS_DIR.rglob("*")
@@ -411,6 +473,7 @@ async def get_index_stats() -> dict[str, Any]:
         "unindexed": on_disk - len(files),
         "built_at": index.get("built_at"),
         "doc_types": doc_types,
+        "intent_coverage_pct": round((intent_covered * 100 / len(files)), 1),
         "unique_machines": len(all_machines),
         "top_machines": sorted(all_machines)[:20],
     }

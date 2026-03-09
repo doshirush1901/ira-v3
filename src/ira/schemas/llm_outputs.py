@@ -56,6 +56,10 @@ class DocumentMetadata(BaseModel):
     topics: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
+    intent_tags: list[str] = Field(default_factory=list)
+    counterparty_type: str = "unknown"
+    document_role: str = "other"
+    intent_confidence: dict[str, float] = Field(default_factory=dict)
 
 
 # ── Knowledge graph ───────────────────────────────────────────────────────

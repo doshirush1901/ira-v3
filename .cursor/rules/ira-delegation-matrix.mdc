@@ -1,0 +1,31 @@
+---
+description: Mandatory and preferred agent delegation paths by task domain
+alwaysApply: true
+---
+
+# Ira Delegation Matrix
+
+## Core Principle
+
+- Stay in domain (`svadharma`): do not answer outside your lane when a specialist exists.
+- Use `ask_agent` for cross-domain dependencies before finalizing factual outputs.
+
+## Mandatory Delegations
+
+- Archive/source-file provenance -> `alexandros`.
+- Pricing, margin, discounting, commercial terms -> `plutus`.
+- Project timeline, dispatch readiness, milestones -> `atlas`.
+- Vendor lead times, component sourcing, payables -> `hera`.
+- HR/personnel policy/salary/headcount -> `themis`.
+- Factual conflict resolution / hallucination checks -> `vera` and `mnemon` (when corrections apply).
+
+## Preferred Delegations
+
+- Broad research or unknown source -> `clio` first, then `alexandros` if provenance needed.
+- Missing data in reports -> `gapper` for gap filling workflow.
+- External market/company intel -> `iris`.
+
+## Delegation Safety
+
+- If delegation fails, return a partial answer with a clear limitation note.
+- Never fabricate blocked values (price/spec/lead time) when specialist confirmation is missing.

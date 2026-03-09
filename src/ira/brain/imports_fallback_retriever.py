@@ -39,6 +39,7 @@ from ira.brain.document_ingestor import (
     read_xls,
     read_xlsx,
 )
+from ira.brain.imports_intents import normalize_intent_tags
 from ira.brain.imports_metadata_index import (
     IMPORTS_DIR,
     load_index,
@@ -160,9 +161,13 @@ async def _build_summary_embeddings(index: dict[str, Any]) -> dict[str, list[flo
         machines = ", ".join(meta.get("machines", []))
         topics = ", ".join(meta.get("topics", []))
         keywords = ", ".join(meta.get("keywords", []))
+        intents = ", ".join(meta.get("intent_tags", []))
+        counterparty = meta.get("counterparty_type", "unknown")
+        role = meta.get("document_role", "other")
         text = (
             f"{meta.get('name', '')}. {summary}. "
-            f"{entities}. {machines}. {topics}. {keywords}"
+            f"{entities}. {machines}. {topics}. {keywords}. "
+            f"Intents: {intents}. Counterparty: {counterparty}. Role: {role}."
         ).strip()
         if len(text) > 10:
             to_embed[rel_path] = text
@@ -239,6 +244,9 @@ async def _semantic_search(query: str, limit: int = 10) -> list[dict[str, Any]]:
                 "doc_type": meta.get("doc_type", ""),
                 "machines": meta.get("machines", []),
                 "topics": meta.get("topics", []),
+                "intent_tags": meta.get("intent_tags", []),
+                "counterparty_type": meta.get("counterparty_type", "unknown"),
+                "document_role": meta.get("document_role", "other"),
                 "search_type": "semantic",
             })
 
@@ -259,6 +267,9 @@ async def hybrid_search(
     query: str,
     limit: int = _MAX_CANDIDATES,
     doc_type_filter: str = "",
+    intent_filters: list[str] | None = None,
+    counterparty_filter: str = "",
+    role_filter: str = "",
 ) -> list[dict[str, Any]]:
     """Merge keyword and semantic results via weighted reciprocal rank fusion.
 
@@ -266,11 +277,28 @@ async def hybrid_search(
     1.5x weight (exact model matching matters more).  Otherwise semantic
     results get 1.5x weight (meaning-based matching is more useful).
     """
-    kw_results = await search_index(query, limit=limit * 2, doc_type_filter=doc_type_filter)
+    intent_filters = normalize_intent_tags(intent_filters)
+    kw_results = await search_index(
+        query,
+        limit=limit * 2,
+        doc_type_filter=doc_type_filter,
+        intent_filters=intent_filters,
+        counterparty_filter=counterparty_filter,
+        role_filter=role_filter,
+    )
     sem_results = await _semantic_search(query, limit=limit * 2)
 
     if doc_type_filter and sem_results:
         sem_results = [r for r in sem_results if r.get("doc_type") == doc_type_filter]
+    if intent_filters and sem_results:
+        sem_results = [
+            r for r in sem_results
+            if any(tag in normalize_intent_tags(r.get("intent_tags", [])) for tag in intent_filters)
+        ]
+    if counterparty_filter and sem_results:
+        sem_results = [r for r in sem_results if r.get("counterparty_type", "unknown") == counterparty_filter]
+    if role_filter and sem_results:
+        sem_results = [r for r in sem_results if r.get("document_role", "other") == role_filter]
 
     has_model = bool(_MODEL_NUMBER_RE.search(query))
     kw_weight = 1.5 if has_model else 1.0

@@ -1,0 +1,29 @@
+---
+description: Retrieval quality and latency expectations with fallback behavior
+alwaysApply: true
+---
+
+# Ira Retrieval SLOs
+
+## Retrieval Order
+
+- Primary: Qdrant + Neo4j + Mem0 unified retrieval.
+- If empty or provenance-specific request: prefer Alexandros imports retrieval.
+- For low-confidence primary evidence, blend in Alexandros before final answer.
+
+## Quality Expectations
+
+- Do not finalize factual answers without source evidence.
+- Use at least one high-relevance source and one corroborating source for critical claims where possible.
+- For archive requests, return filename-level provenance.
+
+## Latency Expectations (targets)
+
+- Keep standard retrieval responsive for interactive chat.
+- Degrade gracefully on slow dependencies: return partial answer + explicit limitation.
+- Avoid blocking the full response on non-critical enrichments.
+
+## Failure Behavior
+
+- On backend failure, log warnings and continue with available retrievers.
+- Never hide retrieval failure if it affects confidence; include a short reliability note.

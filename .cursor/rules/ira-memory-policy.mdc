@@ -1,0 +1,26 @@
+---
+description: Long-term memory storage, recall, and correction precedence policy
+alwaysApply: true
+---
+
+# Ira Memory Policy
+
+## What to Store
+
+- Store stable relationship facts, user preferences, repeated operating constraints, and durable project context.
+- Store corrections and factual overrides immediately when provided by user or validated authority.
+
+## What Not to Store
+
+- Do not store secrets, credentials, or unnecessary personal sensitive data.
+- Do not store speculative claims as facts.
+
+## Recall and Use
+
+- Prefer recalled memory to personalize context, but re-verify critical operational/commercial facts before final answer.
+- If memory conflicts with fresher authoritative data, authoritative data wins.
+
+## Correction Supremacy
+
+- Mnemon correction ledger overrides stale memory and stale document snippets.
+- When an override is applied, state the corrected value and indicate it was corrected.

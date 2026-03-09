@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ira.agents.base_agent import AgentTool, BaseAgent
+from ira.brain.imports_intents import infer_query_intents, normalize_intent_tags
 from ira.brain.imports_fallback_retriever import (
     extract_file_text,
     hybrid_search,
@@ -75,6 +76,12 @@ class Alexandros(BaseAgent):
         "Gatekeeper of the raw document archive. Searches, browses, "
         "and reads files from data/imports/ using LLM-generated metadata."
     )
+    knowledge_categories = [
+        "company_internal",
+        "product_catalogues",
+        "project_case_studies",
+        "contracts_and_legal",
+    ]
 
     # ── tool registration ─────────────────────────────────────────────────
 
@@ -130,6 +137,24 @@ class Alexandros(BaseAgent):
             description="Queue a file for ingestion into the vector store.",
             parameters={"file_path": "Path of the file to ingest"},
             handler=self._tool_queue_for_ingestion,
+        ))
+        self.register_tool(AgentTool(
+            name="search_knowledge_base_skill",
+            description="Run canonical skill search over internal knowledge for archive questions.",
+            parameters={"query": "Search query"},
+            handler=self._tool_search_knowledge_base_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="extract_key_facts_skill",
+            description="Extract structured entities and key facts from archive text.",
+            parameters={"text": "Raw archive text"},
+            handler=self._tool_extract_key_facts_skill,
+        ))
+        self.register_tool(AgentTool(
+            name="summarize_document_skill",
+            description="Summarize archive document text for quick review.",
+            parameters={"text": "Raw document text"},
+            handler=self._tool_summarize_document_skill,
         ))
 
     # ── tool handlers ─────────────────────────────────────────────────────
@@ -203,6 +228,15 @@ class Alexandros(BaseAgent):
         result = await self.run_ingestion(batch_size=1)
         return json.dumps(result, default=str)
 
+    async def _tool_search_knowledge_base_skill(self, query: str) -> str:
+        return await self.use_skill("search_knowledge_base", query=query)
+
+    async def _tool_extract_key_facts_skill(self, text: str) -> str:
+        return await self.use_skill("extract_key_facts", text=text)
+
+    async def _tool_summarize_document_skill(self, text: str) -> str:
+        return await self.use_skill("summarize_document", text=text)
+
     # ── main handler (orchestrator entry point) ──────────────────────────
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
@@ -231,14 +265,23 @@ class Alexandros(BaseAgent):
         context = context or {}
 
         doc_type_filter = context.get("doc_type", "") or _infer_doc_type(query)
+        inferred_intents, inferred_counterparty, inferred_role = infer_query_intents(query)
+        intent_filters = normalize_intent_tags(context.get("intent_tags", inferred_intents))
+        counterparty_filter = context.get("counterparty_type", "") or inferred_counterparty
+        role_filter = context.get("document_role", "") or inferred_role
         synthesize = context.get("synthesize", True)
         limit = 5 if context.get("full_text_in_body") else 3
 
         candidates = await hybrid_search(
-            query, limit=limit, doc_type_filter=doc_type_filter,
+            query,
+            limit=limit,
+            doc_type_filter=doc_type_filter,
+            intent_filters=intent_filters,
+            counterparty_filter=counterparty_filter,
+            role_filter=role_filter,
         )
 
-        if not candidates and doc_type_filter:
+        if not candidates and (doc_type_filter or intent_filters or role_filter or counterparty_filter):
             candidates = await hybrid_search(query, limit=limit, doc_type_filter="")
 
         if context.get("full_text_in_body") and candidates:
@@ -285,6 +328,7 @@ class Alexandros(BaseAgent):
             header = (
                 f"━━━ {filename} ━━━\n"
                 f"Type: {candidate.get('doc_type', 'unknown')} | "
+                f"Role: {candidate.get('document_role', 'other')} | "
                 f"Summary: {candidate.get('summary', 'N/A')[:200]}\n"
             )
             doc_texts.append(header + text)

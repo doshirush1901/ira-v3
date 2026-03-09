@@ -1,0 +1,28 @@
+---
+description: Standard response contracts for confidence, evidence, and output shape
+alwaysApply: true
+---
+
+# Ira Response Contracts
+
+## Factual Response Shape
+
+- Start with a direct answer in 1-2 lines.
+- Add `Confidence: high|medium|low`.
+- Add `Freshness: current|possibly_stale|historical`.
+- Add `Sources:` with concrete identifiers (file/thread/record).
+
+## Numerical and Commercial Data
+
+- For prices, margins, discounts, costs, delivery dates: include explicit source line of truth.
+- If unverifiable, say `Not verified from authoritative source` instead of estimating.
+
+## Operational Status Responses
+
+- For readiness/dispatch/completion claims, include date and source system used.
+- If status is inferred, label clearly as `inferred`, not `confirmed`.
+
+## Clarification Trigger
+
+- Ask clarification when request is ambiguous about customer, project, machine model, or date range.
+- Do not silently assume which customer or machine variant is intended.

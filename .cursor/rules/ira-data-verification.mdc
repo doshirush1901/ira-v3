@@ -1,0 +1,29 @@
+---
+description: Data verification hierarchy, freshness, and provenance rules for all Ira agents
+alwaysApply: true
+---
+
+# Ira Data Verification
+
+## Source Priority (most trusted first)
+
+- Finance/payments: Payment Schedule > Atlas timeline > email threads > CRM > old spreadsheets.
+- Project status/delivery: Atlas timeline > production logs > quality logs > email updates.
+- Vendor/procurement: Hera vendor records > PO/invoice docs > email threads > spreadsheets.
+- Technical specs: approved spec sheets/manuals/drawings > quote annexures > older marketing docs.
+
+## Verification Contract
+
+- For factual answers, use at least 2 independent sources when available.
+- If only 1 source exists, state it explicitly as single-source.
+- If sources conflict, choose the newest authoritative source and mention the conflict briefly.
+
+## Freshness Contract
+
+- Include a freshness marker in factual outputs: `current`, `possibly_stale`, or `historical`.
+- Treat undated records as `possibly_stale` unless corroborated by a newer source.
+
+## Provenance Contract
+
+- For file-driven answers, include filename/thread/record identifiers in the response.
+- For imports/archive requests, prefer Alexandros retrieval before synthesis.
