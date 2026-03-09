@@ -13,6 +13,11 @@ infrastructure management.
 | `enrich_graph.py` | Enrich Neo4j knowledge graph with extracted entities |
 | `nap.py` | Trigger a quick dream-mode nap (subset of full dream) |
 | `shadow_training.py` | Shadow training — run queries without affecting state |
+| `generate_v4_asset_manifest.py` | Build file-level v4 migration manifest for new assets |
+| `v4_readiness_gate.py` | Validate v4 migration gates (manifest, quarantine, governance) |
+| `agent_audit.py` | Audit agent metadata, prompt coverage, and registry consistency |
+| `neo4j_schema_v1.cypher` | Neo4j schema constraints/indexes for Ira graph v1 |
+| `seed_neo4j_from_ingestion_log.py` | Seed `Document`/`Fact`/`Correction` lineage graph from local stores |
 | `shakti_train.sh` | Fine-tuning workflow shell script |
 | `entrypoint.sh` | Docker container entrypoint |
 | `start.sh` | Start Ira (infrastructure + server) |
@@ -25,6 +30,7 @@ Most scripts are run via Poetry:
 ```bash
 poetry run python scripts/benchmark.py
 poetry run python scripts/enrich_graph.py
+poetry run python scripts/seed_neo4j_from_ingestion_log.py --dry-run
 ```
 
 Shell scripts are executable directly:

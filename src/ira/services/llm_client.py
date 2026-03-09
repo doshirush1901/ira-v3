@@ -23,6 +23,7 @@ from langfuse.openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from ira.config import Settings, get_settings
+from ira.services.resilience import CircuitBreaker, RetryPolicy, run_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,15 @@ T = TypeVar("T", bound=BaseModel)
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2.0
+
+
+def _status_code(exc: Exception) -> int | None:
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    status = _status_code(exc)
+    return status in (402, 429) or status is None or status >= 500
 
 
 class LLMClient:
@@ -69,6 +79,9 @@ class LLMClient:
         self._anthropic_model = cfg.llm.anthropic_model
 
         self._semaphore = asyncio.Semaphore(10)
+        self._retry_policy = RetryPolicy(max_attempts=_MAX_RETRIES, base_delay_seconds=_RETRY_BACKOFF)
+        self._openai_breaker = CircuitBreaker(threshold=10, window_seconds=180)
+        self._anthropic_breaker = CircuitBreaker(threshold=10, window_seconds=180)
 
     # ── structured output (JSON → Pydantic) ──────────────────────────────
 
@@ -312,39 +325,38 @@ class LLMClient:
         if user_id:
             metadata["langfuse_user_id"] = user_id
 
-        backoff = _RETRY_BACKOFF
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = await self._openai.chat.completions.create(
-                    model=resolved_model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=120.0,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user[:12_000]},
-                    ],
-                    **({"name": name} if name else {}),
-                    **({"metadata": metadata} if metadata else {}),
-                )
-                return resp.choices[0].message.content or ""
-            except Exception as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status in (429, 402):
-                    logger.warning("OpenAI %d — quota/rate limit", status)
-                    return "(OpenAI quota/rate limit exceeded)"
-                if status and status < 500:
-                    logger.warning("OpenAI %d error: %s", status, exc)
-                    return "(LLM call failed)"
-                logger.warning(
-                    "OpenAI text attempt %d/%d failed: %s",
-                    attempt, _MAX_RETRIES, exc,
-                )
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
+        async def _operation() -> str:
+            resp = await self._openai.chat.completions.create(
+                model=resolved_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=120.0,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user[:12_000]},
+                ],
+                **({"name": name} if name else {}),
+                **({"metadata": metadata} if metadata else {}),
+            )
+            return resp.choices[0].message.content or ""
 
-        return "(LLM call failed after 3 retries)"
+        try:
+            return await run_with_retry(
+                _operation,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_llm_error,
+                circuit_breaker=self._openai_breaker,
+            )
+        except Exception as exc:
+            status = _status_code(exc)
+            if status in (429, 402):
+                logger.warning("OpenAI %d — quota/rate limit", status)
+                return "(OpenAI quota/rate limit exceeded)"
+            if status and status < 500:
+                logger.warning("OpenAI %d error: %s", status, exc)
+                return "(LLM call failed)"
+            logger.warning("OpenAI text retry exhausted: %s", exc)
+            return "(LLM call failed after 3 retries)"
 
     @observe(name="anthropic_text")
     async def _anthropic_text(
@@ -364,35 +376,34 @@ class LLMClient:
 
         resolved_model = model or self._anthropic_model
 
-        backoff = _RETRY_BACKOFF
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = await self._anthropic.messages.create(
-                    model=resolved_model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    timeout=120.0,
-                    system=system,
-                    messages=[{"role": "user", "content": user[:12_000]}],
-                )
-                return resp.content[0].text
-            except Exception as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status in (429, 402):
-                    logger.warning("Anthropic %d — quota/rate limit", status)
-                    return "(Anthropic quota/rate limit exceeded)"
-                if status and status < 500:
-                    logger.warning("Anthropic %d error: %s", status, exc)
-                    return "(LLM call failed)"
-                logger.warning(
-                    "Anthropic text attempt %d/%d failed: %s",
-                    attempt, _MAX_RETRIES, exc,
-                )
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
+        async def _operation() -> str:
+            resp = await self._anthropic.messages.create(
+                model=resolved_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=120.0,
+                system=system,
+                messages=[{"role": "user", "content": user[:12_000]}],
+            )
+            return resp.content[0].text
 
-        return "(LLM call failed after 3 retries)"
+        try:
+            return await run_with_retry(
+                _operation,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_llm_error,
+                circuit_breaker=self._anthropic_breaker,
+            )
+        except Exception as exc:
+            status = _status_code(exc)
+            if status in (429, 402):
+                logger.warning("Anthropic %d — quota/rate limit", status)
+                return "(Anthropic quota/rate limit exceeded)"
+            if status and status < 500:
+                logger.warning("Anthropic %d error: %s", status, exc)
+                return "(LLM call failed)"
+            logger.warning("Anthropic text retry exhausted: %s", exc)
+            return "(LLM call failed after 3 retries)"
 
     # ── fallback wrappers ─────────────────────────────────────────────────
 

@@ -49,6 +49,26 @@ class Neo4jConfig(BaseSettings):
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
     password: SecretStr = SecretStr("")
+    auth: str = ""
+
+    def resolved_auth(self) -> tuple[str, str]:
+        """Resolve Neo4j credentials from explicit password or NEO4J_AUTH."""
+        user = self.user.strip() or "neo4j"
+        password = self.password.get_secret_value().strip()
+        if password:
+            return user, password
+
+        auth = self.auth.strip()
+        if "/" in auth:
+            auth_user, auth_password = auth.split("/", 1)
+            auth_user = auth_user.strip() or user
+            auth_password = auth_password.strip()
+            if auth_password:
+                return auth_user, auth_password
+        if "localhost" in self.uri or "127.0.0.1" in self.uri:
+            # Local docker-compose default (safe dev fallback).
+            return user, "ira_knowledge_graph"
+        return user, ""
 
 
 class DatabaseConfig(BaseSettings):
@@ -156,6 +176,7 @@ class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(**_COMMON)
 
     log_level: str = "INFO"
+    log_format: str = "text"
     environment: str = "development"
     api_secret_key: SecretStr = SecretStr("")
     cors_origins: str = ""
@@ -170,6 +191,7 @@ class AppConfig(BaseSettings):
     faithfulness_hard_threshold: float = 0.3
     confidence_floor: float = 0.3
     mnemon_semantic_check: bool = False
+    legacy_quarantine_strict: bool = False
 
 
 class Settings(BaseSettings):

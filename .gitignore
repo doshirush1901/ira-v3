@@ -129,3 +129,28 @@ web-ui/tsconfig.tsbuildinfo
 !.cursor/rules/
 !.cursor/agents/
 !.cursor/skills/
+
+# ──────────────────────────────────────────────
+# Ira v4 migration quarantine (legacy v2 archives)
+# ──────────────────────────────────────────────
+core_modules/
+legacy_pipelines/
+one_off_scripts/
+skills/
+data/agents/
+
+# ──────────────────────────────────────────────
+# Ira v4 data lifecycle controls (derived/sensitive artifacts)
+# ──────────────────────────────────────────────
+data/case_studies/*/attachments/
+data/case_studies/*/email_data.json
+data/case_studies/*/email_extract.md
+data/cadmus/manus_outputs/
+data/cadmus/linkedin_connections.json
+data/cadmus/linkedin_connections_summary.json
+data/arachne/newsletter_archive/
+data/knowledge/*.json
+data/knowledge/*.jsonl
+!data/knowledge/.gitkeep
+data/themis/*.csv
+data/themis/*.xlsx
