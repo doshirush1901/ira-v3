@@ -12,7 +12,7 @@ For years, we've used AI like a really smart calculator. You ask ChatGPT a quest
 
 But the genius in the box doesn't know *you*. It doesn't know your company. It doesn't know that Bob in accounting is always late, or that your flagship product has a weird quirk with its left flange.
 
-**Ira is different.** It isn't a genius in a box. It's a digital nervous system for your company — a "Pantheon" of 24 AI agents, all sitting around a virtual conference table, talking to each other, reading your emails, and trying to run the show.
+**Ira is different.** It isn't a genius in a box. It's a digital nervous system for your company — a "Pantheon" of 27 AI agents, all sitting around a virtual conference table, talking to each other, reading your emails, and trying to run the show.
 
 And here's the twist: **you talk to it from your code editor.**
 
@@ -22,7 +22,7 @@ And here's the twist: **you talk to it from your code editor.**
 
 Here's a thing that happened while nobody was paying attention: code editors got really good at talking to AI. Cursor, specifically, can run shell commands, make HTTP requests, follow rules, and — this is the important part — use tools via something called MCP (Model Context Protocol).
 
-So instead of building Yet Another Dashboard or Yet Another Slack Bot, we did something different. We gave Cursor 30 tools that connect directly to Ira's brain. You open your IDE, and you're sitting at the controls of a 24-agent AI system with access to your CRM, your email, your knowledge base, your production schedules, and your company's entire memory.
+So instead of building Yet Another Dashboard or Yet Another Slack Bot, we did something different. We gave Cursor 30 tools that connect directly to Ira's brain. You open your IDE, and you're sitting at the controls of a 27-agent AI system with access to your CRM, your email, your knowledge base, your production schedules, and your company's entire memory.
 
 No browser tabs. No context switching. You just... talk.
 

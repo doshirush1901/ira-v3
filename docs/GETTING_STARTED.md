@@ -118,7 +118,7 @@ ira pipeline       # Show pipeline stage timings
 
 ## A Note on Data
 
-Ira v3 is built specifically for Machinecraft. You can run the code and interact with all 24 agents, but the databases (Qdrant and Neo4j) start empty. Without ingesting Machinecraft's documents, product specs, and CRM data, agents won't have domain knowledge to draw from.
+Ira v3 is built specifically for Machinecraft. You can run the code and interact with all 27 agents, but the databases (Qdrant and Neo4j) start empty. Without ingesting Machinecraft's documents, product specs, and CRM data, agents won't have domain knowledge to draw from.
 
 That said, running this repository is an excellent way to explore a production-grade multi-agent architecture — the routing, memory, ReAct loops, and body-system metaphor all work regardless of the data loaded.
 

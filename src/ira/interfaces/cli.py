@@ -3240,6 +3240,11 @@ def audit_skills(
         "--strict/--no-strict",
         help="Exit non-zero when any skill audit issue is found.",
     ),
+    stats: bool = typer.Option(
+        False,
+        "--stats/--no-stats",
+        help="Show per-skill usage/failure metrics.",
+    ),
 ) -> None:
     """Audit skill matrix, handlers, and per-agent required skill wiring."""
     import ast
@@ -3316,6 +3321,26 @@ def audit_skills(
     summary.add_row("Agents with wiring gaps", str(len(wiring_gaps)))
     summary.add_row("Total issues", str(len(issues)))
     console.print(summary)
+
+    if stats:
+        skill_stats = handlers.get_skill_stats()
+        stats_table = Table(title="Per-Skill Runtime Metrics")
+        stats_table.add_column("Skill", style="cyan")
+        stats_table.add_column("Calls", justify="right")
+        stats_table.add_column("Success", justify="right")
+        stats_table.add_column("Failure", justify="right")
+        stats_table.add_column("Failure Rate", justify="right")
+        stats_table.add_column("Avg ms", justify="right")
+        for skill, data in skill_stats.items():
+            stats_table.add_row(
+                skill,
+                str(data["calls"]),
+                str(data["success"]),
+                str(data["failure"]),
+                f"{data['failure_rate']:.2%}",
+                f"{data['avg_ms']:.2f}",
+            )
+        console.print(stats_table)
 
     if issues:
         issue_table = Table(title="Issues Found")

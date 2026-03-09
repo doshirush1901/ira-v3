@@ -16,7 +16,7 @@ User Input (CLI / API / Email)
     │
     ▼
 ┌───────────────────┐
-│    Pantheon        │  Orchestrator + 24 agents (ReAct loops)
+│    Pantheon        │  Orchestrator + 26 agents (ReAct loops)
 └───────────────────┘
     │         │         │
     ▼         ▼         ▼
@@ -57,7 +57,7 @@ logged, timed, and tested.
 
 ### BaseAgent
 
-All 24 agents inherit from `BaseAgent` (~870 lines), which provides:
+All 27 agents inherit from `BaseAgent` (~870 lines), which provides:
 
 - **Shared identity** -- `SOUL.md` preamble (Identity, Voice, Behavioral
   Boundaries) is prepended to every agent's system prompt via

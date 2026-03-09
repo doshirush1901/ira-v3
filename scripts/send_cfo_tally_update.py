@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Send the CFO Tally update email."""
+from pathlib import Path
+from openclaw.agents.ira.src.tools.google_tools import gmail_send
+
+html_path = Path(__file__).parent / "cfo_email_tally_update.html"
+body_html = html_path.read_text()
+
+result = gmail_send(
+    to="rushabh@machinecraft.org",
+    subject="CFO Update: Tally Data Is Live - Real Bank Balances + Vendor Due Dates",
+    body="Please view this email in HTML format.",
+    body_html=body_html,
+    cc="manan@machinecraft.org,rajesh@machinecraft.org,deepak@machinecraft.org",
+)
+print(result)

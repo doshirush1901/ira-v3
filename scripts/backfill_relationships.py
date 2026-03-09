@@ -67,6 +67,15 @@ async def backfill(
         logger.info("No ingested files found in ledger")
         return
 
+    base = Path(base_path).resolve()
+    files = [
+        f for f in files
+        if Path(f["path"]).resolve().is_relative_to(base)
+    ]
+    if not files:
+        logger.info("No ingested files found under base path: %s", base_path)
+        return
+
     if limit:
         files = files[:limit]
 
