@@ -7,19 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(Nothing yet.)
+
+## [3.3.2] - 2026-03-10
+
 ### Added
-- **Cursor-as-Ira (CLI-first)** — Ira runs without starting the API server: Cursor starts Docker (DBs only), runs `ira ask "<query>" --json` and `ira task "<goal>" --json` from the project root; full stack (agents, RAG, Postgres, Qdrant, Neo4j, Mem0) runs in-process. Fallback workflow when CLI fails (`.cursor/rules/ira-cursor-workflow.mdc`).
-- **CLI `--json`** — `ira ask` and `ira task` support `--json` for machine-readable stdout (Cursor/scripts).
+- **Cursor-as-Ira (CLI-first)** — Ira runs without starting the API server: Cursor starts Docker (DBs only), runs `ira ask "<query>" --json` and `ira task "<goal>" --json` from the project root; full stack runs in-process. Fallback workflow when CLI fails.
+- **CLI `--json`** — `ira ask` and `ira task` support `--json` for machine-readable stdout.
 - **CLI `ira task`** — Multi-phase task command using TaskOrchestrator; report to `data/reports/`, optional `--json` output.
-- **Cursor rules & workflows index** — `docs/CURSOR_WORKFLOWS.md` indexes all custom workflows (start, query, task, email reply, feedback, ingest, fallback, stable modes, lead engagement). Linked from README, GETTING_STARTED, and `docs/README.md`.
+- **Cursor rules & workflows index** — `docs/CURSOR_WORKFLOWS.md` indexes all custom workflows. Linked from README, GETTING_STARTED, docs/README.
 - **Stable modes** — `docs/stable_modes.md` and `.cursor/rules/ira-stable-modes.mdc` for "add this to stable list" flow.
+- **Path-agnostic rules** — Rules use `cd "$(git rev-parse --show-toplevel)"` so the repo works on any machine.
+- **One-command local start** — `./scripts/start-local.sh` for DBs only; documented in README, GETTING_STARTED, scripts/README.
 
 ### Changed
-- **Start Ira** — Now Docker only (Postgres, Qdrant, Neo4j, Redis); no uvicorn or health-check steps in rules.
-- **Query Ira** — Primary path: `ira ask --json`; API streaming is alternative when server is already running.
-- **Complex tasks** — Primary: `ira task "<goal>" --json`; API task stream when server running. Task loop fallback uses Cursor-as-Ira workflow.
+- **Start Ira** — Docker only; no uvicorn or health-check steps in rules.
+- **Query Ira** — Primary: `ira ask --json`; API optional when server running.
+- **Complex tasks** — Primary: `ira task "<goal>" --json`; API task stream optional.
 - **Docs** — README, AGENTS, GETTING_STARTED, CONTRIBUTING, ARCHITECTURE, WHY_IRA, scripts/README, src/ira/README, web-ui/README, .cursor/agents/ira.md updated for CLI-first and workflow index.
-- **Stop Ira** — Path in rules aligned to project root (no Desktop path).
+- **Stop Ira** — Path in rules use git repo root (path-agnostic).
 
 ## [3.3.1] - 2026-03-09
 
