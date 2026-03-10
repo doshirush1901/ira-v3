@@ -60,7 +60,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     try:
         tracker = _svc("tool_stats_tracker")
         if tracker is not None:
-            tool_success_rates = tracker.get_tool_success_rates(by_tool=True)
+            tool_success_rates = await tracker.get_tool_success_rates(by_tool=True)
     except Exception:
         logger.debug("Tool stats unavailable for dashboard", exc_info=True)
 

@@ -11,13 +11,14 @@ loaded from two JSON files:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import aiofiles
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,8 @@ class TruthHintsEngine:
         if not path.exists():
             return []
         try:
-            raw = await asyncio.to_thread(path.read_text, "utf-8")
+            async with aiofiles.open(path, mode="r", encoding="utf-8") as f:
+                raw = await f.read()
             data = json.loads(raw)
             if isinstance(data, dict):
                 hints = data.get("hints", [])
@@ -252,4 +254,5 @@ class TruthHintsEngine:
     async def _persist_learned(self) -> None:
         self._learned_path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"hints": self._learned_hints}, indent=2, ensure_ascii=False)
-        await asyncio.to_thread(self._learned_path.write_text, payload, "utf-8")
+        async with aiofiles.open(self._learned_path, mode="w", encoding="utf-8") as f:
+            await f.write(payload)

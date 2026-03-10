@@ -6,7 +6,7 @@ No persistence; resets on process restart.
 
 from __future__ import annotations
 
-import threading
+import asyncio
 from collections import defaultdict
 from typing import Any
 
@@ -19,18 +19,18 @@ class ToolStatsTracker:
         self._counts: dict[tuple[str, str], dict[str, int]] = defaultdict(
             lambda: {"successes": 0, "failures": 0}
         )
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def record_tool_call(self, agent_name: str, tool_name: str, success: bool) -> None:
+    async def record_tool_call(self, agent_name: str, tool_name: str, success: bool) -> None:
         """Record one tool invocation outcome."""
-        with self._lock:
+        async with self._lock:
             key = (agent_name, tool_name)
             if success:
                 self._counts[key]["successes"] += 1
             else:
                 self._counts[key]["failures"] += 1
 
-    def get_tool_success_rates(
+    async def get_tool_success_rates(
         self,
         *,
         by_tool: bool = True,
@@ -40,7 +40,7 @@ class ToolStatsTracker:
         If by_tool is True, each row is (agent, tool) with total, successes, failures, rate.
         If by_tool is False, each row is agent-only (aggregated across tools).
         """
-        with self._lock:
+        async with self._lock:
             if by_tool:
                 rows: list[dict[str, Any]] = []
                 for (agent_name, tool_name), counts in self._counts.items():

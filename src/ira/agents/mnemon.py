@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import aiofiles
+
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.prompt_loader import load_prompt
 
@@ -29,25 +31,26 @@ _LEDGER_PATH = Path("data/brain/correction_ledger.json")
 _STALENESS_MONTHS = 3
 
 
-def _load_ledger() -> dict[str, Any]:
+async def _load_ledger() -> dict[str, Any]:
     """Load the correction ledger from disk."""
     if not _LEDGER_PATH.exists():
         return {"entities": {}, "_metadata": {"last_updated": ""}}
     try:
-        return json.loads(_LEDGER_PATH.read_text(encoding="utf-8"))
+        async with aiofiles.open(_LEDGER_PATH, mode="r", encoding="utf-8") as f:
+            raw = await f.read()
+        return json.loads(raw)
     except (json.JSONDecodeError, OSError):
         logger.warning("Could not read correction ledger; starting fresh")
         return {"entities": {}, "_metadata": {"last_updated": ""}}
 
 
-def _save_ledger(ledger: dict[str, Any]) -> None:
+async def _save_ledger(ledger: dict[str, Any]) -> None:
     """Persist the correction ledger to disk."""
     ledger["_metadata"]["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _LEDGER_PATH.write_text(
-        json.dumps(ledger, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps(ledger, indent=2, ensure_ascii=False) + "\n"
+    async with aiofiles.open(_LEDGER_PATH, mode="w", encoding="utf-8") as f:
+        await f.write(payload)
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -119,7 +122,7 @@ class Mnemon(BaseAgent):
         ))
 
     async def _tool_lookup_correction(self, entity: str) -> str:
-        ledger = await asyncio.to_thread(_load_ledger)
+        ledger = await _load_ledger()
         entry = ledger["entities"].get(entity.lower())
         if not entry:
             for key, val in ledger["entities"].items():
@@ -138,7 +141,7 @@ class Mnemon(BaseAgent):
         return f"Correction recorded for '{entity}'."
 
     async def _tool_list_all(self) -> str:
-        ledger = await asyncio.to_thread(_load_ledger)
+        ledger = await _load_ledger()
         entities = ledger.get("entities", {})
         if not entities:
             return "Correction ledger is empty."
@@ -153,7 +156,7 @@ class Mnemon(BaseAgent):
         ledger_context: str = "",
     ) -> str:
         if not ledger_context:
-            ledger = await asyncio.to_thread(_load_ledger)
+            ledger = await _load_ledger()
             ledger_context = json.dumps(ledger.get("entities", {}), default=str)[:4000]
         return await self.use_skill(
             "validate_correction_consistency",
@@ -183,7 +186,7 @@ class Mnemon(BaseAgent):
         if not text:
             return text
 
-        ledger = await asyncio.to_thread(_load_ledger)
+        ledger = await _load_ledger()
         entities = ledger.get("entities", {})
         if not entities:
             return text
@@ -332,7 +335,7 @@ class Mnemon(BaseAgent):
         source: str = "user_correction",
     ) -> None:
         """Add or update an entry in the correction ledger."""
-        ledger = await asyncio.to_thread(_load_ledger)
+        ledger = await _load_ledger()
         key = entity.lower().strip()
 
         existing = ledger["entities"].get(key, {})
@@ -346,7 +349,7 @@ class Mnemon(BaseAgent):
             "source": source,
         }
 
-        await asyncio.to_thread(_save_ledger, ledger)
+        await _save_ledger(ledger)
         logger.info("Mnemon: recorded correction for '%s'", key)
 
     async def record_correction_from_feedback(

@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import aiofiles
+
 logger = logging.getLogger(__name__)
 
 _DATA_PATH = Path("data/brain/power_levels.json")
@@ -59,7 +61,8 @@ class PowerLevelTracker:
             self._agents = {}
             return
         try:
-            raw = await asyncio.to_thread(self._path.read_text, "utf-8")
+            async with aiofiles.open(self._path, mode="r", encoding="utf-8") as f:
+                raw = await f.read()
             data = json.loads(raw)
             self._agents = data.get("agents", {})
         except (json.JSONDecodeError, OSError):
@@ -70,7 +73,8 @@ class PowerLevelTracker:
     async def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"agents": self._agents}, indent=2, ensure_ascii=False)
-        await asyncio.to_thread(self._path.write_text, payload, "utf-8")
+        async with aiofiles.open(self._path, mode="w", encoding="utf-8") as f:
+            await f.write(payload)
 
     def _ensure_agent(self, agent_name: str) -> dict[str, Any]:
         if agent_name not in self._agents:

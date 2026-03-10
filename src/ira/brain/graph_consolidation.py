@@ -8,13 +8,14 @@ in a configurable window.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import aiofiles
 
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.exceptions import DatabaseError, IraError
@@ -50,14 +51,11 @@ class GraphConsolidation:
             "chunks": chunks_retrieved,
             "source_types": source_types,
         }
-
-        def _append() -> None:
-            self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, default=str) + "\n")
-
         try:
-            await asyncio.to_thread(_append)
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(entry, default=str) + "\n"
+            async with aiofiles.open(self._log_path, mode="a", encoding="utf-8") as f:
+                await f.write(line)
         except OSError:
             logger.exception("Failed to write retrieval log entry")
 
@@ -72,26 +70,24 @@ class GraphConsolidation:
         if not self._log_path.exists():
             return {}
 
-        def _read_and_parse() -> dict[str, int]:
-            co: dict[str, int] = defaultdict(int)
-            with self._log_path.open(encoding="utf-8") as f:
-                for raw_line in f:
-                    raw_line = raw_line.strip()
-                    if not raw_line:
-                        continue
-                    try:
-                        entry = json.loads(raw_line)
-                    except json.JSONDecodeError:
-                        continue
-                    chunks = entry.get("chunks", [])
-                    for i, a in enumerate(chunks):
-                        for b in chunks[i + 1 :]:
-                            key = "|||".join(sorted([a, b]))
-                            co[key] += 1
-            return dict(co)
-
         try:
-            co_access = await asyncio.to_thread(_read_and_parse)
+            co: dict[str, int] = defaultdict(int)
+            async with aiofiles.open(self._log_path, mode="r", encoding="utf-8") as f:
+                raw = await f.read()
+            for raw_line in raw.splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                chunks = entry.get("chunks", [])
+                for i, a in enumerate(chunks):
+                    for b in chunks[i + 1 :]:
+                        key = "|||".join(sorted([a, b]))
+                        co[key] += 1
+            co_access = dict(co)
         except OSError:
             logger.exception("Failed to read retrieval log")
             co_access = {}
@@ -150,13 +146,14 @@ class GraphConsolidation:
         Sets a ``stale`` property to ``true`` and records the decay timestamp.
         """
         cutoff = datetime.now(timezone.utc)
-
-        def _read_active_entities() -> set[str]:
-            active: set[str] = set()
-            if not self._log_path.exists():
-                return active
-            with self._log_path.open(encoding="utf-8") as f:
-                for raw_line in f:
+        accessed_entities: set[str] = set()
+        if not self._log_path.exists():
+            pass
+        else:
+            try:
+                async with aiofiles.open(self._log_path, mode="r", encoding="utf-8") as f:
+                    raw = await f.read()
+                for raw_line in raw.splitlines():
                     raw_line = raw_line.strip()
                     if not raw_line:
                         continue
@@ -174,14 +171,9 @@ class GraphConsolidation:
                     age_days = (cutoff - ts).days
                     if age_days <= days_threshold:
                         for chunk in entry.get("chunks", []):
-                            active.add(chunk)
-            return active
-
-        try:
-            accessed_entities = await asyncio.to_thread(_read_active_entities)
-        except OSError:
-            logger.exception("Failed to read retrieval log for decay analysis")
-            accessed_entities = set()
+                            accessed_entities.add(chunk)
+            except OSError:
+                logger.exception("Failed to read retrieval log for decay analysis")
 
         try:
             result = await self._graph._run_cypher_write(

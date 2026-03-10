@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import aiofiles
+
 from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.exceptions import DatabaseError, ToolExecutionError
 from ira.prompt_loader import load_prompt
@@ -29,33 +31,26 @@ _DATA_PATH = Path("data/brain/sales_training.json")
 _PATTERNS_LOCK = asyncio.Lock()
 
 
-def _load_patterns_sync() -> list[dict[str, Any]]:
+async def _load_patterns() -> list[dict[str, Any]]:
     if not _DATA_PATH.exists():
         return []
-    try:
-        data = json.loads(_DATA_PATH.read_text(encoding="utf-8"))
-        return data.get("patterns", [])
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Could not read sales training data at %s", _DATA_PATH)
-        return []
-
-
-async def _load_patterns() -> list[dict[str, Any]]:
     async with _PATTERNS_LOCK:
-        return await asyncio.to_thread(_load_patterns_sync)
-
-
-def _save_patterns_sync(patterns: list[dict[str, Any]]) -> None:
-    _DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _DATA_PATH.write_text(
-        json.dumps({"patterns": patterns}, indent=2, default=str),
-        encoding="utf-8",
-    )
+        try:
+            async with aiofiles.open(_DATA_PATH, mode="r", encoding="utf-8") as f:
+                raw = await f.read()
+            data = json.loads(raw)
+            return data.get("patterns", [])
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Could not read sales training data at %s", _DATA_PATH)
+            return []
 
 
 async def _save_patterns(patterns: list[dict[str, Any]]) -> None:
     async with _PATTERNS_LOCK:
-        await asyncio.to_thread(_save_patterns_sync, patterns)
+        _DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"patterns": patterns}, indent=2, default=str)
+        async with aiofiles.open(_DATA_PATH, mode="w", encoding="utf-8") as f:
+            await f.write(payload)
 
 
 def _next_pattern_id(patterns: list[dict[str, Any]]) -> str:

@@ -600,22 +600,22 @@ class BaseAgent(ABC):
                 try:
                     result = await tool.handler(**inputs)
                     if tracker is not None:
-                        tracker.record_tool_call(self.name, name, success=True)
+                        await tracker.record_tool_call(self.name, name, success=True)
                     return str(result)[:4000]
                 except ToolExecutionError:
                     if tracker is not None:
-                        tracker.record_tool_call(self.name, name, success=False)
+                        await tracker.record_tool_call(self.name, name, success=False)
                     raise
                 except (IraError, Exception) as exc:
                     logger.warning("Tool '%s' failed in %s: %s", name, self.name, exc)
                     if tracker is not None:
-                        tracker.record_tool_call(self.name, name, success=False)
+                        await tracker.record_tool_call(self.name, name, success=False)
                     return (
                         f"Tool execution failed with error: {exc}. "
                         "Please check your parameters and try again, or use a different tool to find this information."
                     )
         if tracker is not None:
-            tracker.record_tool_call(self.name, name, success=False)
+            await tracker.record_tool_call(self.name, name, success=False)
         return f"Unknown tool: {name}"
 
     async def _force_final_answer(
