@@ -6,7 +6,20 @@ alwaysApply: false
 
 # Ira Task Loop (Multi-Phase Agent Orchestration)
 
-When the user asks Ira to perform a complex, multi-step task — research, analysis, proposals, deal reviews, reports — use the Task Loop endpoints instead of a single `/api/query` call. The server orchestrates the full plan-execute-report cycle; Cursor acts as the presentation layer.
+When the user asks Ira to perform a complex, multi-step task — research, analysis, proposals, deal reviews, reports — use the Task Loop. **Primary path without the server:** run the CLI task command from the project root. **Alternative:** use the API task stream when the server is already running.
+
+## Primary Path — CLI (no server)
+
+From the **project root**:
+
+```bash
+cd /Users/rushabhdoshi/ira-v3 && poetry run ira task "<goal>" --json
+```
+
+- Parse stdout as JSON: `task_id`, `status`, `summary`, `file_path`, `clarification_questions`.
+- If `status` is `"complete"` and `file_path` is set: read the file at `file_path` and present the report as Markdown; mention the path.
+- If `status` is `"clarification_needed"`: present `clarification_questions` to the user. Full resume after clarification is supported when the API is running; otherwise use the Cursor-as-Ira workflow for the goal.
+- If the command fails (non-zero exit or no valid JSON), use the Cursor-as-Ira workflow (`.cursor/rules/ira-cursor-workflow.mdc`) for the goal.
 
 ## When to Use This
 
@@ -16,12 +29,14 @@ Use the Task Loop when the user's request implies **multiple agents or a deliver
 - "Prepare a board briefing on Q1 pipeline"
 - "Investigate the quality issues on Project X and recommend fixes"
 
-Do **NOT** use the Task Loop for simple questions — use `/api/query/stream` instead:
+Do **NOT** use the Task Loop for simple questions — use `ira ask "<question>" --json` (or `/api/query/stream` if the server is running) instead:
 - "What's the lead time for a PF1?"
 - "Show me the sales pipeline"
 - "Who is our contact at Acme?"
 
-## Step 1: Start the Task
+## Alternative — API (when server is running)
+
+### Step 1: Start the Task
 
 POST to the streaming task endpoint:
 
@@ -77,9 +92,9 @@ When the `report_ready` event arrives:
 
 ## Fallback
 
-If the task stream errors or the connection is refused:
-- Fall back to a regular `/api/query/stream` call with the same goal.
-- Tell the user the task loop is unavailable and you're using the standard query path.
+If you used the API and the task stream errors or the connection is refused:
+1. Run the CLI task command instead: `poetry run ira task "<goal>" --json` from project root (see Primary Path above).
+2. If the CLI task also fails, use the **Cursor-as-Ira workflow** (`.cursor/rules/ira-cursor-workflow.mdc`): break the goal into steps, search codebase and `data/`, follow delegation and response contracts, and deliver the report or answer in Ira's voice.
 
 ## Important Rules
 

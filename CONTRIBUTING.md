@@ -28,11 +28,19 @@ pre-commit install
 
 ## Running
 
+Ira runs CLI-first; no API server is required. Start Docker for the databases, then use the CLI (or have Cursor run it via the rules).
+
 ```bash
-# CLI mode
+# CLI — interactive chat
 poetry run ira chat
 
-# FastAPI server
+# CLI — single query (--json for Cursor/scripts)
+poetry run ira ask "What's the lead time for a PF1?" --json
+
+# CLI — multi-phase task
+poetry run ira task "Full analysis of Acme deal" --json
+
+# Optional: FastAPI server (for web UI or HTTP integrations)
 poetry run uvicorn ira.interfaces.server:app --reload
 
 # Run tests

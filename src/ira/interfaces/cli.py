@@ -18,6 +18,7 @@ Usage::
     ira health
     ira agents
     ira audit skills
+    ira audit production
 """
 
 from __future__ import annotations
@@ -276,7 +277,7 @@ async def _build_pipeline(
     contains at least ``crm`` and ``quotes`` so we reuse the same
     connection pool instead of opening a duplicate.
 
-    Returns ``(pipeline, feedback_handler)``.
+    Returns ``(pipeline, feedback_handler, redis_cache, voice)``.
     """
     data_event_bus = shared_services.get(SK.DATA_EVENT_BUS)
     if data_event_bus is not None:
@@ -395,7 +396,7 @@ async def _build_pipeline(
         redis_cache=redis_cache,
     )
 
-    return pipeline, feedback_handler
+    return pipeline, feedback_handler, redis_cache, voice
 
 
 def _build_digestive() -> tuple[Any, Any, Any]:
@@ -504,7 +505,7 @@ def chat(
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline, feedback_handler = await _build_pipeline(pantheon, shared_services)
+            pipeline, feedback_handler, _redis, _voice = await _build_pipeline(pantheon, shared_services)
 
             last_exchange: dict[str, Any] | None = None
 
@@ -573,6 +574,7 @@ def chat(
 def ask(
     query: str = typer.Argument(..., help="The question to ask Ira."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    json_output: bool = typer.Option(False, "--json", help="Output response as JSON to stdout for Cursor/scripts."),
 ) -> None:
     """Ask Ira a single question and print the response."""
     _configure_logging(verbose)
@@ -583,18 +585,94 @@ def ask(
         user_id = "cli-user"
 
         async with pantheon:
-            pipeline, _feedback = await _build_pipeline(pantheon, shared_services)
+            pipeline, _feedback, _redis, _voice = await _build_pipeline(pantheon, shared_services)
 
-            response, _agents = await _process_request_with_live_progress(
+            response, agents_used = await _process_request_with_live_progress(
                 pipeline,
                 raw_input=query,
                 sender_id=user_id,
                 channel="cli",
             )
 
-        console.print(Panel(Markdown(response), title="Ira", border_style="green"))
+        if json_output:
+            print(json.dumps({"response": response, "agents_consulted": agents_used or []}))
+        else:
+            console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
     _run(_ask())
+
+
+@app.command()
+def task(
+    goal: str = typer.Argument(..., help="The goal for the multi-phase task (e.g. 'Full analysis of Acme deal and draft a proposal')."),
+    output_format: str = typer.Option("markdown", "--output-format", "-f", help="Report format: markdown or pdf."),
+    json_output: bool = typer.Option(False, "--json", help="Output task result as JSON to stdout for Cursor/scripts."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run a multi-phase task (plan → execute → report) using the full agent stack. No server required."""
+    _configure_logging(verbose)
+
+    pantheon, shared_services = _build_pantheon()
+
+    async def _task() -> None:
+        from ira.systems.task_orchestrator import TaskOrchestrator
+
+        async with pantheon:
+            pipeline, _feedback, redis_cache, voice = await _build_pipeline(pantheon, shared_services)
+
+            orchestrator = TaskOrchestrator(
+                pantheon=pantheon,
+                redis_cache=redis_cache or _make_dummy_redis(),
+                voice=voice,
+                pdfco=None,
+            )
+
+            task_id = await orchestrator.create_task(
+                goal=goal,
+                user_id="cli-user",
+                output_format=output_format,
+            )
+
+            async def on_progress(event: dict[str, Any]) -> None:
+                if not json_output:
+                    ev_type = event.get("type", "")
+                    if ev_type == "plan_created":
+                        phases = event.get("phases", [])
+                        for i, p in enumerate(phases):
+                            err_console.print(f"[dim]  Phase {i + 1}: {p.get('agent', '')} — {p.get('title', '')}[/dim]")
+                    elif ev_type in ("phase_started", "phase_done", "report_generating", "report_ready"):
+                        err_console.print(f"[dim]{ev_type}[/dim]")
+
+            result = await orchestrator.run_task(task_id, on_progress=on_progress)
+
+            if json_output:
+                out = {
+                    "task_id": result.task_id,
+                    "status": result.status,
+                    "summary": result.summary,
+                    "file_path": result.file_path,
+                    "file_format": result.file_format,
+                    "clarification_questions": result.clarification_questions,
+                }
+                print(json.dumps(out))
+            else:
+                if result.status == "clarification_needed" and result.clarification_questions:
+                    console.print("[yellow]Clarification needed:[/yellow]")
+                    for q in result.clarification_questions:
+                        console.print(f"  • {q}")
+                    console.print("\n[dim]Resume with: ira task clarify <task_id> <answer>[/dim]")
+                elif result.status == "complete" and result.file_path:
+                    console.print(Panel(f"Report saved to [bold]{result.file_path}[/bold]\n\n{result.summary}", title="Task complete", border_style="green"))
+                else:
+                    console.print(Panel(f"Status: {result.status}\n{result.summary}", title="Task result", border_style="green"))
+
+    def _make_dummy_redis() -> Any:
+        """Return a minimal object with .available = False for TaskOrchestrator when Redis is down."""
+        class _Dummy:
+            available = False
+        return _Dummy()
+
+    _run(_task())
 
 
 @app.command()
@@ -1179,7 +1257,7 @@ def email_rescan(
             ]
 
             async with pantheon:
-                pipeline, _fb = await _build_pipeline(pantheon, shared)
+                pipeline, _fb, _redis, _voice = await _build_pipeline(pantheon, shared)
 
                 for title, rq in report_queries:
                     console.print(f"\n  [dim]Generating: {title}...[/dim]")
@@ -1350,6 +1428,21 @@ def _has_machinecraft_protein_signal(sender: str, subject: str, body: str) -> bo
     return any(p in text for p in patterns)
 
 
+def _prepare_body_for_classification(body: str, max_chars: int = 12000) -> str:
+    """Bound and sanitize message body before LLM nutrient extraction."""
+    if not body:
+        return ""
+    cleaned = body.replace("\x00", " ")
+    # Collapse huge lines often produced by HTML/CSS blobs or binary-ish dumps.
+    compact_lines: list[str] = []
+    for line in cleaned.splitlines():
+        if len(line) > 1200:
+            continue
+        compact_lines.append(line)
+    bounded = "\n".join(compact_lines)
+    return bounded[:max_chars]
+
+
 @takeout_app.command("ingest")
 def takeout_ingest(
     source_dir: str = typer.Option("data/takeout_ingest", "--source-dir", help="Folder containing .mbox files."),
@@ -1376,7 +1469,7 @@ def takeout_ingest(
         console.print(f"[red]Source directory not found:[/red] {source_dir}")
         raise typer.Exit(2)
 
-    mbox_files = sorted(source_path.glob("*.mbox"))
+    mbox_files = sorted(source_path.rglob("*.mbox"))
     if not mbox_files:
         console.print(f"[yellow]No .mbox files found in {source_dir}[/yellow]")
         raise typer.Exit(0)
@@ -1409,6 +1502,19 @@ def takeout_ingest(
             "mem0_written": 0,
             "entities": {"companies": 0, "people": 0, "machines": 0, "relationships": 0},
         }
+
+        def _write_checkpoint() -> None:
+            checkpoint_payload = {
+                "batch_name": batch_name,
+                "profile": profile,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "done_keys": sorted(done_keys),
+                "stats": stats,
+            }
+            checkpoint_path.write_text(json.dumps(checkpoint_payload, indent=2), encoding="utf-8")
+
+        # Write an initial checkpoint immediately so external monitors can see state.
+        _write_checkpoint()
 
         target_total = max_messages if max_messages > 0 else None
         with Progress(
@@ -1452,20 +1558,41 @@ def takeout_ingest(
                         stats["messages_skipped_checkpoint"] += 1
                         if stats["messages_seen"] % 250 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 10 == 0:
+                            _write_checkpoint()
+                            err_console.print(
+                                f"[dim]checkpoint: seen={stats['messages_seen']} "
+                                f"processed={stats['messages_processed']} "
+                                f"protein={stats['messages_with_protein']}[/dim]"
+                            )
                         continue
 
                     body = _extract_message_body(msg)
                     if _is_noise_message(msg, sender, subject):
                         stats["messages_skipped_noise"] += 1
                         done_keys.add(key)
-                        if stats["messages_seen"] % 100 == 0:
+                        if stats["messages_seen"] % 10 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 10 == 0:
+                            _write_checkpoint()
+                            err_console.print(
+                                f"[dim]checkpoint: seen={stats['messages_seen']} "
+                                f"processed={stats['messages_processed']} "
+                                f"protein={stats['messages_with_protein']}[/dim]"
+                            )
                         continue
                     if not _has_machinecraft_protein_signal(sender, subject, body):
                         stats["messages_skipped_low_signal"] += 1
                         done_keys.add(key)
                         if stats["messages_seen"] % 100 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 100 == 0:
+                            _write_checkpoint()
+                            err_console.print(
+                                f"[dim]checkpoint: seen={stats['messages_seen']} "
+                                f"processed={stats['messages_processed']} "
+                                f"protein={stats['messages_with_protein']}[/dim]"
+                            )
                         continue
 
                     if max_messages > 0 and stats["messages_processed"] >= max_messages:
@@ -1474,7 +1601,13 @@ def takeout_ingest(
                     source = f"{mbox_path}:{idx}"
                     source_id = key[:24]
 
-                    nutrients = await digestive._extract_nutrients(body)
+                    classify_body = _prepare_body_for_classification(body)
+                    if not classify_body.strip():
+                        done_keys.add(key)
+                        stats["messages_processed"] += 1
+                        continue
+
+                    nutrients = await digestive._extract_nutrients(classify_body)
                     nutrients = await digestive._summarize_nutrients(nutrients)
                     protein_statements = [p for p in nutrients.get("protein", []) if isinstance(p, str) and p.strip()]
                     protein_only = {"protein": protein_statements, "carbs": [], "waste": nutrients.get("waste", [])}
@@ -1511,18 +1644,19 @@ def takeout_ingest(
                     done_keys.add(key)
                     stats["messages_processed"] += 1
                     _update_progress(mbox_path.name)
+                    if stats["messages_processed"] % 5 == 0:
+                        _write_checkpoint()
+                        err_console.print(
+                            f"[dim]checkpoint: seen={stats['messages_seen']} "
+                            f"processed={stats['messages_processed']} "
+                            f"protein={stats['messages_with_protein']} "
+                            f"chunks={stats['chunks_created']} mem0={stats['mem0_written']}[/dim]"
+                        )
 
                 if max_messages > 0 and stats["messages_processed"] >= max_messages:
                     break
 
-        checkpoint_payload = {
-            "batch_name": batch_name,
-            "profile": profile,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "done_keys": sorted(done_keys),
-            "stats": stats,
-        }
-        checkpoint_path.write_text(json.dumps(checkpoint_payload, indent=2), encoding="utf-8")
+        _write_checkpoint()
 
         summary = Table(title="Takeout Protein Ingestion Summary")
         summary.add_column("Metric", style="cyan")
@@ -1919,6 +2053,11 @@ def ingest(
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingest all files regardless of log state."),
     batch_size: int = typer.Option(712, "--batch", "-n", help="Max files to process (default: all)."),
     concurrency: int = typer.Option(3, "--workers", "-w", help="Parallel workers (default: 3)."),
+    exclude_prefixes: list[str] = typer.Option(
+        [],
+        "--exclude-prefix",
+        help="Skip imports whose relative path starts with this prefix (repeatable).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Run Alexandros-gated intelligent document ingestion.
@@ -1939,7 +2078,13 @@ def ingest(
 
     from ira.brain.ingestion_gatekeeper import scan_for_undigested, run_ingestion_cycle
 
-    queue = _run(scan_for_undigested(force=force))
+    normalized_excludes = tuple(
+        p.strip()
+        for p in exclude_prefixes
+        if isinstance(p, str) and p.strip()
+    )
+
+    queue = _run(scan_for_undigested(force=force, exclude_prefixes=normalized_excludes))
 
     if not queue:
         console.print("[green]All files are up-to-date. Nothing to ingest.[/green]")
@@ -1964,6 +2109,7 @@ def ingest(
             f"[bold]This batch:[/bold]             {len(batch)}\n"
             f"[bold]Parallel workers:[/bold]        {concurrency}\n"
             f"[bold]Reasons:[/bold]                {reason_lines}\n"
+            f"[bold]Excludes:[/bold]               {', '.join(normalized_excludes) if normalized_excludes else 'none'}\n"
             f"[bold]Est. time:[/bold]              {est_label}\n"
             f"[bold]Force:[/bold]                  {'yes' if force else 'no'}",
             title="Alexandros Ingestion Scan",
@@ -1991,6 +2137,7 @@ def ingest(
                 force=force,
                 batch_size=batch_size,
                 concurrency=concurrency,
+                exclude_prefixes=normalized_excludes,
                 progress_callback=on_progress,
             )
 
@@ -3353,3 +3500,238 @@ def audit_skills(
             raise typer.Exit(code=1)
     else:
         console.print("[green]Skill audit passed with no issues.[/green]")
+
+
+@audit_app.command("production")
+def audit_production(
+    asana_dir: str = typer.Option(
+        "data/imports/23_Asana",
+        "--asana-dir",
+        help="Directory containing Asana exports (CSV/XLSX/PDF).",
+    ),
+    max_files: int = typer.Option(
+        0,
+        "--max-files",
+        help="Limit recent deduped CSV files to scan (0 = all).",
+    ),
+    output: str = typer.Option(
+        "data/reports/production_audit_latest.json",
+        "--output",
+        "-o",
+        help="Write JSON audit report to this path.",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict/--no-strict",
+        help="Exit non-zero when production quality thresholds are violated.",
+    ),
+    gate_unknown_max: float = typer.Option(
+        0.70,
+        "--gate-unknown-max",
+        help="Max allowed fraction of gate_unknown tasks.",
+    ),
+    blank_project_max: float = typer.Option(
+        0.50,
+        "--blank-project-max",
+        help="Max allowed fraction of rows with blank project.",
+    ),
+    pending_ingestion_max: int = typer.Option(
+        0,
+        "--pending-ingestion-max",
+        help="Max allowed count of Asana files pending ingestion.",
+    ),
+) -> None:
+    """Audit production data quality and Atlas planning signals from Asana exports."""
+    import csv
+    from collections import Counter
+
+    from ira.brain.asana_planning_mapper import normalize_task_record, pair_procurement_events
+    from ira.brain.imports_metadata_index import load_index
+    from ira.brain.ingestion_log import load_log, needs_ingestion
+
+    def _normalize_key(label: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", (label or "").replace("\ufeff", "").strip().lower()).strip("_")
+
+    def _row_value(row: dict[str, Any], *candidates: str) -> str:
+        normalized_to_value = {_normalize_key(str(k)): v for k, v in row.items()}
+        for candidate in candidates:
+            value = normalized_to_value.get(_normalize_key(candidate))
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    def _canonical_export_name(path: Path) -> str:
+        stem = re.sub(r"\s+\(\d+\)$", "", path.stem.strip().lower())
+        return f"{stem}{path.suffix.lower()}"
+
+    asana_path = Path(asana_dir)
+    if not asana_path.exists():
+        console.print(f"[red]Asana directory not found:[/red] {asana_path}")
+        raise typer.Exit(code=1)
+
+    all_files = [p for p in asana_path.iterdir() if p.is_file()]
+    by_ext = Counter((p.suffix.lower() or "<none>") for p in all_files)
+
+    candidates = sorted(
+        [p for p in all_files if p.suffix.lower() == ".csv"],
+        key=lambda fp: fp.stat().st_mtime,
+        reverse=True,
+    )
+    deduped_csvs: list[Path] = []
+    seen_exports: set[str] = set()
+    for fp in candidates:
+        key = _canonical_export_name(fp)
+        if key in seen_exports:
+            continue
+        seen_exports.add(key)
+        deduped_csvs.append(fp)
+
+    csv_files = deduped_csvs[:max_files] if max_files > 0 else deduped_csvs
+
+    rows: list[dict[str, Any]] = []
+    file_row_counts: dict[str, int] = {}
+    read_errors: dict[str, str] = {}
+    for fp in csv_files:
+        try:
+            with fp.open("r", encoding="utf-8", errors="ignore", newline="") as fh:
+                file_rows = list(csv.DictReader(fh))
+                rows.extend(file_rows)
+                file_row_counts[fp.name] = len(file_rows)
+        except OSError as exc:
+            read_errors[fp.name] = str(exc)
+
+    normalized = [normalize_task_record(row) for row in rows]
+    phase_counts = Counter(item.phase_std for item in normalized)
+    task_type_counts = Counter(item.task_type for item in normalized)
+    total_rows = len(rows)
+    empty_task_id_count = sum(1 for item in normalized if not item.task_id)
+    blank_project_count = sum(
+        1 for row in rows if not _row_value(row, "Projects", "Project")
+    )
+    blank_section_count = sum(
+        1 for row in rows if not _row_value(row, "Section/Column", "Section", "Column")
+    )
+
+    unknown_count = phase_counts.get("gate_unknown", 0)
+    unknown_ratio = (unknown_count / total_rows) if total_rows else 0.0
+    blank_project_ratio = (blank_project_count / total_rows) if total_rows else 0.0
+
+    pairs = pair_procurement_events(rows)
+    received_pairs = [pair for pair in pairs if pair.get("status") == "received"]
+    lead_days = [int(pair["lead_time_days"]) for pair in received_pairs if pair.get("lead_time_days") is not None]
+
+    async def _ingestion_status() -> dict[str, Any]:
+        index = await load_index()
+        log = await load_log()
+        asana_keys = [k for k in index.get("files", {}) if "23_Asana" in k or "23_asana" in k]
+        status_counts: Counter[str] = Counter()
+        for key in asana_keys:
+            meta = index["files"][key]
+            current_hash = str(meta.get("hash", ""))
+            status = needs_ingestion(log, key, current_hash, force=False) or "up_to_date"
+            status_counts[status] += 1
+        return {
+            "index_entries_under_23_asana": len(asana_keys),
+            "status_counts": dict(status_counts),
+        }
+
+    ingestion_status = _run(_ingestion_status())
+    pending_ingestion = sum(
+        count
+        for status, count in ingestion_status.get("status_counts", {}).items()
+        if status != "up_to_date"
+    )
+
+    issues: list[str] = []
+    if unknown_ratio > gate_unknown_max:
+        issues.append(
+            f"gate_unknown ratio {unknown_ratio:.2%} exceeds max {gate_unknown_max:.2%}"
+        )
+    if blank_project_ratio > blank_project_max:
+        issues.append(
+            f"blank project ratio {blank_project_ratio:.2%} exceeds max {blank_project_max:.2%}"
+        )
+    if pending_ingestion > pending_ingestion_max:
+        issues.append(
+            f"pending ingestion {pending_ingestion} exceeds max {pending_ingestion_max}"
+        )
+    if empty_task_id_count > 0:
+        issues.append(f"{empty_task_id_count} rows missing task IDs after normalization")
+    if read_errors:
+        issues.append(f"CSV read errors in {len(read_errors)} file(s)")
+
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "inputs": {
+            "asana_dir": str(asana_path),
+            "max_files": max_files,
+            "csv_files_scanned": len(csv_files),
+            "csv_files_available_deduped": len(deduped_csvs),
+            "all_files_in_dir": len(all_files),
+            "file_extensions": dict(by_ext),
+        },
+        "quality": {
+            "rows_scanned": total_rows,
+            "empty_task_id_count": empty_task_id_count,
+            "blank_project_count": blank_project_count,
+            "blank_project_ratio": round(blank_project_ratio, 4),
+            "blank_section_count": blank_section_count,
+            "gate_unknown_count": unknown_count,
+            "gate_unknown_ratio": round(unknown_ratio, 4),
+            "phase_counts": dict(phase_counts),
+            "task_type_counts_top10": dict(task_type_counts.most_common(10)),
+            "top_csv_by_rows": sorted(
+                [{"file": name, "rows": count} for name, count in file_row_counts.items()],
+                key=lambda item: item["rows"],
+                reverse=True,
+            )[:10],
+            "read_errors": read_errors,
+        },
+        "procurement": {
+            "pairs_total": len(pairs),
+            "pairs_received": len(received_pairs),
+            "pairs_open": len(pairs) - len(received_pairs),
+            "avg_lead_days": round(sum(lead_days) / len(lead_days), 2) if lead_days else None,
+            "max_lead_days": max(lead_days) if lead_days else None,
+        },
+        "ingestion": {
+            **ingestion_status,
+            "pending_total": pending_ingestion,
+        },
+        "thresholds": {
+            "gate_unknown_max": gate_unknown_max,
+            "blank_project_max": blank_project_max,
+            "pending_ingestion_max": pending_ingestion_max,
+        },
+        "issues": issues,
+        "status": "pass" if not issues else "fail",
+    }
+
+    summary = Table(title="Production Audit Summary")
+    summary.add_column("Metric", style="cyan")
+    summary.add_column("Value", style="green", justify="right")
+    summary.add_row("Rows scanned", str(total_rows))
+    summary.add_row("CSV scanned (deduped)", str(len(csv_files)))
+    summary.add_row("gate_unknown", f"{unknown_count} ({unknown_ratio:.2%})")
+    summary.add_row("blank project", f"{blank_project_count} ({blank_project_ratio:.2%})")
+    summary.add_row("pending ingestion", str(pending_ingestion))
+    summary.add_row("procurement pairs", str(len(pairs)))
+    console.print(summary)
+
+    if issues:
+        issue_table = Table(title="Production Audit Issues")
+        issue_table.add_column("#", style="dim", width=4)
+        issue_table.add_column("Issue", style="red")
+        for idx, issue in enumerate(issues, 1):
+            issue_table.add_row(str(idx), issue)
+        console.print(issue_table)
+    else:
+        console.print("[green]Production audit passed with no issues.[/green]")
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    console.print(f"[green]Production audit report written:[/green] {out_path}")
+
+    if strict and issues:
+        raise typer.Exit(code=1)

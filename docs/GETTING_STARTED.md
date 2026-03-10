@@ -65,44 +65,54 @@ This creates the CRM schema in PostgreSQL.
 
 ## Using Ira
 
-Once setup is complete, Ira routes your queries to the right specialist agent automatically.
+Once setup is complete, Ira routes your queries to the right specialist agent automatically. **No API server is required** — the primary path is the CLI (or Cursor running the CLI for you).
 
-### Option A: Interactive CLI Chat
+### Option A: Cursor IDE (Recommended)
 
-The easiest way to experience Ira — a continuous conversation in your terminal.
+Open this repo in [Cursor](https://cursor.sh). The `.cursor/rules/` directory teaches Cursor to **run Ira without starting the server**: it starts Docker (databases only), runs `ira ask "<question>" --json` or `ira task "<goal>" --json` for you, and falls back to a codebase-and-data workflow if the CLI fails.
+
+```
+Step 1:  Open ira-v3 in Cursor
+Step 2:  Type "wake up Ira" in Cursor chat (Cursor starts Docker for Postgres, Qdrant, Neo4j, Redis)
+Step 3:  Ask anything — "@Ira what's the status of the Acme Packaging deal?"
+         Cursor runs ira ask or the fallback workflow; no uvicorn needed
+Step 4:  For complex tasks ("full analysis", "prepare a report"), Cursor runs ira task "<goal>" --json
+```
+
+### Option B: Interactive CLI Chat
+
+A continuous conversation in your terminal.
 
 ```bash
 poetry run ira chat
 ```
 
-### Option B: Single Query
+### Option C: Single Query (CLI)
 
-Ask a quick question without entering a chat session.
+Ask a quick question. Use `--json` for script/Cursor consumption (stdout only).
 
 ```bash
 poetry run ira ask "What is the lead time for a new packaging machine?"
+poetry run ira ask "What is the lead time for a new packaging machine?" --json
 ```
 
-### Option C: REST API Server
+### Option D: Multi-Phase Task (CLI)
 
-Start the FastAPI server for integration with frontends or API testing.
+For research, analysis, or report generation, the task command runs the full agent loop and writes a report.
+
+```bash
+poetry run ira task "Full analysis of Acme deal and draft a proposal" --json
+```
+
+### Optional: REST API Server
+
+Start the FastAPI server only when you need the web UI or HTTP integrations.
 
 ```bash
 poetry run uvicorn ira.interfaces.server:app --reload
 ```
 
 API docs are available at [http://localhost:8000/docs](http://localhost:8000/docs) once the server is running.
-
-### Option D: Cursor IDE (Recommended)
-
-Open this repo in [Cursor](https://cursor.sh). The `.cursor/rules/` directory teaches Cursor how to start, query, and manage Ira automatically.
-
-```
-Step 1:  Open ira-v3 in Cursor
-Step 2:  Type "wake up Ira" in Cursor chat
-Step 3:  Wait ~60 seconds for all services to boot
-Step 4:  Ask anything — "@Ira what's the status of the Acme Packaging deal?"
-```
 
 ### Other CLI Commands
 
@@ -114,6 +124,7 @@ ira train          # Run sleep training from corrections
 ira health         # Check system vital signs
 ira agents         # List all agents and their power levels
 ira pipeline       # Show pipeline stage timings
+ira feedback "..."  # Record a correction for Ira to learn from
 ```
 
 ## A Note on Data
@@ -128,7 +139,7 @@ To start populating the knowledge base:
 poetry run ira ingest /path/to/your/documents/
 ```
 
-Or via the API:
+Or via the API (when the server is running):
 
 ```bash
 curl -X POST http://localhost:8000/api/ingest -F "file=@/path/to/document.pdf"

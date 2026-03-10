@@ -74,9 +74,9 @@ Here's the thing nobody tells you about AI coding assistants: they can do a lot 
 
 When you open this repo in Cursor, three things happen automatically:
 
-1. **Cursor learns who Ira is.** The `.cursor/rules/` directory contains rules that teach Cursor how to start Ira, query it, search emails, ingest documents, and shut it down. The `.cursor/agents/ira.md` file registers Ira as a Cursor subagent with 30 MCP tools. You don't configure anything. It just works.
+1. **Cursor becomes Ira.** The `.cursor/rules/` directory teaches Cursor how to run Ira **without starting the API server**: start Docker (databases only), run `ira ask` and `ira task` from the CLI so the full agent stack and RAG run locally, and fall back to a codebase-and-data workflow if the CLI fails. The `.cursor/agents/ira.md` file registers Ira as a Cursor subagent with 30 MCP tools. No uvicorn required.
 
-2. **You get natural language access to your entire business.** Say "wake up Ira" in Cursor chat. Then ask things like:
+2. **You get natural language access to your entire business.** Say "wake up Ira" in Cursor chat (Cursor starts Docker for Postgres, Qdrant, Neo4j, Redis). Then ask things like:
    - *"@Ira find all emails from Erik at Acme Packaging"*
    - *"@Ira what's the latest on the PF1 quote for GlobalPack?"*
    - *"@Ira draft a follow-up to the vendor who hasn't replied about the servo motors"*
@@ -89,12 +89,12 @@ When you open this repo in Cursor, three things happen automatically:
 ```
 Step 1:  Clone this repo and open it in Cursor
 Step 2:  Copy .env.example → .env, add your API keys
-Step 3:  Type "wake up Ira" in Cursor chat
-Step 4:  Wait ~60 seconds for all services to boot
-Step 5:  Ask Ira anything about your business
+Step 3:  Type "wake up Ira" in Cursor chat (Cursor starts Docker for DBs only)
+Step 4:  Ask Ira anything — Cursor runs ira ask "<question>" --json or the fallback workflow
+Step 5:  For complex tasks ("full analysis", "prepare a report"), Cursor runs ira task "<goal>" --json
 ```
 
-That's it. Cursor reads the rules in `.cursor/rules/ira-api.mdc`, knows how to start Docker, boot the server, and route your questions. You just talk to it.
+That's it. Cursor reads `.cursor/rules/ira-api.mdc` and `.cursor/rules/ira-cursor-workflow.mdc`, starts Docker (no API server), runs the CLI when you ask, and falls back to codebase/data search if the CLI isn't available. You just talk to it.
 
 ### What It Looks Like in Practice
 
@@ -460,27 +460,35 @@ alembic upgrade head
 
 ### 5. Launch
 
+**Primary — CLI (no server):** Cursor or your terminal runs Ira via the CLI. Full stack (agents, RAG, Postgres, Qdrant, Neo4j, Mem0) runs in-process.
+
 **CLI (interactive chat):**
 ```bash
 poetry run ira chat
 ```
 
-**CLI (single query):**
+**CLI (single query):** Use `--json` for Cursor/scripts (stdout only).
 ```bash
 poetry run ira ask "What's the lead time for a PF1 machine?"
+poetry run ira ask "What's the lead time for a PF1 machine?" --json
 ```
 
-**REST API:**
+**CLI (complex multi-phase task):**
+```bash
+poetry run ira task "Full analysis of Acme deal and draft a proposal" --json
+```
+
+**Optional — REST API:** Only when you want the web UI or HTTP integrations.
 ```bash
 poetry run uvicorn ira.interfaces.server:app --reload
 ```
 
-**MCP Server (for Cursor / Claude):**
+**Optional — MCP Server (for Cursor / Claude):**
 ```bash
 poetry run ira mcp
 ```
 
-**Web UI (for the team):**
+**Optional — Web UI (for the team):** Requires the API server to be running.
 ```bash
 cd web-ui && npm install && npm run dev
 ```
@@ -498,9 +506,12 @@ ira train          # Run sleep training from corrections
 ira health         # Check system vital signs
 ira agents         # List all agents and their power levels
 ira pipeline       # Show pipeline stage timings
+ira feedback "..." # Record a correction for Ira to learn from
 ```
 
 ## API Endpoints
+
+The **primary** way to query Ira is via the CLI (`ira ask`, `ira task`). The API is optional when you start the server (e.g. for the web UI or external integrations).
 
 | Method | Endpoint | Description |
 |:-------|:---------|:------------|

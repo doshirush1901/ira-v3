@@ -69,24 +69,27 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 
 ## Development Commands
 
+Ira runs **CLI-first**: no API server is required. Cursor (or any caller) runs `ira ask` and `ira task` from the project root; the full stack (agents, RAG, Postgres, Qdrant, Neo4j, Mem0) runs in-process.
+
 ```bash
 # Install
 poetry install
 
-# Infrastructure (Qdrant, Neo4j, PostgreSQL, Redis)
+# Infrastructure (Qdrant, Neo4j, PostgreSQL, Redis) — start only these; no uvicorn
 docker compose -f docker-compose.local.yml up -d
 
 # Database migrations
 alembic upgrade head
 
-# Run the server
-poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
-
 # Interactive CLI
 poetry run ira chat
 
-# Single query
+# Single query (--json for Cursor/scripts: stdout only)
 poetry run ira ask "What's the lead time for a PF1?"
+poetry run ira ask "What's the lead time for a PF1?" --json
+
+# Multi-phase task (plan → execute → report)
+poetry run ira task "Full analysis of Acme deal and draft a proposal" --json
 
 # Tests
 poetry run pytest
@@ -98,6 +101,7 @@ poetry run ira dream      # memory consolidation
 poetry run ira board      # board meeting
 poetry run ira ingest     # document ingestion
 poetry run ira health     # vital signs
+poetry run ira feedback "Correction text"        # record a correction
 
 # Email commands
 poetry run ira email sync                           # one-time inbox poll
@@ -105,7 +109,10 @@ poetry run ira email learn --thread-id "18f3a..."   # learn from a thread
 poetry run ira email rescan --after 2023/01/01      # deep historical scan
 poetry run ira email rescan --dry-run --resume      # resume a previous scan
 
-# Web UI (Next.js)
+# Optional: Run the API server (for web UI or HTTP integrations)
+poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
+
+# Web UI (Next.js) — requires API server
 cd web-ui && npm install && npm run dev             # http://localhost:3000
 ```
 
@@ -200,6 +207,8 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 
 ## API Endpoints
 
+Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used when the server is explicitly started (e.g. for the web UI or MCP).
+
 | Method | Path | Description |
 |:-------|:-----|:------------|
 | POST | `/api/query` | Send a message to Ira |
@@ -218,6 +227,7 @@ Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 | POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
 | GET | `/api/email/thread/{id}` | Fetch full email thread by Gmail thread ID |
 | POST | `/api/email/draft` | Draft an email via Calliope |
+| POST | `/api/email/send` | Send an email (only when user explicitly said "send"; requires OPERATIONAL mode) |
 | POST | `/api/email/rescan` | Deep historical scan with SSE progress streaming |
 | GET | `/api/email/rescan` | Check status of running/last rescan |
 | GET | `/api/corrections` | List recent corrections (filterable by status) |

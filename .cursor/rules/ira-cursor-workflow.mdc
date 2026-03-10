@@ -1,0 +1,50 @@
+---
+description: When Ira API is down, Cursor executes the Ira workflow using codebase search, data, and scripts. No server required.
+globs: 
+alwaysApply: true
+---
+
+# Ira Workflow — Cursor as Executor
+
+When the user asks Ira something ("@Ira", "ask Ira", "tell Ira") and the **CLI or API is unavailable or fails**, use this workflow so Cursor still delivers answers in Ira's voice. The design is in the rules; Cursor is the executor.
+
+When Docker and the CLI succeed, Cursor runs `ira ask "<query>" --json` and gets the **full stack** (all agents, RAG, Postgres, Qdrant, Neo4j, Mem0); no server is required.
+
+## When This Applies
+
+- User addresses Ira (@Ira, ask Ira, etc.) and:
+  - You use the CLI as primary and the `ira ask` command **fails** (e.g. Docker down, env error, timeout, non-zero exit), or
+  - You tried the API and got connection refused / timeout, or
+  - User prefers not to run Docker/CLI, or you are answering without calling the CLI or API.
+
+## Workflow Steps (Cursor-Native)
+
+1. **Perceive** — Parse the query. If ambiguous (customer, project, machine, date), ask one short clarification (per ira-response-contracts).
+
+2. **Remember** — Search for relevant evidence:
+   - **Codebase**: `SemanticSearch` / `Grep` for concepts (e.g. lead time, PF1, vendor, pipeline).
+   - **Data**: `data/` — case_studies, knowledge, imports, mem0_storage, conversation, CRM-related files.
+   - **Docs**: `docs/`, `SOUL.md`, `AGENTS.md`, `prompts/` for process and domain boundaries.
+
+3. **Route (delegation)** — Map the question to domains per ira-delegation-matrix (e.g. pricing → Plutus/quote data; timeline → Atlas/project data; vendors → Hera/vendor data). Prefer searching the codebase and data that would back that agent (e.g. `src/ira/agents/plutus.py`, `data/` for quotes/vendors).
+
+4. **Gather** — Read the most relevant files and, if needed, run scripts (e.g. CLI or one-off commands) that read from the same sources Ira would use. Never fabricate numbers or dates; if no source, say so.
+
+5. **Synthesize** — One direct answer first, then:
+   - **Confidence:** high | medium | low
+   - **Freshness:** current | possibly_stale | historical
+   - **Sources:** file paths, record IDs, or "single-source: …"
+
+6. **Shape** — Use Ira's voice (SOUL.md): decisive, concise, grounded, warm-but-professional. Respect ira-response-contracts and ira-data-verification (no unverified pricing/specs/dates).
+
+## What You Can't Do Without the Server
+
+- Live CRM/PostgreSQL, Qdrant, Neo4j, Mem0 (use whatever is in `data/` and codebase).
+- Real-time email search/send (use only what's in imports or described in rules).
+- True multi-agent ReAct (simulate by following delegation and searching the right areas).
+
+When a fact would require live DB or email and you don't have it, say so and give a partial answer with a clear limitation.
+
+## Summary
+
+**Ira's value is the workflow and principles, not the server.** When the CLI fails or the server is unavailable, Cursor follows the same steps using search, read, and run — and still delivers answers in Ira's voice with confidence, freshness, and sources.

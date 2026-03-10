@@ -28,8 +28,10 @@ for i in $(seq 1 15); do docker info > /dev/null 2>&1 && echo "Docker ready" && 
 
 ### Step B — Database containers
 
+Run from the **project root** (workspace root, where `docker-compose.local.yml` and `.env` live):
+
 ```bash
-cd /Users/rushabhdoshi/Desktop/ira-v3
+cd /Users/rushabhdoshi/ira-v3
 docker compose -f docker-compose.local.yml up -d
 ```
 
@@ -39,43 +41,21 @@ Verify all 4 containers (postgres, qdrant, neo4j, redis) are running:
 docker compose -f docker-compose.local.yml ps --format "table {{.Name}}\t{{.Status}}"
 ```
 
-### Step C — Start the Ira API server
-
-Check if the server is already running first:
-
-```bash
-curl -s --max-time 2 http://localhost:8000/api/health > /dev/null 2>&1 && echo "ALREADY_RUNNING" || echo "NOT_RUNNING"
-```
-
-If NOT_RUNNING, start uvicorn in a **background terminal** (block_until_ms: 0):
-
-```bash
-cd /Users/rushabhdoshi/Desktop/ira-v3 && poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
-```
-
-### Step D — Wait for healthy
-
-Poll the health endpoint until Ira is fully booted (can take 30-60s):
-
-```bash
-for i in $(seq 1 30); do
-  resp=$(curl -s --max-time 3 http://localhost:8000/api/health 2>/dev/null)
-  if echo "$resp" | grep -q '"status"'; then echo "Ira is awake"; break; fi
-  sleep 2
-done
-```
-
-Then run a deep health check and report the result:
-
-```bash
-curl -s http://localhost:8000/api/deep-health | python3 -m json.tool
-```
-
-Tell the user which services are healthy, degraded, or unavailable.
+Ira runs via the **CLI**; no API server is started. For queries, Cursor runs `ira ask` (see section 2).
 
 ## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
 
-When the user mentions @Ira and asks a question, use the **streaming endpoint** for live progress:
+**Primary — CLI (full stack, no server):** Run from the **project root**:
+
+```bash
+cd /Users/rushabhdoshi/ira-v3 && poetry run ira ask "<user question>" --json
+```
+
+- Parse stdout as JSON: `{"response": "<markdown>", "agents_consulted": ["clio", "athena", ...]}`.
+- Display the `response` as Markdown. Optionally mention which agents were consulted (`agents_consulted`).
+- **If the command fails** (non-zero exit, timeout, or no valid JSON): do not insist on starting the server. Follow the **Cursor-as-Ira workflow** in `.cursor/rules/ira-cursor-workflow.mdc`: use codebase search, `data/`, and scripts to answer in Ira's voice with confidence/sources/freshness. Optionally tell the user the CLI failed and you're using the fallback workflow.
+
+**Alternative — API (only when server is already running):** If the user has explicitly started the API server, you can use the streaming endpoint for live progress:
 
 ```bash
 curl -s -N -X POST http://localhost:8000/api/query/stream \
@@ -83,36 +63,7 @@ curl -s -N -X POST http://localhost:8000/api/query/stream \
   -d '{"query": "<user question>", "user_id": "rushabh_doshi"}'
 ```
 
-This returns Server-Sent Events (SSE). Parse the output and display progress to the user as it arrives:
-
-- `event: perceiving` — "Perceiving input..."
-- `event: remembering` — "Recalling context..."
-- `event: fast_path` — "Fast path matched: <category>" (query answered in 1-3s)
-- `event: sphinx_checking` — "Checking query clarity..."
-- `event: sphinx_clarifying` — Ira is asking clarifying questions
-- `event: routing` — "Routing query..."
-- `event: agent_started` — "Consulting <agent> (<role>)..."
-- `event: tool_called` — "<agent> is using <tool>..."
-- `event: agent_thinking` — "<agent> is thinking (iteration <n>)..."
-- `event: agent_done` — "<agent> finished"
-- `event: synthesizing` — "Athena is synthesizing responses..."
-- `event: enriching` — "Enriching context..."
-- `event: assessing` — "Assessing confidence..."
-- `event: reflecting` — "Reflecting..."
-- `event: shaping` — "Shaping response..."
-- `event: final_answer` — The final response JSON: `{"response": "...", "agents_consulted": [...]}`
-
-Display each progress event as a brief status line, then format the `final_answer` response as clean Markdown.
-
-**Fallback:** If the streaming endpoint fails or the user prefers non-streaming, use the regular endpoint:
-
-```bash
-curl -s -X POST http://localhost:8000/api/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "<user question>", "user_id": "rushabh_doshi"}'
-```
-
-- If connection is refused, tell the user to start Ira first (see section 1).
+Parse SSE events and display the `final_answer` response as Markdown. If connection is refused, use the CLI primary path or the Cursor-as-Ira workflow instead.
 
 ## 2b. Complex Tasks ("@Ira do a full analysis...", "@Ira prepare a proposal...")
 
@@ -173,6 +124,24 @@ curl -s http://localhost:8000/api/email/thread/<thread_id> | python3 -m json.too
 
 For complex email questions (context, history, what to reply), prefer routing through /api/query — agents now have search_emails and read_email_thread tools and will use Gmail directly.
 
+## 4b. Email reply flow (draft → show in Cursor → revise or send)
+
+When the user wants to **read mail and draft a reply**, then **see the draft here in Cursor** and either **send** or **ask for changes** and redraft until they say send, follow this flow:
+
+1. **Draft** — Use the task loop or a single query so Ira reads the thread and drafts a reply. Example task goal: "Read my latest email from [person/thread] and draft a reply for me."
+2. **Display in Cursor** — Present the draft clearly in your response: show **To**, **Subject**, and **Body** (and note **thread_id** if it's a reply, for sending in the same thread). The user must see the full draft in Cursor.
+3. **If the user says "change X" or "revise..."** — Treat as a follow-up: ask Ira to redraft with the new instruction, including the current draft in context (e.g. "Revise this email draft: [user's change]. Current draft body: [body]. To: [to], Subject: [subject]."). Show the new draft again. Repeat until the user is satisfied.
+4. **If the user says "send" or "send it"** — Call the send endpoint with the **current** draft's to, subject, body, and thread_id (if reply):
+
+```bash
+curl -s -X POST http://localhost:8000/api/email/send \
+  -H "Content-Type: application/json" \
+  -d '{"to": "<from draft>", "subject": "<from draft>", "body": "<from draft>", "thread_id": "<if reply>"}'
+```
+
+- Sending only works when `IRA_EMAIL_MODE=OPERATIONAL`; in TRAINING mode the API returns 403.
+- **Only** call `/api/email/send` when the user has explicitly said to send. Never auto-send.
+
 ## 5. Ingesting Files ("learn this file", "ingest this")
 
 Upload a file into Ira's knowledge base:
@@ -190,6 +159,7 @@ curl -s -X POST http://localhost:8000/api/ingest \
 - **Dream report:** `curl -s http://localhost:8000/api/dream-report | python3 -m json.tool`
 - **Re-OCR scanned PDFs:** `curl -s -X POST http://localhost:8000/api/reingest-scanned -H "Content-Type: application/json" -d '{}' | python3 -m json.tool`
 - **Email draft:** `curl -s -X POST http://localhost:8000/api/email/draft -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "context": "<instructions>"}'`
+- **Email send (only when user said "send"):** `curl -s -X POST http://localhost:8000/api/email/send -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "body": "<draft body>", "thread_id": "<optional>"}'`
 - **Email rescan (SSE):** `curl -s -N -X POST http://localhost:8000/api/email/rescan -H "Content-Type: application/json" -d '{"after": "2023/01/01", "before": "2026/03/08"}'`
 - **Email rescan status:** `curl -s http://localhost:8000/api/email/rescan | python3 -m json.tool`
 - **Corrections list:** `curl -s "http://localhost:8000/api/corrections?limit=50" | python3 -m json.tool`

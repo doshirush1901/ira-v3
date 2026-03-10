@@ -2,7 +2,7 @@
 
 A team-facing web interface for Ira, built with Next.js (App Router),
 Tailwind CSS, and shadcn/ui. Connects to the FastAPI backend via SSE
-streaming.
+streaming. **Requires the API server to be running** (`poetry run uvicorn ira.interfaces.server:app --reload`); the primary way to use Ira without the web UI is via the CLI (`ira ask`, `ira task`) or Cursor.
 
 ## Pages
 
