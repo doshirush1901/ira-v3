@@ -5,6 +5,22 @@ All notable changes to Ira are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Cursor-as-Ira (CLI-first)** — Ira runs without starting the API server: Cursor starts Docker (DBs only), runs `ira ask "<query>" --json` and `ira task "<goal>" --json` from the project root; full stack (agents, RAG, Postgres, Qdrant, Neo4j, Mem0) runs in-process. Fallback workflow when CLI fails (`.cursor/rules/ira-cursor-workflow.mdc`).
+- **CLI `--json`** — `ira ask` and `ira task` support `--json` for machine-readable stdout (Cursor/scripts).
+- **CLI `ira task`** — Multi-phase task command using TaskOrchestrator; report to `data/reports/`, optional `--json` output.
+- **Cursor rules & workflows index** — `docs/CURSOR_WORKFLOWS.md` indexes all custom workflows (start, query, task, email reply, feedback, ingest, fallback, stable modes, lead engagement). Linked from README, GETTING_STARTED, and `docs/README.md`.
+- **Stable modes** — `docs/stable_modes.md` and `.cursor/rules/ira-stable-modes.mdc` for "add this to stable list" flow.
+
+### Changed
+- **Start Ira** — Now Docker only (Postgres, Qdrant, Neo4j, Redis); no uvicorn or health-check steps in rules.
+- **Query Ira** — Primary path: `ira ask --json`; API streaming is alternative when server is already running.
+- **Complex tasks** — Primary: `ira task "<goal>" --json`; API task stream when server running. Task loop fallback uses Cursor-as-Ira workflow.
+- **Docs** — README, AGENTS, GETTING_STARTED, CONTRIBUTING, ARCHITECTURE, WHY_IRA, scripts/README, src/ira/README, web-ui/README, .cursor/agents/ira.md updated for CLI-first and workflow index.
+- **Stop Ira** — Path in rules aligned to project root (no Desktop path).
+
 ## [3.3.1] - 2026-03-09
 
 ### Added

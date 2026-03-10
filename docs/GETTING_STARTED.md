@@ -148,6 +148,7 @@ curl -X POST http://localhost:8000/api/ingest -F "file=@/path/to/document.pdf"
 ## Next Steps
 
 - Read [Why Ira?](WHY_IRA.md) to understand the use cases and philosophy behind the system.
+- See [Cursor rules & workflows](CURSOR_WORKFLOWS.md) for an index of all custom workflows (start, query, task, email reply, feedback, ingest, fallback, stable modes).
 - See [ARCHITECTURE.md](ARCHITECTURE.md) for a deep dive into the technical design.
 - See [SYSTEM_AUDIT.md](SYSTEM_AUDIT.md) for the production readiness assessment.
 - Check the main [README](../README.md) for the full agent roster, memory architecture, and API reference.

@@ -6,6 +6,8 @@ Ira is a multi-agent AI system built for Machinecraft. It processes user
 requests through an 11-stage pipeline, delegates work to a pantheon of 27
 specialist agents, and maintains persistent memory across conversations.
 
+**Entry points:** The primary way to run Ira is the **CLI** (`ira ask`, `ira task`, `ira chat`) from the project root — Cursor or the terminal invokes it; the full stack runs in-process. No API server is required. The **API** (FastAPI) and **MCP** server are optional when you need the web UI or tool-based integrations.
+
 ```
 User Input (CLI / API / Email)
     │

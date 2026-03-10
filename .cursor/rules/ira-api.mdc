@@ -179,7 +179,7 @@ pkill -f "uvicorn ira.interfaces.server:app" && echo "Ira shut down"
 Optionally stop the database containers too:
 
 ```bash
-cd /Users/rushabhdoshi/Desktop/ira-v3 && docker compose -f docker-compose.local.yml down
+cd /Users/rushabhdoshi/ira-v3 && docker compose -f docker-compose.local.yml down
 ```
 
 ## Important Rules

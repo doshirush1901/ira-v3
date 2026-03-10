@@ -22,7 +22,7 @@ And here's the twist: **you talk to it from your code editor.**
 
 Here's a thing that happened while nobody was paying attention: code editors got really good at talking to AI. Cursor, specifically, can run shell commands, make HTTP requests, follow rules, and — this is the important part — use tools via something called MCP (Model Context Protocol).
 
-So instead of building Yet Another Dashboard or Yet Another Slack Bot, we did something different. We gave Cursor 30 tools that connect directly to Ira's brain. You open your IDE, and you're sitting at the controls of a 27-agent AI system with access to your CRM, your email, your knowledge base, your production schedules, and your company's entire memory.
+So instead of building Yet Another Dashboard or Yet Another Slack Bot, we did something different. We gave Cursor 30 tools that connect directly to Ira's brain — and, more importantly, **Cursor can run Ira without starting a server**: it starts Docker (databases only), runs `ira ask` and `ira task` from the CLI so the full 27-agent stack and RAG run locally, and falls back to a codebase-and-data workflow if the CLI isn't available. You open your IDE, and you're sitting at the controls of a 27-agent AI system with access to your CRM, your email, your knowledge base, your production schedules, and your company's entire memory.
 
 No browser tabs. No context switching. You just... talk.
 

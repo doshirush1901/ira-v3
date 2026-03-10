@@ -8,6 +8,7 @@ root [README.md](../README.md).
 | File | Description |
 |:-----|:------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full technical architecture — pipeline, agents, brain, body systems |
+| [CURSOR_WORKFLOWS.md](CURSOR_WORKFLOWS.md) | Index of all Cursor rules and custom workflows (start, query, task, email, feedback, ingest, fallback, stable modes) |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Step-by-step setup guide for new developers |
 | [SYSTEM_AUDIT.md](SYSTEM_AUDIT.md) | Comprehensive production readiness audit (v3.3.0) |
 | [WHY_IRA.md](WHY_IRA.md) | What Ira does, why it exists, and real use cases |

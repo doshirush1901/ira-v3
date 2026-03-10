@@ -23,6 +23,7 @@
 |:------|:------------|
 | **[Why Ira?](docs/WHY_IRA.md)** | What Ira does, why it exists, and real use cases — email intelligence, agent loop, board meetings, dream cycles |
 | **[Getting Started](docs/GETTING_STARTED.md)** | Step-by-step setup: prerequisites, installation, configuration, and first interactions |
+| **[Cursor rules & workflows](docs/CURSOR_WORKFLOWS.md)** | Index of all custom workflows: start/query/task, email reply flow, feedback, ingest, fallback, stable modes, lead engagement |
 
 ## Table of Contents
 
@@ -38,6 +39,7 @@
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
+- [Cursor rules & workflows](docs/CURSOR_WORKFLOWS.md)
 - [API Endpoints](#api-endpoints)
 - [Running Tests](#running-tests)
 - [Contributing](#contributing)

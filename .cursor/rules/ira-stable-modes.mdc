@@ -1,0 +1,11 @@
+---
+description: When user says "add this to stable list", add the current item to docs/stable_modes.md
+globs: 
+alwaysApply: false
+---
+
+# Ira stable list
+
+- **Stable modes** are documented in `docs/stable_modes.md`. They are well-defined, supported flows we keep stable.
+- When the user says **"add this to stable list"**, add the current topic, flow, or capability they’re referring to to `docs/stable_modes.md` (under "Current stable modes"), with a short description and where it’s implemented or documented.
+- Keep each entry to 1–3 lines. Preserve existing entries when adding new ones.

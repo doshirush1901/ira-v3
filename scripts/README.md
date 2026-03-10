@@ -20,8 +20,10 @@ infrastructure management.
 | `seed_neo4j_from_ingestion_log.py` | Seed `Document`/`Fact`/`Correction` lineage graph from local stores |
 | `shakti_train.sh` | Fine-tuning workflow shell script |
 | `entrypoint.sh` | Docker container entrypoint |
-| `start.sh` | Start Ira (infrastructure + server) |
-| `stop.sh` | Stop Ira (server + infrastructure) |
+| `start.sh` | Start Ira (production: infrastructure + server via docker-compose.prod.yml) |
+| `stop.sh` | Stop Ira (production stack) |
+
+For **local development**, Ira runs CLI-first: start only infrastructure (`docker compose -f docker-compose.local.yml up -d`), then use `ira ask`, `ira task`, or `ira chat` — no API server required. See root [README](../README.md) and [GETTING_STARTED](../docs/GETTING_STARTED.md).
 
 ## Usage
 
