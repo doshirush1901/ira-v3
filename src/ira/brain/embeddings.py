@@ -17,7 +17,7 @@ import sqlite3
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import httpx
 
@@ -29,10 +29,12 @@ _VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings"
 _MAX_BATCH_SIZE = 128
 _DEFAULT_CACHE_SIZE = 4096
 _DEFAULT_CACHE_PATH = "data/brain/embedding_cache.db"
+_SQLITE_TIMEOUT_S = 30.0
 
 _MAX_RETRIES = 5
 _INITIAL_BACKOFF_S = 0.5
 _BACKOFF_MULTIPLIER = 2
+_EMBED_REDIS_TTL = 7 * 86400  # 7 days
 
 
 def _text_hash(text: str) -> str:
@@ -43,8 +45,10 @@ def _init_sqlite_cache(path: str) -> None:
     """Create cache directory and table if they do not exist."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_S)
     try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -62,8 +66,9 @@ def _init_sqlite_cache(path: str) -> None:
 def _sqlite_get_sync(path: str, text_hash: str) -> list[float] | None:
     """Synchronous SQLite cache lookup."""
     try:
-        conn = sqlite3.connect(path)
+        conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_S)
         try:
+            conn.execute("PRAGMA busy_timeout=30000;")
             row = conn.execute(
                 "SELECT embedding FROM embedding_cache WHERE text_hash = ?",
                 (text_hash,),
@@ -82,8 +87,9 @@ def _sqlite_get_sync(path: str, text_hash: str) -> list[float] | None:
 def _sqlite_put_sync(path: str, text_hash: str, embedding: list[float]) -> None:
     """Synchronous SQLite cache write."""
     try:
-        conn = sqlite3.connect(path)
+        conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_S)
         try:
+            conn.execute("PRAGMA busy_timeout=30000;")
             conn.execute(
                 """
                 INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, created_at)
@@ -118,7 +124,15 @@ class EmbeddingService:
         self._cache: OrderedDict[str, list[float]] = OrderedDict()
         self._cache_size = cache_size
         self._cache_path = cache_path
+        self._redis_cache: Any = None
         _init_sqlite_cache(cache_path)
+
+    def set_redis_cache(self, cache: Any) -> None:
+        """Inject Redis for optional second-level embedding cache (7-day TTL)."""
+        self._redis_cache = cache
+
+    def _redis_embed_key(self, text_hash: str) -> str:
+        return f"emb:{self._model}:{text_hash}"
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -150,17 +164,40 @@ class EmbeddingService:
         if not l1_miss_indices:
             return results  # type: ignore[return-value]
 
-        # L2 (SQLite) lookup for L1 misses (parallel)
+        # L2 (Redis) lookup for L1 misses when available
+        l2_redis_results: list[list[float] | None] = [None] * len(l1_miss_indices)
+        if self._redis_cache and self._redis_cache.available:
+            try:
+                l2_redis_results = await asyncio.gather(
+                    *[
+                        self._redis_cache.get_json(
+                            self._redis_embed_key(_text_hash(texts[idx]))
+                        )
+                        for idx in l1_miss_indices
+                    ]
+                )
+            except Exception:
+                pass
+        after_redis_miss: list[int] = []
+        for i, idx in enumerate(l1_miss_indices):
+            vec = l2_redis_results[i] if i < len(l2_redis_results) else None
+            if vec is not None:
+                results[idx] = vec
+                self._cache_put(texts[idx], vec)
+            else:
+                after_redis_miss.append(idx)
+
+        # L3 (SQLite) lookup for remaining misses
         l2_results = await asyncio.gather(
             *[
                 asyncio.to_thread(
                     _sqlite_get_sync, self._cache_path, _text_hash(texts[idx])
                 )
-                for idx in l1_miss_indices
+                for idx in after_redis_miss
             ]
         )
         l2_miss_indices: list[int] = []
-        for idx, vec in zip(l1_miss_indices, l2_results):
+        for idx, vec in zip(after_redis_miss, l2_results):
             if vec is not None:
                 results[idx] = vec
                 self._cache_put(texts[idx], vec)
@@ -185,6 +222,20 @@ class EmbeddingService:
                     for idx, vec in zip(l2_miss_indices, vectors)
                 ]
             )
+            if self._redis_cache and self._redis_cache.available:
+                try:
+                    await asyncio.gather(
+                        *[
+                            self._redis_cache.set_json(
+                                self._redis_embed_key(_text_hash(texts[idx])),
+                                vec,
+                                ttl_seconds=_EMBED_REDIS_TTL,
+                            )
+                            for idx, vec in zip(l2_miss_indices, vectors)
+                        ]
+                    )
+                except Exception:
+                    pass
 
         return results  # type: ignore[return-value]
 
@@ -194,8 +245,18 @@ class EmbeddingService:
         if cached is not None:
             return cached
 
+        th = _text_hash(query)
+        if self._redis_cache and self._redis_cache.available:
+            try:
+                vec = await self._redis_cache.get_json(self._redis_embed_key(th))
+                if vec is not None:
+                    self._cache_put(query, vec)
+                    return vec
+            except Exception:
+                pass
+
         vec = await asyncio.to_thread(
-            _sqlite_get_sync, self._cache_path, _text_hash(query)
+            _sqlite_get_sync, self._cache_path, th
         )
         if vec is not None:
             self._cache_put(query, vec)
@@ -204,8 +265,17 @@ class EmbeddingService:
         vectors = await self._call_api([query], input_type="query")
         self._cache_put(query, vectors[0])
         await asyncio.to_thread(
-            _sqlite_put_sync, self._cache_path, _text_hash(query), vectors[0]
+            _sqlite_put_sync, self._cache_path, th, vectors[0]
         )
+        if self._redis_cache and self._redis_cache.available:
+            try:
+                await self._redis_cache.set_json(
+                    self._redis_embed_key(th),
+                    vectors[0],
+                    ttl_seconds=_EMBED_REDIS_TTL,
+                )
+            except Exception:
+                pass
         return vectors[0]
 
     # ── batching ─────────────────────────────────────────────────────────

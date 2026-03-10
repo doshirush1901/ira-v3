@@ -63,6 +63,9 @@ ragas = ">=0.2"
 neo4j-graphrag = ">=1.0"
 mcp = ">=1.0"
 sentry-sdk = {version = ">=2.0", extras = ["fastapi"]}
+xlrd = "^2.0.2"
+aiofiles = ">=24.0"
+voyageai = "^0.3.0"
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"

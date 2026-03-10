@@ -1,6 +1,6 @@
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.12.0
     restart: unless-stopped
     ports:
       - "${QDRANT_PORT:-6333}:6333"
@@ -25,8 +25,6 @@ services:
     ports:
       - "${NEO4J_HTTP_PORT:-7474}:7474"
       - "${NEO4J_BOLT_PORT:-7687}:7687"
-    env_file:
-      - .env
     environment:
       NEO4J_AUTH: "${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-ira_knowledge_graph}"
       NEO4J_PLUGINS: '["apoc"]'
@@ -47,7 +45,7 @@ services:
           memory: 2G
 
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     restart: unless-stopped
     ports:
       - "${POSTGRES_PORT:-5432}:5432"

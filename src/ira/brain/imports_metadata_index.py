@@ -271,7 +271,7 @@ async def build_index(
         await _save_progress(i + 1, total, fp.name)
 
         try:
-            preview = _extract_preview(fp)
+            preview = await asyncio.to_thread(_extract_preview, fp)
 
             metadata: dict[str, Any] | None = None
             if use_llm and preview and len(preview) > 50:

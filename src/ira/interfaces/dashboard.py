@@ -47,6 +47,45 @@ async def dashboard(request: Request) -> HTMLResponse:
     crm = _svc("crm")
     learning_hub = _svc("learning_hub")
 
+    agent_leaderboard: list[dict[str, Any]] = []
+    try:
+        from ira.brain.power_levels import PowerLevelTracker
+        tracker = PowerLevelTracker()
+        await tracker._load()
+        agent_leaderboard = tracker.get_leaderboard()
+    except Exception:
+        logger.debug("Power levels unavailable for dashboard", exc_info=True)
+
+    tool_success_rates: list[dict[str, Any]] = []
+    try:
+        tracker = _svc("tool_stats_tracker")
+        if tracker is not None:
+            tool_success_rates = tracker.get_tool_success_rates(by_tool=True)
+    except Exception:
+        logger.debug("Tool stats unavailable for dashboard", exc_info=True)
+
+    pipeline_stage_labels: list[str] = []
+    pipeline_stage_values: list[float] = []
+    try:
+        pipeline = _svc("pipeline")
+        if hasattr(pipeline, "get_recent_stage_timings"):
+            timings = pipeline.get_recent_stage_timings(24)
+            if timings:
+                stage_names = list(timings[0].get("stages", {}).keys()) if timings else []
+                pipeline_stage_labels = stage_names
+                if stage_names:
+                    totals: dict[str, list[float]] = {s: [] for s in stage_names}
+                    for run in timings:
+                        for s, dur in run.get("stages", {}).items():
+                            if s in totals:
+                                totals[s].append(dur)
+                    pipeline_stage_values = [
+                        sum(totals[s]) / len(totals[s]) if totals[s] else 0.0
+                        for s in stage_names
+                    ]
+    except Exception:
+        logger.debug("Pipeline timings unavailable", exc_info=True)
+
     interactions = await crm.list_interactions()
     pipeline = await crm.get_pipeline_summary()
     campaigns = await crm.list_campaigns(filters={"status": "ACTIVE"})
@@ -107,5 +146,9 @@ async def dashboard(request: Request) -> HTMLResponse:
         "intent_values": intent_values,
         "feedback_trend_labels": feedback_trend_labels,
         "feedback_trend_values": feedback_trend_values,
+        "agent_leaderboard": agent_leaderboard,
+        "tool_success_rates": tool_success_rates,
+        "pipeline_stage_labels": pipeline_stage_labels,
+        "pipeline_stage_values": pipeline_stage_values,
     }
     return templates.TemplateResponse("dashboard.html", context)

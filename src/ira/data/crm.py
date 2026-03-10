@@ -327,6 +327,7 @@ class CRMDatabase:
             self._engine, expire_on_commit=False
         )
         self._event_bus = event_bus
+        self._closed = False
         self._initialized = True
 
     @classmethod
@@ -360,6 +361,13 @@ class CRMDatabase:
     async def create_tables(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+    async def close(self) -> None:
+        """Dispose the SQLAlchemy engine (idempotent)."""
+        if self._closed:
+            return
+        await self._engine.dispose()
+        self._closed = True
 
     # ── Company CRUD ─────────────────────────────────────────────────────
 
@@ -410,6 +418,7 @@ class CRMDatabase:
             session.add(contact)
             await session.commit()
             await session.refresh(contact)
+            _ = contact.company  # eager-load so to_dict() works after session closes
         await self._emit("contact_created", "contact", str(contact.id), contact.to_dict())
         return contact
 

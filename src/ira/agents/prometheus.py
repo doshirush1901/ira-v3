@@ -218,7 +218,8 @@ class Prometheus(BaseAgent):
         if task == "update_crm":
             return await self.use_skill(
                 "update_crm_record",
-                record_id=ctx.get("record_id", ""),
+                type=ctx.get("record_type", "deal"),
+                id=ctx.get("record_id", ""),
                 updates=ctx.get("updates", {}),
             )
 
@@ -239,10 +240,10 @@ class Prometheus(BaseAgent):
                 health = await si.assess_customer_health(contact_email)
                 if health:
                     return f"Customer health: {health}"
-            return ""
-        except (IraError, Exception):
-            logger.debug("SalesIntelligence not available")
-            return ""
+            return "(No customer health data available for this contact.)"
+        except (IraError, Exception) as exc:
+            logger.debug("SalesIntelligence not available: %s", exc)
+            return f"Error: Could not retrieve customer health; SalesIntelligence unavailable ({exc})."
 
     async def _build_crm_context(self, query: str, ctx: dict[str, Any]) -> str:
         try:
@@ -315,7 +316,7 @@ class Prometheus(BaseAgent):
                         f"Status: {q.status.value if hasattr(q.status, 'value') else q.status}"
                     )
 
-            return "\n".join(parts) if parts else ""
-        except (DatabaseError, Exception):
+            return "\n".join(parts) if parts else "(No quote data found.)"
+        except (DatabaseError, Exception) as exc:
             logger.exception("Quote context build failed in Prometheus")
-            return ""
+            return f"Error: Could not retrieve quote context; quotes service failed ({exc})."

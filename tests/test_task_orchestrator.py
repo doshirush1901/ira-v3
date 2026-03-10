@@ -477,11 +477,36 @@ class TestRedisStatePersistence:
         pantheon = _mock_pantheon(agents)
         orch = TaskOrchestrator(pantheon=pantheon, redis_cache=redis)
 
-        task_id = await orch.create_task("Test")
-        result = await orch.run_task(task_id)
+        with patch("ira.systems.task_orchestrator._REPORTS_DIR", tmp_path):
+            task_id = await orch.create_task("Test")
+            result = await orch.run_task(task_id)
 
-        assert result.status == "error"
-        assert "not found" in result.summary.lower()
+        assert result.status == "complete"
+        assert result.file_path
+
+        state = await orch.get_task_state(task_id)
+        assert state is not None
+        assert state["status"] == "complete"
+
+        tasks = await orch.list_tasks(limit=10)
+        assert tasks
+        assert tasks[0]["task_id"] == task_id
+
+    async def test_events_available_without_redis(self):
+        redis = MagicMock()
+        redis.available = False
+        redis.set_json = AsyncMock(return_value=False)
+        redis.get_json = AsyncMock(return_value=None)
+
+        orch = TaskOrchestrator(pantheon=_mock_pantheon({}), redis_cache=redis)
+        task_id = await orch.create_task("Event fallback")
+        await orch.append_task_event(task_id, {"type": "phase_started"})
+        await orch.append_task_event(task_id, {"type": "phase_done"})
+
+        events = await orch.get_task_events(task_id, limit=10)
+        assert len(events) == 2
+        assert events[0]["type"] == "phase_started"
+        assert events[1]["type"] == "phase_done"
 
     async def test_get_task_state_returns_persisted_state(self, orchestrator):
         task_id = await orchestrator.create_task("Status check task")

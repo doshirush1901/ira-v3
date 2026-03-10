@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import importlib
 import importlib.util
-import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +23,11 @@ from httpx import ASGITransport, AsyncClient
 from ira.config import EmailMode
 from ira.data.models import Channel, Contact, Direction, Email, KnowledgeState
 from ira.schemas.llm_outputs import ReActDecision
+
+
+async def _echo(x):
+    """Return input as-is (for Mnemon mock in pipeline tests)."""
+    return x
 
 _has_google_auth = importlib.util.find_spec("google_auth_oauthlib") is not None
 _has_neo4j = importlib.util.find_spec("neo4j") is not None
@@ -1454,3 +1458,130 @@ class TestRequestPipeline:
         result, agents = await pipe.process_request("Hello", "CLI", "bob")
         assert result == "Shaped minimal"
         assert isinstance(agents, list)
+
+    async def test_guardrails_fail_closed_on_confidentiality_violation(
+        self, pipeline, mock_pantheon, mock_voice,
+    ):
+        mock_pantheon.process = AsyncMock(
+            return_value="Internal margin is 25 and vendor price is $1000.",
+        )
+        with patch(
+            "ira.brain.guardrails.check_confidentiality",
+            new=AsyncMock(return_value={
+                "safe": False,
+                "leaked_categories": ["internal_margin"],
+                "flagged_snippets": ["margin is 25"],
+            }),
+        ), patch(
+            "ira.brain.guardrails.check_competitor_mentions",
+            new=AsyncMock(return_value={"clean": True, "mentions": []}),
+        ):
+            await pipeline.process_request(
+                "Share internal numbers for this deal",
+                "CLI",
+                "alice_cli",
+            )
+
+        shaped_input = mock_voice.shape_response.call_args.args[0]
+        assert "can't provide that response safely" in shaped_input.lower()
+
+    async def test_guardrails_fail_closed_on_checker_exception(
+        self, pipeline, mock_pantheon, mock_voice,
+    ):
+        mock_pantheon.process = AsyncMock(return_value="Potentially unsafe answer")
+        with patch(
+            "ira.brain.guardrails.check_confidentiality",
+            new=AsyncMock(side_effect=RuntimeError("conf check failed")),
+        ), patch(
+            "ira.brain.guardrails.check_competitor_mentions",
+            new=AsyncMock(return_value={"clean": True, "mentions": []}),
+        ):
+            await pipeline.process_request(
+                "Provide exact sensitive figures",
+                "CLI",
+                "alice_cli",
+            )
+
+        shaped_input = mock_voice.shape_response.call_args.args[0]
+        assert "can't provide that response safely" in shaped_input.lower()
+
+    def _mnemon_echo_fixture(self, full_pipeline):
+        """Ensure Mnemon mock echoes raw_response so later steps get a string."""
+        mnemon_mock = MagicMock()
+        mnemon_mock.check_and_correct = AsyncMock(side_effect=_echo)
+        orig_get = full_pipeline._pantheon.get_agent
+        def get_agent(name):
+            if name == "mnemon":
+                return mnemon_mock
+            return orig_get(name)
+        full_pipeline._pantheon.get_agent = MagicMock(side_effect=get_agent)
+
+    async def test_faithfulness_hard_threshold_blocks_response(
+        self, full_pipeline, mock_pantheon, mock_voice,
+    ):
+        self._mnemon_echo_fixture(full_pipeline)
+        mock_pantheon.process = AsyncMock(return_value="Speculation that contradicts docs.")
+        full_pipeline._pantheon.retriever = AsyncMock()
+        full_pipeline._pantheon.retriever.search = AsyncMock(
+            return_value=[{"content": "Verified fact A", "score": 0.9}],
+        )
+        with patch(
+            "ira.brain.guardrails.check_faithfulness",
+            new=AsyncMock(return_value={"score": 0.2, "faithful": False}),
+        ):
+            await full_pipeline.process_request(
+                "What is the margin?",
+                "CLI",
+                "alice_cli",
+            )
+        shaped = mock_voice.shape_response.call_args.args[0]
+        assert "reliable answer" in shaped.lower() or "verify" in shaped.lower()
+
+    async def test_faithfulness_soft_threshold_appends_caveat(
+        self, full_pipeline, mock_pantheon, mock_voice,
+    ):
+        self._mnemon_echo_fixture(full_pipeline)
+        mock_pantheon.process = AsyncMock(return_value="Partially verified answer.")
+        full_pipeline._pantheon.retriever = AsyncMock()
+        full_pipeline._pantheon.retriever.search = AsyncMock(
+            return_value=[{"content": "Some doc", "score": 0.8}],
+        )
+        with patch(
+            "ira.brain.guardrails.check_faithfulness",
+            new=AsyncMock(return_value={"score": 0.5, "faithful": False}),
+        ), patch(
+            "ira.brain.guardrails.check_confidentiality",
+            new=AsyncMock(return_value={"safe": True, "leaked_categories": [], "flagged_snippets": []}),
+        ), patch(
+            "ira.brain.guardrails.check_competitor_mentions",
+            new=AsyncMock(return_value={"clean": True, "mentions": []}),
+        ):
+            await full_pipeline.process_request(
+                "Tell me about X",
+                "CLI",
+                "alice_cli",
+            )
+        shaped = mock_voice.shape_response.call_args.args[0]
+        assert "Partially verified" in shaped
+        assert "cross-check" in shaped.lower() or "Note:" in shaped
+
+    async def test_faithfulness_checker_exception_safe_fallback(
+        self, full_pipeline, mock_pantheon, mock_voice,
+    ):
+        self._mnemon_echo_fixture(full_pipeline)
+        mock_pantheon.process = AsyncMock(return_value="Some answer")
+        full_pipeline._pantheon.retriever = AsyncMock()
+        full_pipeline._pantheon.retriever.search = AsyncMock(
+            return_value=[{"content": "doc", "score": 0.8}],
+        )
+        with patch(
+            "ira.brain.guardrails.check_faithfulness",
+            new=AsyncMock(side_effect=RuntimeError("faithfulness check failed")),
+        ):
+            await full_pipeline.process_request(
+                "Sensitive question",
+                "CLI",
+                "alice_cli",
+            )
+        shaped = mock_voice.shape_response.call_args.args[0]
+        assert "verify" in shaped.lower() or "retry" in shaped.lower()

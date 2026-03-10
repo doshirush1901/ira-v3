@@ -179,7 +179,7 @@ class AppConfig(BaseSettings):
     log_format: str = "text"
     environment: str = "development"
     api_secret_key: SecretStr = SecretStr("")
-    cors_origins: str = ""
+    cors_origins: str = "http://localhost:3000"
     react_max_iterations: int = 8
     agent_timeout: int = 90
     mem0_timeout: float = 15.0
@@ -190,6 +190,7 @@ class AppConfig(BaseSettings):
     faithfulness_threshold: float = 0.6
     faithfulness_hard_threshold: float = 0.3
     confidence_floor: float = 0.3
+    guardrails_fail_closed: bool = True
     mnemon_semantic_check: bool = False
     legacy_quarantine_strict: bool = False
 

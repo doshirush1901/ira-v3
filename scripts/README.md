@@ -7,6 +7,9 @@ infrastructure management.
 
 | Script | Purpose |
 |:-------|:--------|
+| `pull_contact_email_history.py` | **Before drafting to any CRM/lead:** pull all past convos from mailbox, build interaction logic tree (timeline, proposals sent, their feedback), optionally `--store-memory`. Ira API required. |
+| `draft_lead_email_enriched.py` | Draft lead email with full context: `GET /api/memory/recall` + optional contact history MD, then `POST /api/email/draft` with format/voice instructions. Use after pull_contact_email_history. |
+| `check_lead_contact_history.py` | Check CRM + optional Gmail for prior contact (when we last wrote, did they reply). Use `--lead-id` or `--email`. |
 | `backfill_relationships.py` | Backfill relationship memory from historical data |
 | `benchmark.py` | Benchmark pipeline latency and retrieval quality |
 | `crm_gmail_sync.py` | Sync CRM contacts with Gmail contacts |

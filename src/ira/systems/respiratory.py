@@ -121,7 +121,7 @@ class RespiratorySystem:
 
         if self._email_processor is not None:
             try:
-                await self._email_processor.fetch_and_process()
+                await self._email_processor.process_inbox()
                 logger.info("INHALE email processing complete")
             except Exception:
                 logger.exception("INHALE email processing failed")

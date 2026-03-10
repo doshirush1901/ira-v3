@@ -10,6 +10,7 @@ import asyncio
 import csv
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,13 @@ class Atlas(BaseAgent):
             reader = csv.DictReader(fh)
             return [dict(row) for row in reader]
 
+    @staticmethod
+    def _canonical_export_name(filepath: Path) -> str:
+        """Normalize Asana export filenames so copied exports can be deduped."""
+        stem = filepath.stem.strip().lower()
+        stem = re.sub(r"\s+\(\d+\)$", "", stem)
+        return f"{stem}{filepath.suffix.lower()}"
+
     async def eto_daily_report(self, max_files: int = 8) -> str:
         """Build an ETO planning report from Asana project-export CSV files."""
         if not _ASANA_IMPORTS_DIR.exists():
@@ -258,11 +266,21 @@ class Atlas(BaseAgent):
                 "reason": "23_Asana imports folder not found",
             })
 
-        csv_files = sorted(
+        candidates = sorted(
             _ASANA_IMPORTS_DIR.glob("*.csv"),
             key=lambda fp: fp.stat().st_mtime,
             reverse=True,
-        )[:max(1, max_files)]
+        )
+        csv_files: list[Path] = []
+        seen_exports: set[str] = set()
+        for fp in candidates:
+            export_key = self._canonical_export_name(fp)
+            if export_key in seen_exports:
+                continue
+            seen_exports.add(export_key)
+            csv_files.append(fp)
+            if len(csv_files) >= max(1, max_files):
+                break
         if not csv_files:
             return json.dumps({
                 "status": "empty",

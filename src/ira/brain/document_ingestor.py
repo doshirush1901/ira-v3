@@ -465,6 +465,12 @@ class DocumentIngestor:
         self._graph = knowledge_graph
         self._ledger = _init_ledger(ledger_path)
 
+    async def __aenter__(self) -> "DocumentIngestor":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
     # ── discovery ────────────────────────────────────────────────────────
 
     def discover_files(self, base_path: str = "data/imports") -> list[dict[str, Any]]:

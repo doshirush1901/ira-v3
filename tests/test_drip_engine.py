@@ -8,6 +8,7 @@ All external services (Gmail, MessageBus) are mocked.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -160,13 +161,13 @@ class TestSendPendingSteps:
 
         result = await engine.send_pending_steps()
         assert result["sent"] >= 1
-        mock_gmail.send_draft.assert_called()
+        mock_gmail.create_draft.assert_called()
 
     @pytest.mark.asyncio
     async def test_no_sends_when_no_campaigns(self, engine, mock_gmail):
         result = await engine.send_pending_steps()
         assert result["sent"] == 0
-        mock_gmail.send_draft.assert_not_called()
+        mock_gmail.create_draft.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_sends_for_paused_campaigns(self, crm_db, engine, mock_gmail):
@@ -188,6 +189,40 @@ class TestSendPendingSteps:
         result = await engine.send_pending_steps()
         assert result["sent"] == 0
 
+    @pytest.mark.asyncio
+    async def test_create_draft_fallback_stores_thread_marker(self):
+        class DraftOnlyAdapter:
+            def __init__(self) -> None:
+                self.create_draft = AsyncMock(
+                    return_value={"id": "d1", "message": {"threadId": "thread-123"}},
+                )
+
+        crm = AsyncMock()
+        campaign = SimpleNamespace(id="camp-1", status="ACTIVE", name="Draft Fallback")
+        step = SimpleNamespace(
+            id="step-1",
+            contact_id="contact-1",
+            step_number=1,
+            email_subject="Intro",
+            email_body="Hello!",
+            scheduled_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            sent_at=None,
+            reply_received=False,
+        )
+        crm.list_campaigns = AsyncMock(return_value=[campaign])
+        crm.list_drip_steps = AsyncMock(return_value=[step])
+        crm.get_contact = AsyncMock(return_value=SimpleNamespace(email="lead@test.com"))
+        crm.update_drip_step = AsyncMock()
+
+        gmail = DraftOnlyAdapter()
+        eng = AutonomousDripEngine(crm=crm, gmail=gmail)
+
+        result = await eng.send_pending_steps()
+        assert result["sent"] >= 1
+        gmail.create_draft.assert_awaited_once()
+        crm.update_drip_step.assert_awaited_once()
+        assert crm.update_drip_step.await_args.kwargs["reply_content"] == "thread:thread-123"
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 3. check_replies
@@ -207,6 +242,35 @@ class TestCheckReplies:
         result = await eng.check_replies()
         assert result["replies_detected"] == 0
         assert "not configured" in result.get("note", "")
+
+    @pytest.mark.asyncio
+    async def test_check_replies_fallback_uses_thread_marker(self):
+        class ReplyListAdapter:
+            def __init__(self) -> None:
+                self.check_replies = AsyncMock(return_value=[{"id": "m1"}])
+
+        crm = AsyncMock()
+        campaign = SimpleNamespace(id="camp-2", status="ACTIVE", name="Reply Fallback")
+        step = SimpleNamespace(
+            id="step-2",
+            contact_id="contact-2",
+            step_number=1,
+            email_subject="Follow-up",
+            sent_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            reply_received=False,
+            reply_content="thread:thread-xyz",
+        )
+        crm.list_campaigns = AsyncMock(return_value=[campaign])
+        crm.list_drip_steps = AsyncMock(return_value=[step])
+        crm.get_contact = AsyncMock(return_value=SimpleNamespace(email="lead@test.com"))
+        crm.update_drip_step = AsyncMock()
+
+        gmail = ReplyListAdapter()
+        eng = AutonomousDripEngine(crm=crm, gmail=gmail)
+
+        result = await eng.check_replies()
+        assert result["replies_detected"] >= 1
+        gmail.check_replies.assert_awaited_once_with("thread-xyz")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

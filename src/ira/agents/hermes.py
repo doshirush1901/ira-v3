@@ -209,15 +209,15 @@ class Hermes(BaseAgent):
         if action == "lead_report":
             return await self.use_skill(
                 "build_lead_report",
-                email=ctx.get("contact_email", ""),
-                company=ctx.get("company", ""),
+                days=int(ctx.get("days", 14)),
             )
 
         if action == "schedule_campaign":
             return await self.use_skill(
                 "schedule_campaign",
-                campaign_id=ctx.get("campaign_id", ""),
-                schedule=ctx.get("schedule", {}),
+                name=ctx.get("campaign_name", ctx.get("campaign_id", "")),
+                segment=ctx.get("segment", {}),
+                start_date=ctx.get("start_date", ""),
             )
 
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)

@@ -12,7 +12,7 @@ from typing import Any, Optional
 from typing_extensions import TypedDict, NotRequired
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Pipeline context contract ─────────────────────────────────────────────────
@@ -36,6 +36,25 @@ class PipelineContext(TypedDict, total=False):
     required_agents: list[str]
     agent_responses: dict[str, str]
     _delegation_depth: int
+
+
+class PipelineContextModel(BaseModel):
+    """Pydantic model for pipeline context construction and validation.
+
+    Core keys are type-checked; stages can add ad-hoc keys via extra='allow'.
+    Convert to dict with .model_dump() when passing to agents.
+    """
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    perception: dict[str, Any] = Field(default_factory=dict)
+    channel: str = ""
+    services: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    cross_channel_history: list[dict[str, Any]] = Field(default_factory=list)
+    active_goal: Any | None = None
+    resolved_input: str = ""
+    enrichment: str = ""
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────

@@ -353,9 +353,8 @@ class BaseAgent(ABC):
         limit = self._max_delegation_depth
         if depth >= limit:
             return (
-                f"[WARNING: Maximum delegation depth ({limit}) reached. "
-                f"Cannot delegate to '{agent_name}'. "
-                "This is a partial answer based on incomplete data.]"
+                "Delegation depth limit reached. "
+                "Please synthesize your answer from the information already gathered."
             )
         pantheon = self._services.get(SK.PANTHEON)
         if not pantheon:
@@ -574,11 +573,15 @@ class BaseAgent(ABC):
             user_msg += f"\n\nPrevious reasoning steps:\n{scratchpad_text}\n\nContinue reasoning."
 
         primary = "anthropic" if self.model_provider == "anthropic" else "openai"
-        raw = await self._llm.generate_text_with_fallback(
-            system, user_msg,
-            primary=primary, temperature=0.2,
-            name=f"{self.name}.reason",
-        )
+        try:
+            raw = await self._llm.generate_text_with_fallback(
+                system, user_msg,
+                primary=primary, temperature=0.2,
+                name=f"{self.name}.reason",
+            )
+        except Exception as exc:
+            logger.warning("ReAct LLM call failed in %s: %s", self.name, exc)
+            return {"thought": "LLM unavailable.", "final_answer": "(LLM call failed)"}
 
         try:
             parsed = self._parse_json_response(raw)
@@ -591,16 +594,28 @@ class BaseAgent(ABC):
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
         """Find and execute a registered tool by name."""
+        tracker = self._services.get("tool_stats_tracker")
         for tool in self.tools:
             if tool.name == name:
                 try:
                     result = await tool.handler(**inputs)
+                    if tracker is not None:
+                        tracker.record_tool_call(self.name, name, success=True)
                     return str(result)[:4000]
                 except ToolExecutionError:
+                    if tracker is not None:
+                        tracker.record_tool_call(self.name, name, success=False)
                     raise
                 except (IraError, Exception) as exc:
                     logger.warning("Tool '%s' failed in %s: %s", name, self.name, exc)
-                    return f"Tool error: {exc}"
+                    if tracker is not None:
+                        tracker.record_tool_call(self.name, name, success=False)
+                    return (
+                        f"Tool execution failed with error: {exc}. "
+                        "Please check your parameters and try again, or use a different tool to find this information."
+                    )
+        if tracker is not None:
+            tracker.record_tool_call(self.name, name, success=False)
         return f"Unknown tool: {name}"
 
     async def _force_final_answer(

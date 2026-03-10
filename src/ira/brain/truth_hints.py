@@ -74,9 +74,19 @@ class TruthHintsEngine:
         try:
             raw = await asyncio.to_thread(path.read_text, "utf-8")
             data = json.loads(raw)
-            return data.get("hints", [])
+            if isinstance(data, dict):
+                hints = data.get("hints", [])
+            elif isinstance(data, list):
+                hints = data
+            else:
+                logger.warning("Truth hints file %s has unsupported JSON root type", path)
+                return []
+            return TruthHintsEngine._normalize_hints(hints, path)
         except (json.JSONDecodeError, OSError):
             logger.warning("Failed to read truth hints from %s", path)
+            return []
+        except Exception:
+            logger.warning("Unexpected truth hints read failure from %s", path, exc_info=True)
             return []
 
     # ── public API ────────────────────────────────────────────────────────
@@ -143,6 +153,44 @@ class TruthHintsEngine:
 
     def _all_hints(self) -> list[dict[str, Any]]:
         return self._manual_hints + self._learned_hints
+
+    @staticmethod
+    def _normalize_hints(raw_hints: Any, source_path: Path) -> list[dict[str, Any]]:
+        if not isinstance(raw_hints, list):
+            logger.warning("Truth hints payload in %s is not a list", source_path)
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for idx, hint in enumerate(raw_hints):
+            if not isinstance(hint, dict):
+                logger.warning("Skipping non-dict truth hint at %s[%d]", source_path, idx)
+                continue
+
+            answer = str(hint.get("answer", "")).strip()
+            if not answer:
+                logger.warning("Skipping truth hint without answer at %s[%d]", source_path, idx)
+                continue
+
+            patterns_raw = hint.get("patterns", [])
+            keywords_raw = hint.get("keywords", [])
+            patterns = [
+                str(p).strip()
+                for p in (patterns_raw if isinstance(patterns_raw, list) else [])
+                if str(p).strip()
+            ]
+            keywords = [
+                str(k).strip()
+                for k in (keywords_raw if isinstance(keywords_raw, list) else [])
+                if str(k).strip()
+            ]
+
+            normalized_hint = dict(hint)
+            normalized_hint["answer"] = answer
+            normalized_hint["patterns"] = patterns
+            normalized_hint["keywords"] = keywords
+            normalized.append(normalized_hint)
+
+        return normalized
 
     @staticmethod
     def _score(hint: dict[str, Any], query: str, query_lower: str) -> int:

@@ -13,6 +13,8 @@ correction, dramatically reducing parse failures.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from typing import Any, TypeVar
 
@@ -31,6 +33,7 @@ T = TypeVar("T", bound=BaseModel)
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 2.0
+_MAX_DELAY_SECONDS = 10.0
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -38,8 +41,11 @@ def _status_code(exc: Exception) -> int | None:
 
 
 def _is_retryable_llm_error(exc: Exception) -> bool:
+    """Return True for rate limits (429), server errors (5xx), connection errors; False for 401/400."""
     status = _status_code(exc)
-    return status in (402, 429) or status is None or status >= 500
+    if status is not None and status in (401, 400):
+        return False
+    return status in (402, 429) or status is None or (status is not None and status >= 500)
 
 
 class LLMClient:
@@ -79,9 +85,31 @@ class LLMClient:
         self._anthropic_model = cfg.llm.anthropic_model
 
         self._semaphore = asyncio.Semaphore(10)
-        self._retry_policy = RetryPolicy(max_attempts=_MAX_RETRIES, base_delay_seconds=_RETRY_BACKOFF)
+        self._retry_policy = RetryPolicy(
+            max_attempts=_MAX_RETRIES,
+            base_delay_seconds=_RETRY_BACKOFF,
+            max_delay_seconds=_MAX_DELAY_SECONDS,
+        )
         self._openai_breaker = CircuitBreaker(threshold=10, window_seconds=180)
         self._anthropic_breaker = CircuitBreaker(threshold=10, window_seconds=180)
+        self._redis_cache: Any = None
+
+    def set_redis_cache(self, cache: Any) -> None:
+        """Inject Redis cache for semantic response caching (optional)."""
+        self._redis_cache = cache
+
+    @staticmethod
+    def _llm_cache_key(
+        system: str,
+        user: str,
+        model: str,
+        temperature: float,
+        extra: str = "",
+    ) -> str:
+        raw = f"{system[:2000]}|{user[:4000]}|{model}|{temperature:.2f}|{extra}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+    _LLM_CACHE_TTL = 86400  # 24 hours
 
     # ── structured output (JSON → Pydantic) ──────────────────────────────
 
@@ -126,17 +154,45 @@ class LLMClient:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> T:
+        resolved_model = model or (self._openai_model if provider == "openai" else self._anthropic_model)
+        if self._redis_cache and temperature <= 0.2:
+            try:
+                cache_key = self._llm_cache_key(
+                    system, user, resolved_model, temperature,
+                    extra=f"structured:{response_model.__name__}",
+                )
+                cached = await self._redis_cache.get_llm_cache(cache_key)
+                if cached is not None:
+                    data = json.loads(cached)
+                    return response_model.model_validate(data)
+            except (json.JSONDecodeError, Exception):
+                pass
         if provider == "openai":
-            return await self._openai_structured(
+            result = await self._openai_structured(
                 system, user, response_model,
                 model=model, temperature=temperature, max_tokens=max_tokens,
                 name=name, session_id=session_id, user_id=user_id,
             )
-        return await self._anthropic_structured(
-            system, user, response_model,
-            model=model, temperature=temperature, max_tokens=max_tokens,
-            name=name, session_id=session_id, user_id=user_id,
-        )
+        else:
+            result = await self._anthropic_structured(
+                system, user, response_model,
+                model=model, temperature=temperature, max_tokens=max_tokens,
+                name=name, session_id=session_id, user_id=user_id,
+            )
+        if self._redis_cache and temperature <= 0.2:
+            try:
+                cache_key = self._llm_cache_key(
+                    system, user, resolved_model, temperature,
+                    extra=f"structured:{response_model.__name__}",
+                )
+                await self._redis_cache.set_llm_cache(
+                    cache_key,
+                    json.dumps(result.model_dump(), default=str),
+                    ttl_seconds=self._LLM_CACHE_TTL,
+                )
+            except Exception:
+                pass
+        return result
 
     async def _openai_structured(
         self,
@@ -161,9 +217,7 @@ class LLMClient:
         if user_id:
             metadata["langfuse_user_id"] = user_id
 
-        backoff = _RETRY_BACKOFF
-        last_exc: Exception | None = None
-        for attempt in range(1, _MAX_RETRIES + 1):
+        async def _operation() -> T:
             try:
                 return await self._openai_instructor.chat.completions.create(
                     model=resolved_model,
@@ -180,25 +234,23 @@ class LLMClient:
                     **({"metadata": metadata} if metadata else {}),
                 )
             except Exception as exc:
-                last_exc = exc
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status in (429, 402):
-                    logger.warning("OpenAI %d — quota/rate limit", status)
-                    break
-                if status and status < 500:
-                    logger.warning("OpenAI %d error: %s", status, exc)
-                    break
-                logger.warning(
-                    "OpenAI structured attempt %d/%d failed: %s",
-                    attempt, _MAX_RETRIES, exc,
-                )
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
+                logger.warning("OpenAI structured attempt failed: %s", exc)
+                raise
 
-        if last_exc:
-            logger.error("OpenAI structured call failed: %s", last_exc)
-        return response_model()
+        try:
+            return await run_with_retry(
+                _operation,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_llm_error,
+                circuit_breaker=self._openai_breaker,
+            )
+        except Exception as exc:
+            logger.warning(
+                "OpenAI structured call failed after retries: %s",
+                exc,
+                exc_info=True,
+            )
+            raise
 
     @observe(name="anthropic_structured")
     async def _anthropic_structured(
@@ -219,9 +271,7 @@ class LLMClient:
 
         resolved_model = model or self._anthropic_model
 
-        backoff = _RETRY_BACKOFF
-        last_exc: Exception | None = None
-        for attempt in range(1, _MAX_RETRIES + 1):
+        async def _operation() -> T:
             try:
                 return await self._anthropic_instructor.messages.create(
                     model=resolved_model,
@@ -234,25 +284,23 @@ class LLMClient:
                     messages=[{"role": "user", "content": user[:12_000]}],
                 )
             except Exception as exc:
-                last_exc = exc
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status in (429, 402):
-                    logger.warning("Anthropic %d — quota/rate limit", status)
-                    break
-                if status and status < 500:
-                    logger.warning("Anthropic %d error: %s", status, exc)
-                    break
-                logger.warning(
-                    "Anthropic structured attempt %d/%d failed: %s",
-                    attempt, _MAX_RETRIES, exc,
-                )
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
+                logger.warning("Anthropic structured attempt failed: %s", exc)
+                raise
 
-        if last_exc:
-            logger.error("Anthropic structured call failed: %s", last_exc)
-        return response_model()
+        try:
+            return await run_with_retry(
+                _operation,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_llm_error,
+                circuit_breaker=self._anthropic_breaker,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Anthropic structured call failed after retries: %s",
+                exc,
+                exc_info=True,
+            )
+            raise
 
     # ── plain text output ─────────────────────────────────────────────────
 
@@ -291,17 +339,36 @@ class LLMClient:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> str:
+        resolved_model = model or (self._openai_model if provider == "openai" else self._anthropic_model)
+        if self._redis_cache and temperature <= 0.2:
+            try:
+                cache_key = self._llm_cache_key(system, user, resolved_model, temperature, extra="text")
+                cached = await self._redis_cache.get_llm_cache(cache_key)
+                if cached is not None:
+                    return cached
+            except Exception:
+                pass
         if provider == "openai":
-            return await self._openai_text(
+            result = await self._openai_text(
                 system, user,
                 model=model, temperature=temperature, max_tokens=max_tokens,
                 name=name, session_id=session_id, user_id=user_id,
             )
-        return await self._anthropic_text(
-            system, user,
-            model=model, temperature=temperature, max_tokens=max_tokens,
-            name=name, session_id=session_id, user_id=user_id,
-        )
+        else:
+            result = await self._anthropic_text(
+                system, user,
+                model=model, temperature=temperature, max_tokens=max_tokens,
+                name=name, session_id=session_id, user_id=user_id,
+            )
+        if self._redis_cache and temperature <= 0.2 and not result.startswith("("):
+            try:
+                cache_key = self._llm_cache_key(system, user, resolved_model, temperature, extra="text")
+                await self._redis_cache.set_llm_cache(
+                    cache_key, result, ttl_seconds=self._LLM_CACHE_TTL,
+                )
+            except Exception:
+                pass
+        return result
 
     async def _openai_text(
         self,

@@ -49,6 +49,20 @@ def test_normalize_task_record_sets_phase_and_component():
     assert normalized.completed_at is None
 
 
+def test_normalize_task_record_supports_bom_task_id_header():
+    row = {
+        "\ufeffTask ID": "A-123",
+        "Name": "R: Servo motor",
+        "Section/Column": "Manufacturing queue",
+        "Created At": "2024-01-02",
+        "Completed At": "2024-01-10",
+    }
+    normalized = normalize_task_record(row)
+    assert normalized.task_id == "A-123"
+    assert normalized.phase_std == "gate_fabrication_done"
+    assert normalized.task_type == "procure_receive"
+
+
 def test_pair_procurement_events_returns_lead_time():
     rows = [
         {

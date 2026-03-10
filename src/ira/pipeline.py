@@ -36,11 +36,12 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from typing import Any
 
 from langfuse.decorators import observe
 
-from ira.data.models import Channel, Contact, Direction
+from ira.data.models import Channel, Contact, Direction, PipelineContextModel
 from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ class RequestPipeline:
         redis_cache: Any | None = None,
         episodic_memory: Any | None = None,
         long_term_memory: Any | None = None,
+        tool_stats_tracker: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -95,12 +97,14 @@ class RequestPipeline:
         self._redis = redis_cache
         self._episodic = episodic_memory
         self._long_term = long_term_memory
+        self._tool_stats_tracker = tool_stats_tracker
 
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
         self._recent_messages: dict[str, tuple[str, float]] = {}
         self._state_lock = asyncio.Lock()
         self._request_semaphore = asyncio.Semaphore(5)
+        self._stage_timings: deque[dict[str, Any]] = deque(maxlen=100)
 
         self._load_pending_clarifications()
 
@@ -153,6 +157,11 @@ class RequestPipeline:
                 logger.warning("Failed to load clarification from Redis", exc_info=True)
         return None
 
+    def get_recent_stage_timings(self, n: int = 24) -> list[dict[str, Any]]:
+        """Return the last n pipeline runs' per-stage durations (seconds) and timestamps."""
+        recent = list(self._stage_timings)
+        return recent[-n:] if len(recent) > n else recent
+
     # ── Public entry point ────────────────────────────────────────────────
 
     @observe(name="pipeline.process_request")
@@ -194,8 +203,19 @@ class RequestPipeline:
     ) -> tuple[str, list[str]]:
         """Run the full 11-step pipeline and return ``(shaped_response, agents_used)``."""
         t0 = time.monotonic()
+        t_last = t0
+        run_stages: dict[str, float] = {}
         meta = metadata or {}
         trace: dict[str, Any] = {"channel": channel, "sender_id": sender_id}
+
+        def _record_stage(name: str) -> None:
+            nonlocal t_last
+            run_stages[name] = round(time.monotonic() - t_last, 3)
+            t_last = time.monotonic()
+
+        def _push_timings() -> None:
+            if run_stages:
+                self._stage_timings.append({"stages": dict(run_stages), "timestamp": time.time()})
 
         # ── 0. CLARIFICATION RESUME ───────────────────────────────────
         pending = await self._pop_clarification(sender_id)
@@ -262,6 +282,7 @@ class RequestPipeline:
         contact_info = perception["resolved_contact"]
         contact_email = contact_info["email"]
         trace["contact"] = contact_email
+        _record_stage("perceive")
         logger.info("PERCEIVE | %s | %s", channel, contact_email)
 
         # ── 2. REMEMBER ──────────────────────────────────────────────
@@ -307,6 +328,7 @@ class RequestPipeline:
             except (DatabaseError, Exception):
                 logger.exception("GoalManager lookup failed")
 
+        _record_stage("remember")
         logger.info(
             "REMEMBER | history=%d msgs | cross_channel=%d | goal=%s | summary=%s",
             len(history),
@@ -331,6 +353,8 @@ class RequestPipeline:
                 await on_progress({"type": "shaping"})
             shaped = await self._voice.shape_response(_fp_response, channel)
 
+            _record_stage("route")
+            _record_stage("shape")
             await self._learn(
                 contact_email=contact_email,
                 channel=channel,
@@ -341,7 +365,8 @@ class RequestPipeline:
                 active_goal=active_goal,
                 resolved_input=resolved_input,
             )
-
+            _record_stage("learn")
+            _push_timings()
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info("RETURN (fast) | %s | %.0fms", contact_email, elapsed_ms)
             self._recent_messages[_fingerprint] = (shaped, _now)
@@ -376,6 +401,8 @@ class RequestPipeline:
                     await self._persist_clarification(sender_id, clarification_data)
                     logger.info("SPHINX CLARIFY | stored pending for %s", contact_email)
                     shaped = await self._voice.shape_response(clarification_q, channel)
+                    _record_stage("route")
+                    _push_timings()
                     return shaped, ["sphinx"]
                 elif _sphinx_verdict.startswith(_CLEAR_TAG):
                     logger.info("SPHINX CLEAR | query is actionable")
@@ -435,6 +462,7 @@ class RequestPipeline:
         if route_method is None:
             route_method = "llm"
             logger.info("ROUTE LLM | delegating to Athena")
+        _record_stage("route")
 
         # ── 5.5 ENRICH CONTEXT ─────────────────────────────────────
         if on_progress:
@@ -520,25 +548,30 @@ class RequestPipeline:
                     enrichment_parts.append(f"Relevant past interactions:\n{ep_text}")
             except (IraError, Exception):
                 logger.debug("Episodic memory enrichment not available", exc_info=True)
+        _record_stage("enrich")
 
         # ── 6. EXECUTE ───────────────────────────────────────────────
         # Pass perception and enrichment for prompt context, plus live
         # service references so agents can query memory dynamically
         # through their ReAct tools instead of relying on static snapshots.
-        context: dict[str, Any] = {
-            "perception": perception,
-            "channel": channel,
-            "services": {
-                "conversation_memory": self._conversation,
-                "relationship_memory": self._relationship,
-                "goal_manager": self._goals,
-                "procedural_memory": self._procedural,
-                "crm": self._crm,
-                "endocrine": self._endocrine,
-            },
+        services: dict[str, Any] = {
+            "_delegation_depth": 0,
+            "conversation_memory": self._conversation,
+            "relationship_memory": self._relationship,
+            "goal_manager": self._goals,
+            "procedural_memory": self._procedural,
+            "crm": self._crm,
+            "endocrine": self._endocrine,
         }
-        if enrichment_parts:
-            context["enrichment"] = "\n\n".join(enrichment_parts)
+        if self._tool_stats_tracker is not None:
+            services["tool_stats_tracker"] = self._tool_stats_tracker
+        ctx = PipelineContextModel(
+            perception=perception,
+            channel=channel,
+            services=services,
+            enrichment="\n\n".join(enrichment_parts) if enrichment_parts else "",
+        )
+        context: dict[str, Any] = ctx.model_dump()
 
         raw_response: str
         agents_used: list[str]
@@ -556,6 +589,7 @@ class RequestPipeline:
             )
             agents_used = ["athena"]
 
+        _record_stage("execute")
         trace["route"] = route_method
         trace["agents"] = agents_used
         logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
@@ -609,7 +643,17 @@ class RequestPipeline:
                     trace["faithfulness"] = _faith_result.get("score", 1.0)
                     _faith_score = _faith_result.get("score", 1.0)
 
-                    if _faith_score < _app_cfg.faithfulness_threshold:
+                    if _faith_score < _app_cfg.faithfulness_hard_threshold:
+                        raw_response = (
+                            "I can't provide a reliable answer from the current evidence. "
+                            "Please narrow the request or provide additional source documents."
+                        )
+                        trace["faithfulness_blocked"] = True
+                        logger.warning(
+                            "FAITHFULNESS | score=%.2f < hard threshold %.2f — response blocked",
+                            _faith_score, _app_cfg.faithfulness_hard_threshold,
+                        )
+                    elif _faith_score < _app_cfg.faithfulness_threshold:
                         _caveat = (
                             "\n\n> Note: Some claims could not be fully verified "
                             "against our documentation. Please cross-check "
@@ -621,7 +665,12 @@ class RequestPipeline:
                             _faith_score, _app_cfg.faithfulness_threshold,
                         )
             except (LLMError, Exception):
-                logger.warning("Faithfulness gate failed (non-critical)", exc_info=True)
+                logger.warning("Faithfulness gate failed", exc_info=True)
+                raw_response = (
+                    "I can't verify this answer against internal documentation right now. "
+                    "Please retry shortly or request source-backed details."
+                )
+        _record_stage("faithfulness")
 
         # ── 6.4b GUARDRAILS (LLM-routed responses) ───────────────────
         if route_method == "llm":
@@ -630,6 +679,9 @@ class RequestPipeline:
                     check_competitor_mentions,
                     check_confidentiality,
                 )
+                from ira.config import get_settings as _get_settings_guardrails
+
+                _guardrails_fail_closed = _get_settings_guardrails().app.guardrails_fail_closed
 
                 _guard_conf, _guard_comp = await asyncio.gather(
                     check_confidentiality(raw_response, "external"),
@@ -637,20 +689,45 @@ class RequestPipeline:
                     return_exceptions=True,
                 )
                 _guardrail_results: dict[str, Any] = {}
-                if isinstance(_guard_conf, dict) and not _guard_conf.get("safe", True):
+                _guardrail_violation = False
+
+                if isinstance(_guard_conf, Exception):
+                    logger.warning("GUARDRAILS | confidentiality check failed", exc_info=True)
+                    if _guardrails_fail_closed:
+                        _guardrail_results["confidentiality_check_error"] = str(_guard_conf)
+                        _guardrail_violation = True
+                elif isinstance(_guard_conf, dict) and not _guard_conf.get("safe", True):
                     _guardrail_results["confidentiality"] = _guard_conf
                     logger.warning(
                         "GUARDRAILS | confidential data detected: %s",
                         _guard_conf.get("leaked_categories"),
                     )
-                if isinstance(_guard_comp, dict) and not _guard_comp.get("clean", True):
+                    _guardrail_violation = True
+
+                if isinstance(_guard_comp, Exception):
+                    logger.warning("GUARDRAILS | competitor check failed", exc_info=True)
+                    if _guardrails_fail_closed:
+                        _guardrail_results["competitor_check_error"] = str(_guard_comp)
+                        _guardrail_violation = True
+                elif isinstance(_guard_comp, dict) and not _guard_comp.get("clean", True):
                     _guardrail_results["competitors"] = _guard_comp
                     logger.warning(
                         "GUARDRAILS | competitor mentions: %s",
                         [m["competitor"] for m in _guard_comp.get("mentions", [])],
                     )
+                    _guardrail_violation = True
+
                 if _guardrail_results:
                     trace["guardrails"] = _guardrail_results
+
+                if _guardrails_fail_closed and _guardrail_violation:
+                    raw_response = (
+                        "I can't provide that response safely. "
+                        "Please rephrase your request for a policy-compliant summary."
+                    )
+                    logger.warning(
+                        "GUARDRAILS | fail-closed triggered; response replaced with safe fallback",
+                    )
             except (IraError, Exception):
                 logger.warning("Guardrails checks failed (non-critical)", exc_info=True)
 
@@ -668,6 +745,7 @@ class RequestPipeline:
             await self._persist_clarification(sender_id, clarification_data)
             logger.info("CLARIFY | stored pending for %s (sender=%s)", contact_email, sender_id)
             shaped = await self._voice.shape_response(clarification_q, channel)
+            _push_timings()
             return shaped, agents_used
 
         # ── 7. ASSESS ────────────────────────────────────────────────
@@ -744,6 +822,7 @@ class RequestPipeline:
                         )
             except (LLMError, Exception):
                 logger.exception("Metacognition assessment failed")
+        _record_stage("assess")
 
         # ── 8. REFLECT ───────────────────────────────────────────────
         if on_progress:
@@ -789,6 +868,7 @@ class RequestPipeline:
             behavioral_modifiers=modifiers,
         )
 
+        _record_stage("shape")
         logger.info("SHAPE | channel=%s len=%d", channel, len(shaped))
 
         # ── 10. LEARN ────────────────────────────────────────────────
@@ -802,6 +882,8 @@ class RequestPipeline:
             active_goal=active_goal,
             resolved_input=resolved_input,
         )
+        _record_stage("learn")
+        _push_timings()
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(

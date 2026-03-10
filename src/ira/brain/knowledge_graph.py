@@ -24,7 +24,8 @@ from ira.services.llm_client import get_llm_client
 logger = logging.getLogger(__name__)
 
 _VALID_LABEL = re.compile(r"^[A-Z][A-Za-z_]{0,30}$")
-_VALID_PROP_KEY = re.compile(r"^[a-z][a-z0-9_]{0,50}$")
+# Safe Cypher property keys: letter/underscore then alphanumeric/underscore (prevents injection)
+_VALID_PROP_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 _ENTITY_SUFFIXES = re.compile(
     r",?\s*\b(Inc\.?|LLC|Ltd\.?|Corp\.?|Co\.?|PLC|GmbH|SA|AG|NV|BV)\s*$",
@@ -265,23 +266,23 @@ class KnowledgeGraph:
             logger.warning("Ignoring unknown relationship type: %s", rel_type)
             return False
 
-        from_field = self._KEY_FIELDS.get(from_type)
-        to_field = self._KEY_FIELDS.get(to_type)
-        if not from_field or not to_field:
-            logger.warning(
-                "Unknown node type(s): %s, %s", from_type, to_type,
-            )
-            return False
+        # Strict allowlist: only known node types to prevent Cypher injection
+        if from_type not in self._KEY_FIELDS:
+            raise ValueError(f"Invalid from_type node label (not in allowlist): {from_type!r}")
+        if to_type not in self._KEY_FIELDS:
+            raise ValueError(f"Invalid to_type node label (not in allowlist): {to_type!r}")
+        from_field = self._KEY_FIELDS[from_type]
+        to_field = self._KEY_FIELDS[to_type]
 
         if not _VALID_LABEL.match(from_type) or not _VALID_LABEL.match(to_type):
-            logger.warning("Invalid node label format: %s, %s", from_type, to_type)
-            return False
+            raise ValueError(f"Invalid node label format: {from_type!r}, {to_type!r}")
         if not _VALID_LABEL.match(rel_type):
-            logger.warning("Invalid relationship type format: %s", rel_type)
-            return False
+            raise ValueError(f"Invalid relationship type format: {rel_type!r}")
 
         props = properties or {}
-        props = {k: v for k, v in props.items() if _VALID_PROP_KEY.match(k)}
+        for k in props:
+            if not _VALID_PROP_KEY.match(k):
+                raise ValueError(f"Invalid relationship property key (unsafe for Cypher SET): {k!r}")
         set_clause = "SET r += $props" if props else ""
 
         query = (
@@ -452,14 +453,23 @@ class KnowledgeGraph:
         }
 
     _WRITE_KEYWORDS = frozenset({"CREATE", "DELETE", "DETACH", "SET", "REMOVE", "DROP"})
+    _ALLOWED_READ_PREFIXES = frozenset({"MATCH", "OPTIONAL", "WITH", "RETURN", "CALL", "UNWIND"})
 
     async def run_cypher(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Execute a **read-only** Cypher query and return the result rows.
 
-        Write operations (CREATE, DELETE, SET, etc.) are rejected.  For
-        internal write operations use :meth:`_run_cypher_write` instead.
+        Only read-style operations are allowed (MATCH, OPTIONAL MATCH, WITH,
+        RETURN, etc.).  Write operations (CREATE, DELETE, SET, etc.) are
+        rejected.  For internal write operations use :meth:`_run_cypher_write`.
         """
-        tokens = set(query.upper().split())
+        stripped = query.strip().upper()
+        first_word = stripped.split()[0] if stripped else ""
+        if first_word and first_word not in self._ALLOWED_READ_PREFIXES:
+            raise ValueError(
+                f"run_cypher allows only read operations; query must start with one of: "
+                f"{sorted(self._ALLOWED_READ_PREFIXES)}, got: {first_word!r}"
+            )
+        tokens = set(stripped.split())
         if tokens & self._WRITE_KEYWORDS:
             raise ValueError(
                 f"Write operations not allowed via run_cypher: "

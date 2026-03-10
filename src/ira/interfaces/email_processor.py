@@ -37,10 +37,15 @@ from googleapiclient.discovery import build
 from ira.config import EmailMode, get_settings
 from ira.data.models import Channel, DealStage, Direction, Email
 from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
+from ira.services.resilience import RetryPolicy, run_with_retry
 
 logger = logging.getLogger(__name__)
 
 _TRAINING_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+_SEND_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 _OPERATIONAL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.compose",
@@ -86,6 +91,53 @@ def _is_non_business_sender(email_addr: str) -> bool:
     if domain in _NON_BUSINESS_DOMAINS or parent in _NON_BUSINESS_DOMAINS:
         return True
     return any(local.startswith(p) for p in _NON_BUSINESS_PREFIXES)
+
+
+async def send_simple_notification(to: str, subject: str, body: str) -> dict[str, Any]:
+    """Send a single plain-text email via Gmail using project credentials.
+
+    Uses GOOGLE_* env (credentials_path, token_path). Requires token to have
+    gmail.send scope (e.g. from OPERATIONAL mode or a send script). On failure
+    logs and re-raises; caller may catch and warn without failing the main task.
+    """
+    settings = get_settings()
+    cfg = settings.google
+    creds_path = Path(cfg.credentials_path)
+    token_path = Path(cfg.token_path)
+
+    def _authenticate() -> Any:
+        creds: Credentials | None = None
+        if token_path.exists():
+            creds = Credentials.from_authorized_user_file(str(token_path), _SEND_SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        elif not creds or not creds.valid:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _SEND_SCOPES)
+            creds = flow.run_local_server(port=0)
+        token_path.write_text(creds.to_json())
+        return build("gmail", "v1", credentials=creds)
+
+    service = await asyncio.to_thread(_authenticate)
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["To"] = to
+    msg["Subject"] = subject
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    def _send() -> dict[str, Any]:
+        return (
+            service.users()
+            .messages()
+            .send(userId="me", body={"raw": raw})
+            .execute()
+        )
+
+    result = await asyncio.to_thread(_send)
+    profile = await asyncio.to_thread(
+        lambda: service.users().getProfile(userId="me").execute()
+    )
+    result["sent_from"] = (profile.get("emailAddress") or "").strip().lower()
+    return result
 
 
 class EmailProcessor:
@@ -169,6 +221,31 @@ class EmailProcessor:
         self._service = await asyncio.to_thread(_authenticate)
         logger.info("Gmail service built (mode=%s)", self._mode.value)
         return self._service
+
+    async def _get_sending_email(self, service: Any) -> str:
+        """Return the email address of the authenticated Gmail account (the actual send-from)."""
+        def _profile() -> str:
+            profile = (
+                service.users()
+                .getProfile(userId="me")
+                .execute()
+            )
+            return (profile.get("emailAddress") or "").strip().lower()
+
+        return await asyncio.to_thread(_profile)
+
+    async def _ensure_send_from_ira_email(self, service: Any) -> None:
+        """If GOOGLE_IRA_EMAIL is set, ensure the token is for that account; otherwise raise."""
+        want = (self._google.ira_email or "").strip().lower()
+        if not want:
+            return
+        actual = await self._get_sending_email(service)
+        if actual and actual != want:
+            raise IraError(
+                f"Emails would be sent from {actual}, but GOOGLE_IRA_EMAIL is set to {want}. "
+                "To send from rushabh@machinecraft.org: set GOOGLE_IRA_EMAIL=rushabh@machinecraft.org in .env, "
+                "delete the Gmail token file (e.g. .credentials/token.json), restart the API, and sign in as that account when the browser opens."
+            )
 
     # ── Inbox observation (TRAINING) ──────────────────────────────────────
 
@@ -346,6 +423,111 @@ class EmailProcessor:
             )
 
         return await asyncio.to_thread(_create)
+
+    async def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str | None = None,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a Gmail draft (new message). Does not send. Works in any mode.
+
+        Use this so the user can open Gmail and send from their mailbox.
+        Returns the Gmail API draft response with id and message id.
+        """
+        service = await self._build_gmail_service()
+        await self._ensure_send_from_ira_email(service)
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+        draft_body: dict[str, Any] = {"message": {"raw": raw}}
+        if thread_id:
+            draft_body["message"]["threadId"] = thread_id
+
+        def _create() -> dict[str, Any]:
+            return (
+                service.users()
+                .drafts()
+                .create(userId="me", body=draft_body)
+                .execute()
+            )
+
+        return await asyncio.to_thread(_create)
+
+    async def send_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str | None = None,
+        thread_id: str | None = None,
+        *,
+        user_initiated: bool = False,
+    ) -> dict[str, Any]:
+        """Send an email via Gmail.
+
+        When user_initiated=True (e.g. user ran send script or clicked Send), send is
+        allowed in any mode. Otherwise only allowed in OPERATIONAL mode.
+        In TRAINING mode when not user_initiated, creates a draft instead and returns it.
+        Returns the Gmail API response with id and threadId (or draft response with sent_from=None).
+        """
+        if not user_initiated and self._mode == EmailMode.TRAINING:
+            logger.warning(
+                "Send requested in TRAINING mode — creating draft instead. Set IRA_EMAIL_MODE=OPERATIONAL to allow send."
+            )
+            service = await self._build_gmail_service()
+            draft = await self._create_draft(service, to, subject, body, thread_id)
+            draft["sent_from"] = None
+            draft["draft_only"] = True
+            return draft
+        if not user_initiated and self._mode != EmailMode.OPERATIONAL:
+            raise IraError(
+                "Sending is disabled in TRAINING mode. Set IRA_EMAIL_MODE=OPERATIONAL to allow send."
+            )
+        service = await self._build_gmail_service()
+        await self._ensure_send_from_ira_email(service)
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+        send_body: dict[str, Any] = {"raw": raw}
+        if thread_id:
+            send_body["threadId"] = thread_id
+
+        def _send() -> dict[str, Any]:
+            return (
+                service.users()
+                .messages()
+                .send(userId="me", body=send_body)
+                .execute()
+            )
+
+        def _is_retryable(exc: Exception) -> bool:
+            code = getattr(getattr(exc, "resp", None), "status", None)
+            if code is None:
+                return True
+            if code == 429:
+                return True
+            if 500 <= code < 600:
+                return True
+            return False
+
+        result = await run_with_retry(
+            lambda: asyncio.to_thread(_send),
+            policy=RetryPolicy(max_attempts=3, base_delay_seconds=1.0, max_delay_seconds=10.0),
+            is_retryable=_is_retryable,
+        )
+        result["sent_from"] = await self._get_sending_email(service)
+        return result
 
     async def _mark_as_read(self, service: Any, message_id: str) -> None:
         """Remove the UNREAD label from a message."""

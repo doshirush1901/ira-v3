@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from typing import Any
 
 from langfuse.decorators import observe
@@ -56,6 +57,8 @@ class DigestiveSystem:
 
     _WINDOW_SIZE = 10_000
     _WINDOW_OVERLAP = 500
+    _CLASSIFY_MAX_CHARS = 1800
+    _CLASSIFY_MAX_LINES = 60
 
     # ── STOMACH: nutrient extraction ──────────────────────────────────────
 
@@ -105,11 +108,64 @@ class DigestiveSystem:
 
     async def _classify_window(self, text: str) -> dict[str, list[str]]:
         """Send a single text window to the LLM for nutrient classification."""
+        prepared = self._prepare_classification_input(text)
         result = await self._llm.generate_structured(
-            _NUTRIENT_SYSTEM_PROMPT, text, NutrientClassification,
+            _NUTRIENT_SYSTEM_PROMPT, prepared, NutrientClassification,
             name="digestive.classify",
         )
         return result.model_dump()
+
+    def _prepare_classification_input(self, text: str) -> str:
+        """Bound high-cardinality input to avoid oversized structured outputs."""
+        if not text:
+            return ""
+
+        # Drop noisy placeholders that explode waste output size.
+        filtered_lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line in {"<!-- image -->", "![image]", "[image]"}:
+                continue
+            if line.startswith("data:image/"):
+                continue
+            filtered_lines.append(line)
+
+        # Deduplicate repeated lines while preserving first occurrence order.
+        seen: set[str] = set()
+        deduped_lines: list[str] = []
+        for line in filtered_lines:
+            if line in seen:
+                continue
+            seen.add(line)
+            deduped_lines.append(line)
+
+        bounded = "\n".join(deduped_lines)
+        if len(bounded) > self._CLASSIFY_MAX_CHARS:
+            head = bounded[:1200]
+            tail = bounded[-500:]
+            omitted = len(bounded) - (len(head) + len(tail))
+            bounded = (
+                f"{head}\n\n[... omitted {omitted} characters ...]\n\n{tail}"
+            )
+
+        lines = bounded.splitlines()
+        if len(lines) > self._CLASSIFY_MAX_LINES:
+            keep_head = 45
+            keep_tail = 10
+            omitted = max(0, len(lines) - (keep_head + keep_tail))
+            lines = (
+                lines[:keep_head]
+                + [f"[... omitted {omitted} lines ...]"]
+                + lines[-keep_tail:]
+            )
+
+        # If lines are still repetitive variants, keep only most informative ones.
+        counts = Counter(lines)
+        lines = [line for line in lines if counts[line] == 1 or len(line) > 24]
+
+        return "\n".join(lines)
 
     # ── DUODENUM: summarization ─────────────────────────────────────────
 
@@ -296,41 +352,65 @@ class DigestiveSystem:
                 "processing_time": 0.0,
             }
 
-        # STOMACH
-        nutrients = await self._extract_nutrients(raw_data)
+        try:
+            # STOMACH
+            nutrients = await self._extract_nutrients(raw_data)
 
-        nutrient_counts = {
-            k: len(v) for k, v in nutrients.items()
-        }
+            nutrient_counts = {
+                k: len(v) for k, v in nutrients.items()
+            }
 
-        # DUODENUM — rewrite raw facts as searchable statements
-        nutrients = await self._summarize_nutrients(nutrients)
+            # DUODENUM — rewrite raw facts as searchable statements
+            nutrients = await self._summarize_nutrients(nutrients)
 
-        # SMALL INTESTINE
-        chunks_created = await self._absorb(
-            nutrients,
-            source,
-            source_category,
-            source_id=source_id,
-        )
+            # SMALL INTESTINE
+            chunks_created = await self._absorb(
+                nutrients,
+                source,
+                source_category,
+                source_id=source_id,
+            )
 
-        # LIVER
-        protein_text = "\n".join(nutrients.get("protein", []))
-        entities_found = await self._extract_entities(protein_text)
+            # LIVER
+            protein_text = "\n".join(nutrients.get("protein", []))
+            entities_found = await self._extract_entities(protein_text)
 
-        elapsed = time.monotonic() - start
-        logger.info(
-            "DIGEST complete: source=%s nutrients=%s chunks=%d entities=%s time=%.2fs",
-            source, nutrient_counts, chunks_created, entities_found, elapsed,
-        )
+            elapsed = time.monotonic() - start
+            logger.info(
+                "DIGEST complete: source=%s nutrients=%s chunks=%d entities=%s time=%.2fs",
+                source, nutrient_counts, chunks_created, entities_found, elapsed,
+            )
 
-        return {
-            "nutrients_extracted": nutrient_counts,
-            "chunks_created": chunks_created,
-            "entities_found": entities_found,
-            "processing_time": round(elapsed, 3),
-            "source_id": source_id,
-        }
+            return {
+                "nutrients_extracted": nutrient_counts,
+                "chunks_created": chunks_created,
+                "entities_found": entities_found,
+                "processing_time": round(elapsed, 3),
+                "source_id": source_id,
+            }
+        except Exception as exc:
+            logger.warning(
+                "Nutrient extraction or summarization failed for source=%s — saving raw body to KB and graph: %s",
+                source, exc,
+                exc_info=True,
+            )
+            fallback_nutrients: dict[str, list[str]] = {"protein": [raw_data.strip()], "carbs": [], "waste": []}
+            chunks_created = await self._absorb(
+                fallback_nutrients,
+                source,
+                source_category,
+                source_id=source_id,
+            )
+            entities_found = await self._extract_entities(raw_data.strip())
+            elapsed = time.monotonic() - start
+            return {
+                "nutrients_extracted": {"protein": 1, "carbs": 0, "waste": 0},
+                "chunks_created": chunks_created,
+                "entities_found": entities_found,
+                "processing_time": round(elapsed, 3),
+                "source_id": source_id,
+                "fallback_raw": True,
+            }
 
     @observe()
     async def ingest_email(self, email: Email) -> dict[str, Any]:

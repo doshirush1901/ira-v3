@@ -225,6 +225,7 @@ class VendorDatabase:
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine, expire_on_commit=False,
         )
+        self._closed = False
         self._initialized = True
 
     @classmethod
@@ -239,6 +240,13 @@ class VendorDatabase:
         async with self._engine.begin() as conn:
             await conn.run_sync(VendorBase.metadata.create_all)
         logger.info("Vendor tables created/verified")
+
+    async def close(self) -> None:
+        """Dispose the SQLAlchemy engine (idempotent)."""
+        if self._closed:
+            return
+        await self._engine.dispose()
+        self._closed = True
 
     # ── Vendor CRUD ──────────────────────────────────────────────────────
 

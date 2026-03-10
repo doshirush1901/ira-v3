@@ -54,6 +54,8 @@ from rich.table import Table
 
 console = Console()
 err_console = Console(stderr=True)
+# For progress bars: force terminal so they render when run from Cursor/IDE
+_progress_console = Console(stderr=True, force_terminal=True)
 
 app = typer.Typer(
     name="ira",
@@ -1455,6 +1457,9 @@ def takeout_ingest(
     max_messages: int = typer.Option(0, "--max-messages", help="Max candidate messages to process (0 = all)."),
     mem0_user_id: str = typer.Option("global", "--mem0-user-id", help="Mem0 user_id for stored memories."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify/filter only, do not write Qdrant/Neo4j/Mem0."),
+    verify_after: bool = typer.Option(False, "--verify-after", help="After ingest, verify counts in Qdrant (and note Mem0)."),
+    cleanup_after: bool = typer.Option(False, "--cleanup-after", help="After ingest (and optional verify), delete takeout data folder contents to free space."),
+    notify_email: str | None = typer.Option(None, "--notify-email", help="When ingest completes, send a report to this email address."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Ingest Google Takeout mbox with a protein-first Machinecraft profile."""
@@ -1474,6 +1479,17 @@ def takeout_ingest(
         console.print(f"[yellow]No .mbox files found in {source_dir}[/yellow]")
         raise typer.Exit(0)
 
+    # Time estimate: ~300–800 msgs/mbox, ~1–3% protein, ~25–35s per protein message
+    est_msgs = len(mbox_files) * 500
+    est_protein = max(1, int(est_msgs * 0.02))
+    est_min = est_protein * 25 // 60
+    est_max = int(est_protein * 40 / 60)
+    console.print(
+        f"[cyan]Takeout ingest:[/cyan] {len(mbox_files)} mbox files, "
+        f"~{est_msgs} messages (est.), ~{est_protein} with protein (est.). "
+        f"[yellow]Estimated time: {est_min}–{est_max} min.[/yellow] Progress bar and progress lines below."
+    )
+
     checkpoint_path = Path("data/brain") / f"takeout_ingest_{_slugify(batch_name)}.json"
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     if checkpoint_path.exists():
@@ -1489,6 +1505,8 @@ def takeout_ingest(
     from ira.memory.long_term import LongTermMemory
     memory = LongTermMemory()
 
+    report_data: dict[str, Any] = {}
+
     async def _run_ingest() -> None:
         stats = {
             "mbox_files": len(mbox_files),
@@ -1503,6 +1521,8 @@ def takeout_ingest(
             "entities": {"companies": 0, "people": 0, "machines": 0, "relationships": 0},
         }
 
+        progress_file = checkpoint_path.parent / "takeout_ingest_progress.txt"
+
         def _write_checkpoint() -> None:
             checkpoint_payload = {
                 "batch_name": batch_name,
@@ -1512,6 +1532,15 @@ def takeout_ingest(
                 "stats": stats,
             }
             checkpoint_path.write_text(json.dumps(checkpoint_payload, indent=2), encoding="utf-8")
+            # One-line progress file for background runs (e.g. cat takeout_ingest_progress.txt)
+            progress_file.write_text(
+                f"seen={stats['messages_seen']} processed={stats['messages_processed']} "
+                f"protein={stats['messages_with_protein']} chunks={stats['chunks_created']} "
+                f"mem0={stats['mem0_written']} noise={stats['messages_skipped_noise']} "
+                f"low_signal={stats['messages_skipped_low_signal']} "
+                f"updated={datetime.now(timezone.utc).isoformat()}\n",
+                encoding="utf-8",
+            )
 
         # Write an initial checkpoint immediately so external monitors can see state.
         _write_checkpoint()
@@ -1523,9 +1552,22 @@ def takeout_ingest(
             BarColumn(),
             MofNCompleteColumn(),
             TimeRemainingColumn(),
-            console=err_console,
+            console=_progress_console,
+            refresh_per_second=2,
         ) as progress:
             task = progress.add_task("Processing takeout mbox...", total=target_total)
+
+            def _print_progress_line() -> None:
+                """Print a single progress line so it's visible even when bar doesn't render (e.g. non-TTY)."""
+                _progress_console.print(
+                    f"[dim]Progress: seen={stats['messages_seen']} "
+                    f"processed={stats['messages_processed']} "
+                    f"protein={stats['messages_with_protein']} "
+                    f"noise={stats['messages_skipped_noise']} "
+                    f"low_signal={stats['messages_skipped_low_signal']} "
+                    f"chunks={stats['chunks_created']} "
+                    f"mem0={stats['mem0_written']}[/dim]",
+                )
 
             def _update_progress(label: str) -> None:
                 progress.update(
@@ -1558,6 +1600,8 @@ def takeout_ingest(
                         stats["messages_skipped_checkpoint"] += 1
                         if stats["messages_seen"] % 250 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 50 == 0:
+                            _print_progress_line()
                         if stats["messages_seen"] % 10 == 0:
                             _write_checkpoint()
                             err_console.print(
@@ -1573,6 +1617,8 @@ def takeout_ingest(
                         done_keys.add(key)
                         if stats["messages_seen"] % 10 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 50 == 0:
+                            _print_progress_line()
                         if stats["messages_seen"] % 10 == 0:
                             _write_checkpoint()
                             err_console.print(
@@ -1586,6 +1632,8 @@ def takeout_ingest(
                         done_keys.add(key)
                         if stats["messages_seen"] % 100 == 0:
                             _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 50 == 0:
+                            _print_progress_line()
                         if stats["messages_seen"] % 100 == 0:
                             _write_checkpoint()
                             err_console.print(
@@ -1644,6 +1692,8 @@ def takeout_ingest(
                     done_keys.add(key)
                     stats["messages_processed"] += 1
                     _update_progress(mbox_path.name)
+                    if stats["messages_seen"] % 50 == 0:
+                        _print_progress_line()
                     if stats["messages_processed"] % 5 == 0:
                         _write_checkpoint()
                         err_console.print(
@@ -1680,6 +1730,7 @@ def takeout_ingest(
         summary.add_row("dry_run", str(dry_run))
         console.print(summary)
         console.print(f"[green]Checkpoint:[/green] {checkpoint_path}")
+        report_data["stats"] = stats
 
     try:
         _run(_run_ingest())
@@ -1688,6 +1739,103 @@ def takeout_ingest(
             ingestor.close()
         except Exception:
             logger.debug("Failed to close ingestor in takeout ingest", exc_info=True)
+
+    if verify_after and not dry_run:
+        async def _verify() -> None:
+            _dig, _ing, qdrant = _build_digestive()
+            try:
+                count = await qdrant.count_by_source_category("takeout_email_protein")
+                report_data["qdrant_count"] = count
+                console.print(f"[green]Qdrant:[/green] {count} points with source_category=takeout_email_protein")
+                console.print("[dim]Mem0: facts stored via LongTermMemory.store_fact (no per-source count API).[/dim]")
+            finally:
+                await qdrant.close()
+        _run(_verify())
+
+    if cleanup_after:
+        import shutil
+        takeout_dir = source_path.resolve()
+        if takeout_dir.exists():
+            for entry in takeout_dir.iterdir():
+                if entry.is_file():
+                    entry.unlink()
+                else:
+                    shutil.rmtree(entry, ignore_errors=True)
+            console.print(f"[green]Cleanup:[/green] removed contents of {takeout_dir}")
+            report_data["cleanup_done"] = True
+        else:
+            console.print(f"[yellow]Cleanup:[/yellow] directory not found: {takeout_dir}")
+            report_data["cleanup_done"] = False
+
+    if notify_email and report_data.get("stats"):
+        def _build_report() -> str:
+            s = report_data["stats"]
+            lines = [
+                "Takeout protein ingestion complete.",
+                "",
+                "Summary:",
+                f"  mbox_files: {s.get('mbox_files', 0)}",
+                f"  messages_seen: {s.get('messages_seen', 0)}",
+                f"  messages_skipped_checkpoint: {s.get('messages_skipped_checkpoint', 0)}",
+                f"  messages_skipped_noise: {s.get('messages_skipped_noise', 0)}",
+                f"  messages_skipped_low_signal: {s.get('messages_skipped_low_signal', 0)}",
+                f"  messages_processed: {s.get('messages_processed', 0)}",
+                f"  messages_with_protein: {s.get('messages_with_protein', 0)}",
+                f"  chunks_created: {s.get('chunks_created', 0)}",
+                f"  mem0_written: {s.get('mem0_written', 0)}",
+                f"  entities: companies={s.get('entities', {}).get('companies', 0)} people={s.get('entities', {}).get('people', 0)} machines={s.get('entities', {}).get('machines', 0)} relationships={s.get('entities', {}).get('relationships', 0)}",
+            ]
+            if "qdrant_count" in report_data:
+                lines.append(f"  Qdrant points (takeout_email_protein): {report_data['qdrant_count']}")
+            if "cleanup_done" in report_data:
+                lines.append(f"  Cleanup: {'done' if report_data['cleanup_done'] else 'skipped or failed'}")
+            lines.append("")
+            lines.append(f"Checkpoint: {checkpoint_path}")
+            return "\n".join(lines)
+
+        async def _send_notification() -> None:
+            from ira.interfaces.email_processor import send_simple_notification
+            subject = "Ira: Takeout protein ingestion complete"
+            body = _build_report()
+            try:
+                result = await send_simple_notification(notify_email, subject, body)
+                console.print(f"[green]Notification sent to {notify_email}[/green] (message_id={result.get('id', '')})")
+            except Exception as e:
+                logger.warning("Failed to send completion email: %s", e, exc_info=True)
+                console.print(f"[yellow]Could not send notification to {notify_email}:[/yellow] {e}")
+
+        _run(_send_notification())
+
+
+@takeout_app.command("verify")
+def takeout_verify() -> None:
+    """Verify takeout data is in Qdrant (count points with source_category=takeout_email_protein)."""
+    async def _do() -> None:
+        digestive, _ingestor, qdrant = _build_digestive()
+        try:
+            count = await qdrant.count_by_source_category("takeout_email_protein")
+            console.print(f"Qdrant points (takeout_email_protein): {count}")
+        finally:
+            await qdrant.close()
+    _run(_do())
+
+
+@takeout_app.command("cleanup")
+def takeout_cleanup(
+    source_dir: str = typer.Option("data/takeout_ingest", "--source-dir", help="Folder to clear (contents only)."),
+) -> None:
+    """Remove contents of takeout data folder to free space for new takeout data."""
+    import shutil
+    path = Path(source_dir).resolve()
+    if not path.exists():
+        console.print(f"[yellow]Directory does not exist:[/yellow] {path}")
+        raise typer.Exit(0)
+    for entry in path.iterdir():
+        if entry.is_file():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry, ignore_errors=True)
+    console.print(f"[green]Cleaned:[/green] {path}")
 
 
 # ── System sub-commands ──────────────────────────────────────────────────

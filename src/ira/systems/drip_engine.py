@@ -30,6 +30,43 @@ class AutonomousDripEngine:
         self._bus = message_bus
         self._gmail = gmail
 
+    @staticmethod
+    def _extract_thread_id(draft: Any) -> str:
+        if not isinstance(draft, dict):
+            return ""
+        message = draft.get("message")
+        if isinstance(message, dict):
+            return str(message.get("threadId", "") or "")
+        return str(draft.get("threadId", "") or "")
+
+    async def _create_draft(self, to: str, subject: str, body: str) -> dict[str, Any]:
+        if self._gmail is None:
+            return {}
+        if hasattr(self._gmail, "create_draft"):
+            result = await self._gmail.create_draft(to=to, subject=subject, body=body)
+            return result if isinstance(result, dict) else {}
+        if hasattr(self._gmail, "send_draft"):
+            # Legacy adapter compatibility.
+            await self._gmail.send_draft(to=to, subject=subject, body=body)
+            return {}
+        raise AttributeError("Gmail adapter must provide send_draft() or create_draft()")
+
+    async def _has_reply(self, step: Any, to: str, subject: str) -> bool:
+        if self._gmail is None:
+            return False
+        if hasattr(self._gmail, "check_replies"):
+            marker = str(getattr(step, "reply_content", "") or "")
+            if not marker.startswith("thread:"):
+                return False
+            thread_id = marker.split("thread:", 1)[1].strip()
+            if not thread_id:
+                return False
+            messages = await self._gmail.check_replies(thread_id)
+            return bool(messages)
+        if hasattr(self._gmail, "check_reply"):
+            return bool(await self._gmail.check_reply(to=to, subject=subject))
+        raise AttributeError("Gmail adapter must provide check_reply() or check_replies()")
+
     async def evaluate_campaigns(self) -> dict[str, Any]:
         """Check active campaigns and evaluate performance metrics."""
         try:
@@ -92,14 +129,18 @@ class AutonomousDripEngine:
                                 errors.append(f"No email for contact {step.contact_id} (step {step.step_number})")
                                 continue
 
-                            await self._gmail.send_draft(
+                            draft = await self._create_draft(
                                 to=contact.email,
                                 subject=step.email_subject,
                                 body=step.email_body,
                             )
                             now = datetime.now(timezone.utc)
                             step.sent_at = now
-                            await self._crm.update_drip_step(step.id, sent_at=now)
+                            updates: dict[str, Any] = {"sent_at": now}
+                            thread_id = self._extract_thread_id(draft)
+                            if thread_id:
+                                updates["reply_content"] = f"thread:{thread_id}"
+                            await self._crm.update_drip_step(step.id, **updates)
                             sent_count += 1
                         except Exception as exc:
                             errors.append(f"Send failed for step {step.step_number}: {exc}")
@@ -134,7 +175,8 @@ class AutonomousDripEngine:
                         if contact is None or not contact.email:
                             continue
 
-                        has_reply = await self._gmail.check_reply(
+                        has_reply = await self._has_reply(
+                            step=step,
                             to=contact.email,
                             subject=step.email_subject,
                         )

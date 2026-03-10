@@ -68,6 +68,35 @@ _TASK_TYPE_TO_PHASE = {
 _COMPONENT_STOPWORDS = {"from", "for", "and", "the", "a", "an", "to", "of", "mt", "sc", "plug"}
 
 
+def _normalize_column_key(label: str) -> str:
+    """Normalize CSV header keys for robust lookups.
+
+    Asana exports sometimes prefix the first header with UTF-8 BOM and can vary
+    spacing/casing across export versions.
+    """
+    cleaned = (label or "").replace("\ufeff", "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")
+
+
+def _row_value(row: dict[str, Any], *candidates: str) -> str:
+    """Return first non-empty value for any candidate column name."""
+    if not row:
+        return ""
+
+    normalized_to_value = {
+        _normalize_column_key(str(key)): value
+        for key, value in row.items()
+    }
+    for candidate in candidates:
+        value = normalized_to_value.get(_normalize_column_key(candidate))
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
 def normalize_section_name(section: str) -> str:
     """Normalize Asana section/column names into canonical uppercase labels."""
     normalized = re.sub(r"\s+", " ", (section or "").strip()).upper()
@@ -87,6 +116,18 @@ def map_phase_std(section: str, task_type: str) -> str:
     section_normalized = normalize_section_name(section)
     if section_normalized in _PHASE_STD_MAP:
         return _PHASE_STD_MAP[section_normalized]
+    if "MANUFACTUR" in section_normalized:
+        return "gate_fabrication_done"
+    if "ASSEMB" in section_normalized:
+        return "gate_assembly_done"
+    if "DESIGN" in section_normalized or "DRAWING" in section_normalized:
+        return "gate_design_freeze"
+    if "FAT" in section_normalized or "TEST" in section_normalized or "QUALITY" in section_normalized:
+        return "gate_fat_done"
+    if "DISPATCH" in section_normalized or "PACK" in section_normalized:
+        return "gate_dispatch_ready"
+    if "PROCURE" in section_normalized or "RFQ" in section_normalized or "PURCHASE" in section_normalized:
+        return "gate_material_ready"
     return _TASK_TYPE_TO_PHASE.get(task_type, "gate_unknown")
 
 
@@ -122,18 +163,18 @@ class NormalizedTask:
 
 def normalize_task_record(row: dict[str, Any]) -> NormalizedTask:
     """Normalize one Asana-export row into planning-ready fields."""
-    task_name = str(row.get("Name", "")).strip()
+    task_name = _row_value(row, "Name", "Task Name")
     task_type = classify_task_type(task_name)
-    phase_raw = str(row.get("Section/Column", "")).strip()
+    phase_raw = _row_value(row, "Section/Column", "Section", "Column")
     return NormalizedTask(
-        task_id=str(row.get("Task ID", "")).strip(),
+        task_id=_row_value(row, "Task ID", "Task GID", "Task"),
         task_name=task_name,
         phase_raw=phase_raw,
         phase_std=map_phase_std(phase_raw, task_type),
         task_type=task_type,
         component_key=extract_component_key(task_name) if task_type in {"procure_order", "procure_receive"} else "",
-        created_at=parse_iso_date(str(row.get("Created At", "")).strip()),
-        completed_at=parse_iso_date(str(row.get("Completed At", "")).strip()),
+        created_at=parse_iso_date(_row_value(row, "Created At", "Created")),
+        completed_at=parse_iso_date(_row_value(row, "Completed At", "Completed")),
     )
 
 
@@ -145,7 +186,7 @@ def pair_procurement_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for idx, row in enumerate(rows):
         n = normalized[idx]
-        project = str(row.get("Projects", "")).strip().lower()
+        project = _row_value(row, "Projects", "Project").lower()
         key = (project, n.component_key)
         if n.task_type == "procure_order" and n.component_key:
             orders.append((n, project))

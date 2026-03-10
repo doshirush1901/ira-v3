@@ -186,8 +186,9 @@ class Plutus(BaseAgent):
         if task == "generate_invoice":
             return await self.use_skill(
                 "generate_invoice",
+                customer=ctx.get("customer", ""),
                 quote_id=ctx.get("quote_id", ""),
-                order_id=ctx.get("order_id", ""),
+                items=ctx.get("items", []),
             )
 
         return await self.run(query, context, system_prompt=_SYSTEM_PROMPT)
@@ -211,7 +212,7 @@ class Plutus(BaseAgent):
                 machine_model = self._extract_machine_from_query(query)
 
             if not machine_model:
-                return ""
+                return "Error: No machine model identified in the query. Ask for a specific model (e.g. PF1-500) or use the estimate_price tool with a machine_model parameter."
 
             estimate = await self._pricing_engine.estimate_price(
                 machine_model, configuration,

@@ -25,12 +25,22 @@ from ira.exceptions import DatabaseError, IngestionError, IraError
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import EntityNames, SubQueries
 from ira.services.llm_client import get_llm_client
+from ira.services.resilience import CircuitBreaker, RetryPolicy, run_with_retry
 
 logger = logging.getLogger(__name__)
 
 _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+
+
+def _is_retryable_external_error(exc: Exception) -> bool:
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status is None or status >= 500 or status == 429
 
 
 class UnifiedRetriever:
@@ -53,6 +63,16 @@ class UnifiedRetriever:
         settings = get_settings()
         self._voyage_key = settings.embedding.api_key.get_secret_value()
         self._voyage_rerank_model = settings.embedding.rerank_model
+        self._mem0_timeout_seconds = max(1.0, float(settings.app.mem0_timeout))
+        self._flashrank_timeout_seconds = 20.0
+        self._backend_timeouts_seconds: dict[str, float] = {
+            "qdrant": 12.0,
+            "neo4j": 12.0,
+            "mem0": max(2.0, self._mem0_timeout_seconds + 1.0),
+        }
+        self._external_retry = RetryPolicy(max_attempts=3, base_delay_seconds=0.8)
+        self._mem0_breaker = CircuitBreaker(threshold=8, window_seconds=180)
+        self._voyage_breaker = CircuitBreaker(threshold=8, window_seconds=180)
 
     # ── primary search ───────────────────────────────────────────────────
 
@@ -83,10 +103,17 @@ class UnifiedRetriever:
         merged: list[dict[str, Any]] = []
         for source_type, task in tasks.items():
             try:
-                results = await task
+                backend_timeout = self._backend_timeouts_seconds.get(source_type, 15.0)
+                results = await asyncio.wait_for(task, timeout=backend_timeout)
                 for r in results:
                     r["source_type"] = source_type
                 merged.extend(results)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Retrieval from %s timed out after %.1fs",
+                    source_type,
+                    self._backend_timeouts_seconds.get(source_type, 15.0),
+                )
             except (DatabaseError, Exception):
                 logger.exception("Retrieval from %s failed", source_type)
 
@@ -329,8 +356,27 @@ class UnifiedRetriever:
         if self._mem0 is None:
             return []
         try:
-            raw = await asyncio.to_thread(
-                lambda: self._mem0.search(query, user_id="global", top_k=limit)
+            mem0_timeout = getattr(self, "_mem0_timeout_seconds", 15.0)
+            external_retry = getattr(
+                self,
+                "_external_retry",
+                RetryPolicy(max_attempts=3, base_delay_seconds=0.8),
+            )
+            mem0_breaker = getattr(self, "_mem0_breaker", None)
+
+            async def _operation() -> Any:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        lambda: self._mem0.search(query, user_id="global", top_k=limit)
+                    ),
+                    timeout=mem0_timeout,
+                )
+
+            raw = await run_with_retry(
+                _operation,
+                policy=external_retry,
+                is_retryable=_is_retryable_external_error,
+                circuit_breaker=mem0_breaker,
             )
             memories = raw.get("results", raw) if isinstance(raw, dict) else raw
             return [
@@ -425,29 +471,42 @@ class UnifiedRetriever:
 
         filtered = filtered[:self._MAX_RERANK_DOCS]
         original_indices, documents = zip(*filtered)
+        external_retry = getattr(
+            self,
+            "_external_retry",
+            RetryPolicy(max_attempts=3, base_delay_seconds=0.8),
+        )
+        voyage_breaker = getattr(self, "_voyage_breaker", None)
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                _VOYAGE_RERANK_URL,
-                json={
-                    "query": query,
-                    "documents": list(documents),
-                    "model": self._voyage_rerank_model,
-                    "top_k": min(limit, len(documents)),
-                },
-                headers={
-                    "Authorization": f"Bearer {self._voyage_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            if resp.status_code >= 400:
-                logger.warning(
-                    "Voyage rerank returned %d: %s",
-                    resp.status_code, resp.text[:500],
+        async def _operation() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    _VOYAGE_RERANK_URL,
+                    json={
+                        "query": query,
+                        "documents": list(documents),
+                        "model": self._voyage_rerank_model,
+                        "top_k": min(limit, len(documents)),
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self._voyage_key}",
+                        "Content-Type": "application/json",
+                    },
                 )
-            resp.raise_for_status()
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Voyage rerank returned %d: %s",
+                        resp.status_code, resp.text[:500],
+                    )
+                resp.raise_for_status()
+                return resp.json()
 
-        data = resp.json()
+        data = await run_with_retry(
+            _operation,
+            policy=external_retry,
+            is_retryable=_is_retryable_external_error,
+            circuit_breaker=voyage_breaker,
+        )
         ranked_items = data.get("data", [])
 
         output: list[dict[str, Any]] = []
@@ -480,9 +539,13 @@ class UnifiedRetriever:
         ]
 
         try:
-            reranked = await asyncio.to_thread(
-                self._flashrank.rerank,
-                RerankRequest(query=query, passages=passages),
+            flashrank_timeout = getattr(self, "_flashrank_timeout_seconds", 20.0)
+            reranked = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._flashrank.rerank,
+                    RerankRequest(query=query, passages=passages),
+                ),
+                timeout=flashrank_timeout,
             )
         except (IraError, Exception):
             logger.exception("FlashRank reranking failed; returning by original score")

@@ -65,6 +65,10 @@ class TaskOrchestrator:
         self._redis = redis_cache
         self._voice = voice
         self._pdfco = pdfco
+        # Fallback persistence when Redis is unavailable.
+        self._local_state: dict[str, dict[str, Any]] = {}
+        self._local_events: dict[str, list[dict[str, Any]]] = {}
+        self._local_index: list[str] = []
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -97,11 +101,13 @@ class TaskOrchestrator:
 
     async def list_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return recent task states, newest first."""
-        if self._redis is None or not self._redis.available:
-            return []
-        task_ids = await self._redis.get_json(_TASK_INDEX_KEY) or []
+        task_ids: list[str] = []
+        if self._redis is not None and self._redis.available:
+            task_ids = await self._redis.get_json(_TASK_INDEX_KEY) or []
+        else:
+            task_ids = list(self._local_index)
         if not isinstance(task_ids, list):
-            return []
+            task_ids = []
         states: list[dict[str, Any]] = []
         for task_id in task_ids[-limit:][::-1]:
             state = await self._load_state(str(task_id))
@@ -111,6 +117,10 @@ class TaskOrchestrator:
 
     async def append_task_event(self, task_id: str, event: dict[str, Any]) -> None:
         """Append an event to a task's event log."""
+        local_events = self._local_events.get(task_id, [])
+        local_events.append(event)
+        self._local_events[task_id] = local_events[-1000:]
+
         if self._redis is None or not self._redis.available:
             return
         key = f"{_TASK_EVENTS_PREFIX}{task_id}"
@@ -123,13 +133,12 @@ class TaskOrchestrator:
 
     async def get_task_events(self, task_id: str, limit: int = 200) -> list[dict[str, Any]]:
         """Return most recent events for a task."""
-        if self._redis is None or not self._redis.available:
-            return []
-        key = f"{_TASK_EVENTS_PREFIX}{task_id}"
-        events = await self._redis.get_json(key) or []
-        if not isinstance(events, list):
-            return []
-        return events[-limit:]
+        if self._redis is not None and self._redis.available:
+            key = f"{_TASK_EVENTS_PREFIX}{task_id}"
+            events = await self._redis.get_json(key) or []
+            if isinstance(events, list):
+                return events[-limit:]
+        return self._local_events.get(task_id, [])[-limit:]
 
     async def abort_task(self, task_id: str, reason: str = "") -> bool:
         """Request abortion of a running task."""
@@ -624,15 +633,24 @@ class TaskOrchestrator:
         return True
 
     async def _save_state(self, task_id: str, state: dict[str, Any]) -> None:
+        self._local_state[task_id] = dict(state)
         if self._redis is not None and self._redis.available:
             await self._redis.set_json(f"task:{task_id}", state, _TASK_TTL_SECONDS)
 
     async def _load_state(self, task_id: str) -> dict[str, Any] | None:
         if self._redis is not None and self._redis.available:
-            return await self._redis.get_json(f"task:{task_id}")
-        return None
+            state = await self._redis.get_json(f"task:{task_id}")
+            if isinstance(state, dict):
+                self._local_state[task_id] = dict(state)
+                return state
+        local = self._local_state.get(task_id)
+        return dict(local) if isinstance(local, dict) else None
 
     async def _update_task_index(self, task_id: str) -> None:
+        local_index = [i for i in self._local_index if i != task_id]
+        local_index.append(task_id)
+        self._local_index = local_index[-500:]
+
         if self._redis is None or not self._redis.available:
             return
         index = await self._redis.get_json(_TASK_INDEX_KEY) or []

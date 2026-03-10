@@ -68,7 +68,11 @@ def _resolve_source_category(rel_path: str, meta: dict[str, Any]) -> str:
     return doc_type
 
 
-async def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
+async def scan_for_undigested(
+    *,
+    force: bool = False,
+    exclude_prefixes: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
     """Compare the metadata index against the ingestion log.
 
     Returns a list of file dicts needing ingestion, each with keys
@@ -79,7 +83,17 @@ async def scan_for_undigested(*, force: bool = False) -> list[dict[str, Any]]:
     log = await load_log()
     queue: list[dict[str, Any]] = []
 
+    normalized_excludes = tuple(
+        p.strip().lower().rstrip("/") + "/"
+        for p in exclude_prefixes
+        if p and p.strip()
+    )
+
     for rel_path, meta in index.get("files", {}).items():
+        rel_path_lower = rel_path.lower()
+        if any(rel_path_lower.startswith(prefix) for prefix in normalized_excludes):
+            continue
+
         filepath = Path(meta.get("path", ""))
         if not filepath.exists():
             continue
@@ -132,6 +146,7 @@ async def run_ingestion_cycle(
     force: bool = False,
     batch_size: int = 712,
     concurrency: int = DEFAULT_CONCURRENCY,
+    exclude_prefixes: tuple[str, ...] = (),
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run a gated ingestion cycle through the DigestiveSystem.
@@ -149,7 +164,7 @@ async def run_ingestion_cycle(
     from ira.config import get_settings
     from ira.systems.digestive import DigestiveSystem
 
-    queue = await scan_for_undigested(force=force)
+    queue = await scan_for_undigested(force=force, exclude_prefixes=exclude_prefixes)
     if not queue:
         logger.info("Gatekeeper: nothing to ingest")
         return {"files_processed": 0, "files_skipped": 0, "reason": "up_to_date"}
@@ -342,6 +357,7 @@ async def run_ingestion_cycle(
         "batch_size": batch_total,
         "total_queued": len(queue),
         "concurrency": concurrency,
+        "exclude_prefixes": list(exclude_prefixes),
     }
     logger.info("Gatekeeper ingestion cycle complete: %s", summary)
     return summary

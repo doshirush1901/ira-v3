@@ -91,6 +91,16 @@ class EmailDraftRequest(BaseModel):
     tone: str = "professional"
 
 
+class EmailSendRequest(BaseModel):
+    """Payload for sending an email (only when user explicitly said 'send')."""
+
+    to: str
+    subject: str
+    body: str
+    cc: str | None = None
+    thread_id: str | None = None
+
+
 class OutboundMessageRequest(BaseModel):
     to: str
     subject: str
@@ -200,6 +210,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     redis_cache = RedisCache()
     await redis_cache.connect()
     _services[SK.REDIS] = redis_cache
+    from ira.services.llm_client import get_llm_client
+    get_llm_client().set_redis_cache(redis_cache)
 
     # ── Google Docs / Drive ──────────────────────────────────────────
     from ira.systems.google_docs import GoogleDocsService
@@ -245,6 +257,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from ira.brain.retriever import UnifiedRetriever
 
     embedding = EmbeddingService()
+    if redis_cache.available:
+        embedding.set_redis_cache(redis_cache)
     qdrant = QdrantManager(embedding_service=embedding)
     graph = KnowledgeGraph()
 
@@ -512,6 +526,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     unified_context = UnifiedContextManager()
     _services["unified_context"] = unified_context
 
+    # ── Tool stats (observability) ────────────────────────────────────
+    from ira.brain.tool_stats import ToolStatsTracker
+    tool_stats_tracker = ToolStatsTracker()
+    _services["tool_stats_tracker"] = tool_stats_tracker
+
     # ── Request pipeline ──────────────────────────────────────────────
     from ira.pipeline import RequestPipeline
 
@@ -532,6 +551,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         redis_cache=redis_cache,
         episodic_memory=episodic,
         long_term_memory=long_term,
+        tool_stats_tracker=tool_stats_tracker,
     )
     _services["pipeline"] = request_pipeline
 
@@ -663,8 +683,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await sensory.close()
     await musculoskeletal.close()
     await graph.close()
+    await crm.close()
+    await vendor_db.close()
 
     for svc_name in (
+        "crm",
+        "vendor_db",
         "correction_store",
         "conversation", "episodic", "dream_mode", "emotional_intelligence",
         "relationship_memory", "goal_manager", "metacognition", "inner_voice",
@@ -692,8 +716,11 @@ app = FastAPI(
 )
 
 _cors_raw = get_settings().app.cors_origins
-_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
-
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["http://localhost:3000"]
+if "*" in _cors_origins:
+    logger.warning(
+        "CORS_ORIGINS=* with allow_credentials=True is insecure for production; restrict to specific origins."
+    )
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -1135,6 +1162,26 @@ async def dream_report() -> dict[str, Any]:
     }
 
 
+@app.get("/api/memory/recall")
+async def memory_recall(
+    query: str,
+    user_id: str = "global",
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Recall long-term memories (Mem0) for a given query and optional user_id (e.g. contact email).
+    Use when assembling context for lead email drafts so the draft is data-driven from past interactions."""
+    mem = _svc(SK.LONG_TERM_MEMORY)
+    if mem is None:
+        return {"memories": [], "source": "none"}
+    results = await mem.search(query=query, user_id=user_id, limit=limit)
+    memories = [
+        m.get("memory", m.get("content", ""))
+        for m in results
+        if m.get("memory") or m.get("content")
+    ]
+    return {"memories": memories, "source": "mem0"}
+
+
 @app.post("/api/email/search")
 async def email_search(req: EmailSearchRequest) -> dict[str, Any]:
     """Search Gmail using native query filters (from, subject, date, etc.)."""
@@ -1204,6 +1251,60 @@ async def email_draft(req: EmailDraftRequest) -> dict[str, Any]:
         "subject": req.subject,
         "body": body,
     }
+
+
+@app.post("/api/email/create-draft")
+async def email_create_draft(req: EmailSendRequest) -> dict[str, Any]:
+    """Create a Gmail draft (no send). User can open Gmail and send from their mailbox.
+
+    Works in any IRA_EMAIL_MODE. Does not require OPERATIONAL.
+    """
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    if ep is None:
+        raise HTTPException(status_code=503, detail="Email processor not available")
+    try:
+        result = await ep.create_draft(
+            to=req.to,
+            subject=req.subject,
+            body=req.body,
+            cc=req.cc,
+            thread_id=req.thread_id,
+        )
+        return {
+            "created": True,
+            "draft_id": result.get("id"),
+            "message_id": result.get("message", {}).get("id"),
+        }
+    except IraError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/email/send")
+async def email_send(req: EmailSendRequest) -> dict[str, Any]:
+    """Send an email via Gmail. Only call when the user explicitly said 'send'.
+
+    Explicit user send is allowed in any IRA_EMAIL_MODE (script or UI Send).
+    """
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    if ep is None:
+        raise HTTPException(status_code=503, detail="Email processor not available")
+    try:
+        result = await ep.send_message(
+            to=req.to,
+            subject=req.subject,
+            body=req.body,
+            cc=req.cc,
+            thread_id=req.thread_id,
+            user_initiated=True,
+        )
+        return {
+            "sent": True,
+            "message_id": result.get("id"),
+            "thread_id": result.get("threadId"),
+            "sent_from": result.get("sent_from"),
+        }
+    except IraError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.post("/api/outbound/campaigns/draft")

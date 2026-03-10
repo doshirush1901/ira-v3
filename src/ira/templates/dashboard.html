@@ -107,6 +107,74 @@
     </div>
   </section>
 
+  <!-- Agent Leaderboard -->
+  {% if agent_leaderboard %}
+  <section class="chart-box" style="margin-bottom: 1.5rem;">
+    <h2>Agent Leaderboard</h2>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="border-bottom: 1px solid #2a2d3a; text-align: left;">
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Agent</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Tier</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Score</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Successes</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Failures</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in agent_leaderboard %}
+        <tr style="border-bottom: 1px solid #2a2d3a;">
+          <td style="padding: 0.5rem 0.75rem;">{{ row.agent }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.tier }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.score }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.successes }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.failures }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <!-- Tool success rate -->
+  {% if tool_success_rates %}
+  <section class="chart-box" style="margin-bottom: 1.5rem;">
+    <h2>Tool Success Rate</h2>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="border-bottom: 1px solid #2a2d3a; text-align: left;">
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Agent</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Tool</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Total</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Successes</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Failures</th>
+          <th style="padding: 0.5rem 0.75rem; color: #888;">Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in tool_success_rates %}
+        <tr style="border-bottom: 1px solid #2a2d3a;">
+          <td style="padding: 0.5rem 0.75rem;">{{ row.agent }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.tool }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.total }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.successes }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ row.failures }}</td>
+          <td style="padding: 0.5rem 0.75rem;">{{ (row.rate * 100) | int }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <!-- Pipeline Stage Latency (optional) -->
+  {% if pipeline_stage_labels and pipeline_stage_values %}
+  <section class="chart-box wide" style="margin-bottom: 1.5rem;">
+    <h2>Pipeline Stage Latency (avg last 24h)</h2>
+    <canvas id="pipelineStageChart"></canvas>
+  </section>
+  {% endif %}
+
   <!-- Charts -->
   <section class="charts">
     <div class="chart-box wide">
@@ -181,6 +249,36 @@
         }
       }
     });
+
+    // --- Pipeline Stage Latency (bar, optional) ---
+    {% if pipeline_stage_labels and pipeline_stage_values %}
+    const stageLabels = {{ pipeline_stage_labels | tojson }};
+    const stageData   = {{ pipeline_stage_values | tojson }};
+    const stageCtx = document.getElementById("pipelineStageChart");
+    if (stageCtx) {
+      new Chart(stageCtx, {
+        type: "bar",
+        data: {
+          labels: stageLabels,
+          datasets: [{
+            label: "Avg duration (s)",
+            data: stageData,
+            backgroundColor: "rgba(124,140,248,0.6)",
+            borderColor: "#7c8cf8",
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: TICK_COLOR }, grid: { color: GRID_COLOR } },
+            y: { beginAtZero: true, ticks: { color: TICK_COLOR }, grid: { color: GRID_COLOR } }
+          }
+        }
+      });
+    }
+    {% endif %}
 
     // --- Feedback Score Trend (line) ---
     const fbLabels = {{ feedback_trend_labels | tojson }};

@@ -221,6 +221,47 @@ class QdrantManager:
 
         return [_hit_to_dict(hit) for hit in hits]
 
+    # ── count by category ────────────────────────────────────────────────
+
+    async def count_by_source_category(
+        self,
+        source_category: str,
+        collection: str | None = None,
+    ) -> int:
+        """Count points whose source_category (or doc_type) payload matches."""
+        col = collection or self._default_collection
+        total = 0
+        offset: models.PointId | None = None
+        scroll_filter = models.Filter(
+            should=[
+                models.FieldCondition(
+                    key="source_category",
+                    match=models.MatchValue(value=source_category),
+                ),
+                models.FieldCondition(
+                    key="doc_type",
+                    match=models.MatchValue(value=source_category),
+                ),
+            ]
+        )
+        try:
+            while True:
+                points, offset = await self._client.scroll(
+                    collection_name=col,
+                    scroll_filter=scroll_filter,
+                    limit=500,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                total += len(points)
+                if offset is None or not points:
+                    break
+        except Exception:
+            logger.exception("count_by_source_category failed for %s", source_category)
+            raise
+        return total
+
     # ── deletion ─────────────────────────────────────────────────────────
 
     async def delete_by_source(

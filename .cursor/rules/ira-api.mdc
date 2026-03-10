@@ -158,6 +158,7 @@ curl -s -X POST http://localhost:8000/api/ingest \
 - **Board meeting:** `curl -s -X POST http://localhost:8000/api/board-meeting -H "Content-Type: application/json" -d '{"topic": "<topic>"}'`
 - **Dream report:** `curl -s http://localhost:8000/api/dream-report | python3 -m json.tool`
 - **Re-OCR scanned PDFs:** `curl -s -X POST http://localhost:8000/api/reingest-scanned -H "Content-Type: application/json" -d '{}' | python3 -m json.tool`
+- **Memory recall (for draft context):** `curl -s "http://localhost:8000/api/memory/recall?query=contact%20<email>&user_id=<email>&limit=5" | python3 -m json.tool`
 - **Email draft:** `curl -s -X POST http://localhost:8000/api/email/draft -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "context": "<instructions>"}'`
 - **Email send (only when user said "send"):** `curl -s -X POST http://localhost:8000/api/email/send -H "Content-Type: application/json" -d '{"to": "<email>", "subject": "<subject>", "body": "<draft body>", "thread_id": "<optional>"}'`
 - **Email rescan (SSE):** `curl -s -N -X POST http://localhost:8000/api/email/rescan -H "Content-Type: application/json" -d '{"after": "2023/01/01", "before": "2026/03/08"}'`
