@@ -28,14 +28,14 @@ for i in $(seq 1 15); do docker info > /dev/null 2>&1 && echo "Docker ready" && 
 
 ### Step B — Database containers
 
-Run from the **project root** (workspace root, where `docker-compose.local.yml` and `.env` live):
+Run from the **project root** (workspace root, where `docker-compose.local.yml` and `.env` live). Use the repo root so it works on any machine:
 
 ```bash
-cd /Users/rushabhdoshi/ira-v3
+cd "$(git rev-parse --show-toplevel)"
 docker compose -f docker-compose.local.yml up -d
 ```
 
-Verify all 4 containers (postgres, qdrant, neo4j, redis) are running:
+Or one command: `./scripts/start-local.sh` (from repo root). Verify all 4 containers (postgres, qdrant, neo4j, redis):
 
 ```bash
 docker compose -f docker-compose.local.yml ps --format "table {{.Name}}\t{{.Status}}"
@@ -45,10 +45,10 @@ Ira runs via the **CLI**; no API server is started. For queries, Cursor runs `ir
 
 ## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
 
-**Primary — CLI (full stack, no server):** Run from the **project root**:
+**Primary — CLI (full stack, no server):** Run from the **project root** (works on any PC):
 
 ```bash
-cd /Users/rushabhdoshi/ira-v3 && poetry run ira ask "<user question>" --json
+cd "$(git rev-parse --show-toplevel)" && poetry run ira ask "<user question>" --json
 ```
 
 - Parse stdout as JSON: `{"response": "<markdown>", "agents_consulted": ["clio", "athena", ...]}`.
@@ -179,14 +179,14 @@ pkill -f "uvicorn ira.interfaces.server:app" && echo "Ira shut down"
 Optionally stop the database containers too:
 
 ```bash
-cd /Users/rushabhdoshi/ira-v3 && docker compose -f docker-compose.local.yml down
+cd "$(git rev-parse --show-toplevel)" && docker compose -f docker-compose.local.yml down
 ```
 
 ## Important Rules
 
 - **Never fabricate Ira's responses.** Always execute the curl command and return the real result.
 - If API_SECRET_KEY is set in .env, add `-H "Authorization: Bearer <key>"` to all curl commands.
-- The server working directory must be the ira-v3 project root so .env is loaded.
+- Commands that need the repo (for .env and docker-compose) must run from the **project root**; use `cd "$(git rev-parse --show-toplevel)"` so it works on any machine.
 - Email mode defaults to TRAINING (reads inbox, creates drafts, does not send). The user must set `IRA_EMAIL_MODE=OPERATIONAL` in .env and restart to enable live sending.
 - Never auto-send outbound emails. Draft first unless the user explicitly instructs to send.
 - When the user gives a direct instruction such as "send email", sending is allowed immediately (still no autonomous/unsolicited sends).

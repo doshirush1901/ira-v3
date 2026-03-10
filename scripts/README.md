@@ -20,10 +20,11 @@ infrastructure management.
 | `seed_neo4j_from_ingestion_log.py` | Seed `Document`/`Fact`/`Correction` lineage graph from local stores |
 | `shakti_train.sh` | Fine-tuning workflow shell script |
 | `entrypoint.sh` | Docker container entrypoint |
+| `start-local.sh` | **Start Ira (local):** DBs only — Postgres, Qdrant, Neo4j, Redis. Run from repo root; works on any machine. |
 | `start.sh` | Start Ira (production: infrastructure + server via docker-compose.prod.yml) |
 | `stop.sh` | Stop Ira (production stack) |
 
-For **local development**, Ira runs CLI-first: start only infrastructure (`docker compose -f docker-compose.local.yml up -d`), then use `ira ask`, `ira task`, or `ira chat` — no API server required. See root [README](../README.md) and [GETTING_STARTED](../docs/GETTING_STARTED.md).
+For **local development**, run `./scripts/start-local.sh` from the repo root (or `docker compose -f docker-compose.local.yml up -d`), then use `ira ask`, `ira task`, or `ira chat` — no API server required. See root [README](../README.md) and [GETTING_STARTED](../docs/GETTING_STARTED.md).
 
 ## Usage
 
@@ -38,6 +39,7 @@ poetry run python scripts/seed_neo4j_from_ingestion_log.py --dry-run
 Shell scripts are executable directly:
 
 ```bash
+./scripts/start-local.sh   # local dev: DBs only
 ./scripts/start.sh
 ./scripts/stop.sh
 ```

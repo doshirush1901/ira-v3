@@ -13,7 +13,7 @@ When the user asks Ira to perform a complex, multi-step task — research, analy
 From the **project root**:
 
 ```bash
-cd /Users/rushabhdoshi/ira-v3 && poetry run ira task "<goal>" --json
+cd "$(git rev-parse --show-toplevel)" && poetry run ira task "<goal>" --json
 ```
 
 - Parse stdout as JSON: `task_id`, `status`, `summary`, `file_path`, `clarification_questions`.

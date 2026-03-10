@@ -91,10 +91,12 @@ When you open this repo in Cursor, three things happen automatically:
 ```
 Step 1:  Clone this repo and open it in Cursor
 Step 2:  Copy .env.example → .env, add your API keys
-Step 3:  Type "wake up Ira" in Cursor chat (Cursor starts Docker for DBs only)
+Step 3:  Start Ira (DBs only): ./scripts/start-local.sh  — or type "wake up Ira" in Cursor (Cursor runs this for you)
 Step 4:  Ask Ira anything — Cursor runs ira ask "<question>" --json or the fallback workflow
 Step 5:  For complex tasks ("full analysis", "prepare a report"), Cursor runs ira task "<goal>" --json
 ```
+
+**One command to start Ira (local):** From repo root, run `./scripts/start-local.sh` to bring up Postgres, Qdrant, Neo4j, and Redis. No API server. Then use `ira ask` or `ira task` (or Cursor).
 
 That's it. Cursor reads `.cursor/rules/ira-api.mdc` and `.cursor/rules/ira-cursor-workflow.mdc`, starts Docker (no API server), runs the CLI when you ask, and falls back to codebase/data search if the CLI isn't available. You just talk to it.
 
@@ -437,11 +439,13 @@ poetry install
 
 ### 2. Start Infrastructure
 
+**One command (works on any machine):**
+
 ```bash
-docker compose -f docker-compose.local.yml up -d
+./scripts/start-local.sh
 ```
 
-This starts Qdrant (vector DB), Neo4j (knowledge graph), PostgreSQL (CRM), and Redis (caching).
+Or: `docker compose -f docker-compose.local.yml up -d` from the repo root. This starts Qdrant (vector DB), Neo4j (knowledge graph), PostgreSQL (CRM), and Redis (caching). No API server.
 
 ### 3. Configure Environment
 

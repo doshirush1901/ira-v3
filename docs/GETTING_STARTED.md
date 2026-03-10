@@ -35,11 +35,13 @@ poetry install
 
 Ira relies on four services: **Qdrant** (vector search), **Neo4j** (knowledge graph), **PostgreSQL** (CRM data), and **Redis** (caching/dedup).
 
+**One command (works on any machine):**
+
 ```bash
-docker compose -f docker-compose.local.yml up -d
+./scripts/start-local.sh
 ```
 
-Docker must be running on your machine before this step.
+Or: `docker compose -f docker-compose.local.yml up -d` from the repo root. Docker must be running on your machine before this step.
 
 ### 4. Configure Environment
 
