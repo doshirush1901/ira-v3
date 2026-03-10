@@ -1,6 +1,6 @@
 # Getting Started with Ira v3
 
-Ira v3 is a multi-agent AI system — a "pantheon" of 24 specialized AI agents that operate as the digital brain of a manufacturing company. Each agent is an expert in a specific domain: sales, production, finance, marketing, HR, and more.
+Ira v3 is a multi-agent AI system — a "pantheon" of 27 specialized AI agents that operate as the digital brain of a manufacturing company. Each agent is an expert in a specific domain: sales, production, finance, marketing, HR, and more.
 
 This guide walks you through local setup and first interactions.
 

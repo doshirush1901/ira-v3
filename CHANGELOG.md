@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (Nothing yet.)
 
+## [3.3.3] - 2026-03-10
+
+### Added
+- **Pipeline stage timings** — Request pipeline records per-stage durations (perceive, remember, route, enrich, execute, faithfulness, assess, reflect, shape, learn) in a bounded deque; `get_recent_stage_timings(n)` returns last n runs for the dashboard.
+- **Tool success rate tracking** — `ToolStatsTracker` in `brain/tool_stats.py` records per-agent, per-tool success/failure; dashboard shows a "Tool success rate" table when the API server is running.
+- **Observability dashboard** — Dashboard now shows agent leaderboard (power levels), pipeline stage latency chart (when timings exist), and tool success rate table.
+- **CRM enricher tests** — `tests/test_crm_enricher.py` with 12 tests for contact/company enrichment, role, deals, scoring, and error handling.
+- **New tests** — `test_agent_skill_behaviors`, `test_atlas_asana_exports`, `test_db_lifecycle`, `test_retriever_resilience`, `test_truth_hints`.
+
+### Changed
+- **Agent tool reliability** — BaseAgent returns structured tool error messages; Prometheus/Plutus return descriptive errors instead of empty strings in tool/context builders.
+- **LLM retry** — `LLMClient` uses retry for structured and text paths; BaseAgent `_reason()` catches LLM failures and returns a clear fallback.
+- **Async I/O** — `imports_metadata_index.build_index()` uses `asyncio.to_thread()` for preview extraction to avoid blocking the event loop.
+- **Neo4j security** — `run_cypher` allows only read-style prefixes; `add_relationship` validates node types and property keys; invalid input raises `ValueError`.
+- **CORS** — Default `cors_origins = "http://localhost:3000"` in config; server logs a warning if `*` is used; `.env.example` updated.
+- **Resource leaks** — Document ingestor has `__aenter__`/`__aexit__`; gatekeeper closes qdrant/graph/ingestor.
+- **Email workflow** — TRAINING mode sends create draft and return; Gmail send wrapped in retry; digestive fallback saves raw body on nutrient/summarization failure.
+- **Delegation depth** — Pipeline sets `_delegation_depth`; BaseAgent enforces limit and message in `_tool_ask_agent`.
+- **LLM caching** — Optional Redis cache in LLMClient for text/structured when `temperature <= 0.2`, TTL 24h; server wires Redis when available.
+- **Embedding cache** — Optional Redis in EmbeddingService for `embed_texts`/`embed_query`, 7-day TTL; server sets cache when Redis available.
+- **Pipeline context** — `PipelineContextModel` (Pydantic) in `data/models.py`; pipeline builds context with it and passes `model_dump()` into execute.
+- **Dependencies** — `pyproject.toml`: aiofiles, voyageai; Docker: Qdrant v1.12.0, Postgres 16-alpine.
+- **Docs** — GETTING_STARTED agent count 24 → 27; README dashboard row describes observability (leaderboard, pipeline latency, tool success rate).
+
+### Fixed
+- Silent tool failures in agents now surface descriptive error messages.
+- Blocking I/O in metadata index moved off the event loop.
+
 ## [3.3.2] - 2026-03-10
 
 ### Added

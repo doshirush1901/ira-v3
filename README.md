@@ -406,7 +406,7 @@ ira-v3/
 │   ├── config.py            # Pydantic settings (all config from env)
 │   ├── context.py           # Unified context manager
 │   └── message_bus.py       # Inter-agent messaging
-├── prompts/                 # LLM prompt templates (71 files)
+├── prompts/                 # LLM prompt templates (75 files)
 ├── scripts/                 # Operational scripts + training
 ├── tests/                   # Test suite (28 files, ~13,700 lines)
 ├── alembic/                 # Database migrations
@@ -545,7 +545,7 @@ The **primary** way to query Ira is via the CLI (`ira ask`, `ira task`). The API
 | GET | `/api/vendors/payables` | Payables summary across all vendors |
 | GET | `/api/vendors/overdue` | Overdue vendor payables |
 | POST | `/api/vendors/payables` | Record a vendor payable/invoice |
-| GET | `/dashboard/` | Web dashboard (browser) |
+| GET | `/dashboard/` | Observability dashboard: agent leaderboard, pipeline stage latency, tool success rate, interactions, feedback |
 
 ## Running Tests
 
