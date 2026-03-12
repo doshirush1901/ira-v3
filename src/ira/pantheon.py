@@ -295,9 +295,29 @@ class Pantheon:
                 result = name, response
             except asyncio.TimeoutError:
                 logger.warning("Agent '%s' timed out after %ds", name, _timeout)
+                _journal = ctx.get("_agent_journal")
+                if _journal is not None:
+                    try:
+                        await _journal.log_action(
+                            agent_name=name,
+                            action_text=f"Handled query: {query[:100]}",
+                            outcome="timeout",
+                        )
+                    except Exception:
+                        logger.debug("AgentJournal.log_action (timeout) failed for %s", name)
                 result = name, f"(Agent '{name}' timed out after {_timeout}s)"
             except (ToolExecutionError, Exception):
                 logger.exception("Agent '%s' failed", name)
+                _journal = ctx.get("_agent_journal")
+                if _journal is not None:
+                    try:
+                        await _journal.log_action(
+                            agent_name=name,
+                            action_text=f"Handled query: {query[:100]}",
+                            outcome="error",
+                        )
+                    except Exception:
+                        logger.debug("AgentJournal.log_action (error) failed for %s", name)
                 result = name, f"(Agent '{name}' encountered an error)"
             if on_progress:
                 await on_progress({"type": "agent_done", "agent": result[0], "preview": result[1][:200]})

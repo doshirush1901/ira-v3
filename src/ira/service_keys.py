@@ -43,6 +43,8 @@ class ServiceKey:
     DLP = "dlp"
     VENDOR_DB = "vendor_db"
     OUTBOUND_APPROVALS = "outbound_approvals"
+    AGENT_JOURNAL = "agent_journal"
+    POWER_LEVEL_TRACKER = "power_level_tracker"
 
 
 ALL_SERVICE_KEYS = frozenset(

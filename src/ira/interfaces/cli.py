@@ -355,6 +355,14 @@ async def _build_pipeline(
         relationship_memory=relationship_memory,
     )
 
+    agent_journal = None
+    try:
+        from ira.memory.agent_journal import AgentJournal
+        agent_journal = AgentJournal()
+        await agent_journal.initialize()
+    except Exception:
+        logger.debug("AgentJournal not available for CLI", exc_info=True)
+
     pantheon.inject_services({
         SK.LONG_TERM_MEMORY: long_term,
         SK.EPISODIC_MEMORY: episodic,
@@ -366,6 +374,7 @@ async def _build_pipeline(
         SK.LEARNING_HUB: learning_hub,
         SK.PANTHEON: pantheon,
         SK.DATA_EVENT_BUS: shared_services.get(SK.DATA_EVENT_BUS),
+        SK.AGENT_JOURNAL: agent_journal,
     })
 
     nemesis = pantheon.get_agent("nemesis")
@@ -396,6 +405,7 @@ async def _build_pipeline(
         crm=crm,
         unified_context=unified_context,
         redis_cache=redis_cache,
+        agent_journal=agent_journal,
     )
 
     return pipeline, feedback_handler, redis_cache, voice
@@ -1460,9 +1470,11 @@ def takeout_ingest(
     verify_after: bool = typer.Option(False, "--verify-after", help="After ingest, verify counts in Qdrant (and note Mem0)."),
     cleanup_after: bool = typer.Option(False, "--cleanup-after", help="After ingest (and optional verify), delete takeout data folder contents to free space."),
     notify_email: str | None = typer.Option(None, "--notify-email", help="When ingest completes, send a report to this email address."),
+    concurrency: int = typer.Option(3, "--concurrency", help="Max messages in parallel (lower if you hit OpenAI 429 rate limits)."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
-    """Ingest Google Takeout mbox with a protein-first Machinecraft profile."""
+    """Ingest Google Takeout mbox with a protein-first Machinecraft profile.
+    Resumes from checkpoint automatically (same --batch-name and --source-dir). Use 'ira takeout ingest' again to continue."""
     _configure_logging(verbose)
 
     if profile != "machinecraft_protein_strict":
@@ -1500,6 +1512,7 @@ def takeout_ingest(
     else:
         checkpoint = {}
     done_keys: set[str] = set(checkpoint.get("done_keys", []))
+    prior_stats = checkpoint.get("stats", {})
 
     digestive, ingestor, _qdrant = _build_digestive()
     from ira.memory.long_term import LongTermMemory
@@ -1508,17 +1521,24 @@ def takeout_ingest(
     report_data: dict[str, Any] = {}
 
     async def _run_ingest() -> None:
+        # Per-run counters (reset each run)
         stats = {
             "mbox_files": len(mbox_files),
             "messages_seen": 0,
             "messages_skipped_checkpoint": 0,
             "messages_skipped_noise": 0,
             "messages_skipped_low_signal": 0,
-            "messages_processed": 0,
-            "messages_with_protein": 0,
-            "chunks_created": 0,
-            "mem0_written": 0,
-            "entities": {"companies": 0, "people": 0, "machines": 0, "relationships": 0},
+            # Cumulative across runs (so resume shows correct totals)
+            "messages_processed": int(prior_stats.get("messages_processed", 0)),
+            "messages_with_protein": int(prior_stats.get("messages_with_protein", 0)),
+            "chunks_created": int(prior_stats.get("chunks_created", 0)),
+            "mem0_written": int(prior_stats.get("mem0_written", 0)),
+            "entities": {
+                "companies": int(prior_stats.get("entities", {}).get("companies", 0)),
+                "people": int(prior_stats.get("entities", {}).get("people", 0)),
+                "machines": int(prior_stats.get("entities", {}).get("machines", 0)),
+                "relationships": int(prior_stats.get("entities", {}).get("relationships", 0)),
+            },
         }
 
         progress_file = checkpoint_path.parent / "takeout_ingest_progress.txt"
@@ -1555,7 +1575,7 @@ def takeout_ingest(
             console=_progress_console,
             refresh_per_second=2,
         ) as progress:
-            task = progress.add_task("Processing takeout mbox...", total=target_total)
+            progress_task_id = progress.add_task("Processing takeout mbox...", total=target_total)
 
             def _print_progress_line() -> None:
                 """Print a single progress line so it's visible even when bar doesn't render (e.g. non-TTY)."""
@@ -1571,7 +1591,7 @@ def takeout_ingest(
 
             def _update_progress(label: str) -> None:
                 progress.update(
-                    task,
+                    progress_task_id,
                     completed=stats["messages_processed"],
                     description=(
                         f"{label} | seen={stats['messages_seen']} "
@@ -1582,8 +1602,10 @@ def takeout_ingest(
                     ),
                 )
 
+            pending_tasks: list[tuple[str, asyncio.Task[Any]]] = []
+
             for mbox_path in mbox_files:
-                progress.update(task, description=f"Reading {mbox_path.name} ...")
+                progress.update(progress_task_id, description=f"Reading {mbox_path.name} ...")
                 mbox = mailbox.mbox(str(mbox_path))
                 for idx, msg in enumerate(mbox):
                     stats["messages_seen"] += 1
@@ -1655,46 +1677,64 @@ def takeout_ingest(
                         stats["messages_processed"] += 1
                         continue
 
-                    nutrients = await digestive._extract_nutrients(classify_body)
-                    nutrients = await digestive._summarize_nutrients(nutrients)
-                    protein_statements = [p for p in nutrients.get("protein", []) if isinstance(p, str) and p.strip()]
-                    protein_only = {"protein": protein_statements, "carbs": [], "waste": nutrients.get("waste", [])}
-
-                    if not protein_statements:
-                        done_keys.add(key)
-                        stats["messages_processed"] += 1
-                        continue
+                    async def _process_one(
+                        k: str,
+                        src: str,
+                        sid: str,
+                        body_text: str,
+                    ) -> tuple[str, int, dict[str, int], int]:
+                        """Run full pipeline for one message; return (key, chunks, entities_delta, mem0_count)."""
+                        try:
+                            nutrients = await digestive._extract_nutrients(body_text)
+                            nutrients = await digestive._summarize_nutrients(nutrients)
+                            protein_statements = [p for p in nutrients.get("protein", []) if isinstance(p, str) and p.strip()]
+                            if not protein_statements:
+                                return (k, 0, {}, 0)
+                            protein_only = {"protein": protein_statements, "carbs": [], "waste": nutrients.get("waste", [])}
+                            chunks_added = 0
+                            entities_delta = {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
+                            mem0_added = 0
+                            if not dry_run:
+                                chunks_added = int(await digestive._absorb(
+                                    protein_only,
+                                    source=src,
+                                    source_category="takeout_email_protein",
+                                    source_id=sid,
+                                ))
+                                entities = await digestive._extract_entities("\n".join(protein_statements))
+                                for key_ in ("companies", "people", "machines", "relationships"):
+                                    entities_delta[key_] = int(entities.get(key_, 0))
+                                for fact in protein_statements[:8]:
+                                    if await memory.store_fact(fact=fact, source=src, confidence=0.85):
+                                        mem0_added += 1
+                            return (k, chunks_added, entities_delta, mem0_added)
+                        except Exception:
+                            logger.warning("Parallel process_one failed for key=%s", k[:16], exc_info=True)
+                            return (k, 0, {}, 0)
 
                     stats["messages_with_protein"] += 1
-                    if not dry_run:
-                        chunks = await digestive._absorb(
-                            protein_only,
-                            source=source,
-                            source_category="takeout_email_protein",
-                            source_id=source_id,
-                        )
-                        stats["chunks_created"] += int(chunks)
+                    pending_tasks.append(
+                        (key, asyncio.create_task(_process_one(key, source, source_id, classify_body)))
+                    )
 
-                        entities = await digestive._extract_entities("\n".join(protein_statements))
-                        for k in ("companies", "people", "machines", "relationships"):
-                            stats["entities"][k] += int(entities.get(k, 0))
-
-                        top_facts = protein_statements[:8]
-                        for fact in top_facts:
-                            stored = await memory.store_fact(
-                                fact=fact,
-                                source=source,
-                                confidence=0.85,
-                            )
-                            if stored:
-                                stats["mem0_written"] += 1
-
-                    done_keys.add(key)
-                    stats["messages_processed"] += 1
-                    _update_progress(mbox_path.name)
-                    if stats["messages_seen"] % 50 == 0:
-                        _print_progress_line()
-                    if stats["messages_processed"] % 5 == 0:
+                    while len(pending_tasks) >= concurrency or (max_messages > 0 and stats["messages_processed"] + len(pending_tasks) >= max_messages and pending_tasks):
+                        batch = pending_tasks[:concurrency]
+                        del pending_tasks[:len(batch)]
+                        results = await asyncio.gather(*[t for _, t in batch], return_exceptions=True)
+                        for (k, task), result in zip(batch, results):
+                            if isinstance(result, BaseException):
+                                logger.warning("Task failed: %s", result)
+                                continue
+                            k, chunks_added, entities_delta, mem0_added = result
+                            done_keys.add(k)
+                            stats["messages_processed"] += 1
+                            stats["chunks_created"] += chunks_added
+                            stats["mem0_written"] += mem0_added
+                            for key_ in ("companies", "people", "machines", "relationships"):
+                                stats["entities"][key_] += entities_delta.get(key_, 0)
+                        _update_progress(mbox_path.name)
+                        if stats["messages_seen"] % 50 == 0:
+                            _print_progress_line()
                         _write_checkpoint()
                         err_console.print(
                             f"[dim]checkpoint: seen={stats['messages_seen']} "
@@ -1705,6 +1745,23 @@ def takeout_ingest(
 
                 if max_messages > 0 and stats["messages_processed"] >= max_messages:
                     break
+
+            while pending_tasks:
+                batch = pending_tasks[:concurrency]
+                del pending_tasks[:len(batch)]
+                results = await asyncio.gather(*[t for _, t in batch], return_exceptions=True)
+                for (k, task), result in zip(batch, results):
+                    if isinstance(result, BaseException):
+                        logger.warning("Task failed: %s", result)
+                        continue
+                    k, chunks_added, entities_delta, mem0_added = result
+                    done_keys.add(k)
+                    stats["messages_processed"] += 1
+                    stats["chunks_created"] += chunks_added
+                    stats["mem0_written"] += mem0_added
+                    for key_ in ("companies", "people", "machines", "relationships"):
+                        stats["entities"][key_] += entities_delta.get(key_, 0)
+                _write_checkpoint()
 
         _write_checkpoint()
 

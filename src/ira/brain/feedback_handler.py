@@ -67,12 +67,14 @@ class FeedbackHandler:
         mem0_client: Any | None = None,
         procedural_memory: Any | None = None,
         data_event_bus: Any | None = None,
+        power_level_tracker: Any | None = None,
     ) -> None:
         self._learning_hub = learning_hub
         self._correction_store = correction_store
         self._mem0_client = mem0_client
         self._procedural_memory = procedural_memory
         self._event_bus = data_event_bus
+        self._power_level_tracker = power_level_tracker
         self._llm = get_llm_client()
         self._agent_scores: dict[str, dict[str, int]] = {}
 
@@ -151,6 +153,15 @@ class FeedbackHandler:
 
         for agent in agents_used:
             self._update_agent_score(agent, polarity)
+
+        if polarity == "negative" and len(agents_used) >= 2 and self._power_level_tracker is not None:
+            try:
+                for i in range(len(agents_used) - 1):
+                    await self._power_level_tracker.record_trust_decrease(
+                        agents_used[i], agents_used[i + 1]
+                    )
+            except Exception:
+                logger.debug("Trust decrease recording failed", exc_info=True)
 
         if polarity == "negative" and result.get("extracted_correction"):
             correction_text = result["extracted_correction"]

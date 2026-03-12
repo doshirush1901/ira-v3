@@ -16,6 +16,7 @@ from ira.agents.base_agent import AgentTool, BaseAgent
 from ira.exceptions import IraError, ToolExecutionError
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import TaskPlan
+from ira.service_keys import ServiceKey as SK
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,20 @@ class Athena(BaseAgent):
             },
             handler=self._tool_audit_decision_log,
         ))
+
+        if self._services.get(SK.AGENT_JOURNAL):
+            self.register_tool(AgentTool(
+                name="read_agent_journal",
+                description=(
+                    "Read any agent's past journal entries (nightly reflections from Dream Mode). "
+                    "Use this to see what a specialist has been working on or reflecting on."
+                ),
+                parameters={
+                    "agent_name": "Name of the agent (e.g. 'clio', 'prometheus', 'plutus')",
+                    "query": "Optional search query to filter entries; leave empty for recent entries",
+                },
+                handler=self._tool_read_agent_journal,
+            ))
 
     async def handle(self, query: str, context: dict[str, Any] | None = None) -> str:
         ctx = context or {}
@@ -160,6 +175,28 @@ class Athena(BaseAgent):
             evidence=evidence,
         )
 
+    async def _tool_read_agent_journal(self, agent_name: str, query: str = "") -> str:
+        """Read any agent's journal entries (Athena has access to all agents' journals)."""
+        journal = self._services.get(SK.AGENT_JOURNAL)
+        if not journal:
+            return "Journal service not available."
+        agent_name = agent_name.strip().lower()
+        try:
+            entries = await journal.search_past_journals(
+                agent_name=agent_name,
+                query=query.strip(),
+                limit=10,
+            )
+        except Exception as exc:
+            logger.warning("read_agent_journal failed for %s: %s", agent_name, exc)
+            return f"Journal lookup error: {exc}"
+        if not entries:
+            return f"No journal entries found for agent '{agent_name}'."
+        lines = [f"**{agent_name}** journal entries:"]
+        for e in entries:
+            lines.append(f"\n[{e.get('date', '?')}] {e.get('reflection_text', '')[:600]}")
+        return "\n".join(lines)
+
     # ── structured planning (used by TaskOrchestrator) ────────────────────
 
     async def generate_plan(self, goal: str) -> TaskPlan:
@@ -180,7 +217,7 @@ class Athena(BaseAgent):
             agent_list = "(agent list unavailable)"
 
         return await self._llm.generate_structured(
-            self._compose_system_prompt(_SYSTEM_PROMPT),
+            await self._compose_system_prompt(_SYSTEM_PROMPT),
             (
                 f"Create a step-by-step execution plan.\n\n"
                 f"Goal: {goal}\n\n"

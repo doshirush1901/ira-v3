@@ -17,6 +17,7 @@ Implements an 11-stage dream cycle:
   8.   Graph Consolidation — tune knowledge graph relationships.
   9.   Follow-up Automation — detect stale quotes for follow-up.
   10.  Morning Summary — log dream cycle results.
+  11.  Agent Journaling — first-person nightly reflections for each agent with actions today.
 
 Each cycle is logged to ``data/dream_log.json`` for auditability.
 """
@@ -66,6 +67,8 @@ _PROCEDURAL_SYSTEM_PROMPT = load_prompt("dream_procedural")
 
 _PRUNE_SYSTEM_PROMPT = load_prompt("dream_prune")
 
+_JOURNAL_SYSTEM_PROMPT = load_prompt("dream_agent_journal")
+
 
 class DreamMode:
     def __init__(
@@ -80,6 +83,7 @@ class DreamMode:
         data_event_bus: Any | None = None,
         db_path: str = "data/conversations.db",
         dream_log_path: str | Path | None = None,
+        agent_journal: Any | None = None,
     ) -> None:
         self._long_term = long_term
         self._episodic = episodic
@@ -93,6 +97,7 @@ class DreamMode:
         self._llm = get_llm_client()
         self._db: aiosqlite.Connection | None = None
         self._dream_log_path = Path(dream_log_path) if dream_log_path else _DREAM_LOG_PATH
+        self._agent_journal = agent_journal
 
     def configure(self, **kwargs: Any) -> None:
         """Late-bind optional dependencies after construction."""
@@ -104,6 +109,8 @@ class DreamMode:
             self._musculoskeletal = kwargs["musculoskeletal"]
         if "retriever" in kwargs:
             self._retriever = kwargs["retriever"]
+        if "agent_journal" in kwargs:
+            self._agent_journal = kwargs["agent_journal"]
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self._db_path)
@@ -177,6 +184,9 @@ class DreamMode:
 
         # Stage 10 — Morning Summary
         await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
+
+        # Stage 11 — Agent Journaling (nightly reflections)
+        await self._stage11_agent_journaling(stage_log)
 
         stage_results = {
             name: info.get("status", "unknown")
@@ -878,6 +888,63 @@ class DreamMode:
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}
 
+    # ── Stage 11: Agent Journaling ───────────────────────────────────────
+
+    async def _stage11_agent_journaling(self, stage_log: dict[str, Any]) -> None:
+        """For each agent with actions today, generate and save a first-person journal entry."""
+        entries_saved = 0
+        try:
+            if self._agent_journal is None:
+                stage_log["stages"]["11_agent_journaling"] = {"status": "skipped", "reason": "no agent_journal"}
+                return
+
+            today = date.today()
+            agent_names = await self._agent_journal.get_agents_with_actions_for_date(today)
+            if not agent_names:
+                stage_log["stages"]["11_agent_journaling"] = {"status": "ok", "entries_saved": 0}
+                return
+
+            for agent_name in agent_names:
+                actions_list = await self._agent_journal.get_actions_for_date(agent_name, today)
+                if not actions_list:
+                    continue
+                actions_text = "\n".join(
+                    f"- {a.get('action_text', '')} (outcome: {a.get('outcome', '')})"
+                    for a in actions_list
+                )
+                system_prompt = _JOURNAL_SYSTEM_PROMPT.format(
+                    agent_name=agent_name,
+                    actions=actions_text,
+                )
+                try:
+                    reflection = await self._llm.generate_text(
+                        system_prompt,
+                        "Write your journal entry now.",
+                        temperature=0.3,
+                        name="dream.agent_journal",
+                    )
+                    if reflection and reflection.strip():
+                        await self._agent_journal.save_journal_entry(
+                            agent_name=agent_name,
+                            reflection_text=reflection.strip(),
+                            mood="",
+                            at_date=today,
+                        )
+                        entries_saved += 1
+                        logger.debug("Stage 11: journal entry saved for %s", agent_name)
+                except (LLMError, Exception):
+                    logger.warning("Stage 11: LLM journal failed for %s", agent_name, exc_info=True)
+
+            stage_log["stages"]["11_agent_journaling"] = {
+                "status": "ok",
+                "entries_saved": entries_saved,
+                "agents_processed": len(agent_names),
+            }
+            logger.info("Stage 11: agent journaling — %d entries saved for %d agents", entries_saved, len(agent_names))
+        except (IraError, Exception):
+            logger.exception("Dream Stage 11 (agent journaling) failed")
+            stage_log["stages"]["11_agent_journaling"] = {"status": "error"}
+
     def _write_dream_log(self, stage_log: dict[str, Any], report: DreamReport) -> None:
         """Append the cycle results to dream_log.json."""
         entry = {
@@ -978,6 +1045,7 @@ async def build_dream_mode(
     data_event_bus: Any | None = None,
     db_path: str = "data/conversations.db",
     dream_log_path: str | Path | None = None,
+    agent_journal: Any | None = None,
 ) -> DreamMode:
     """Build a fully-wired DreamMode instance with all optional dependencies.
 
@@ -1026,6 +1094,15 @@ async def build_dream_mode(
             logger.debug("ProceduralMemory not available for dream mode", exc_info=True)
             procedural_memory = None
 
+    if agent_journal is None:
+        try:
+            from ira.memory.agent_journal import AgentJournal
+            agent_journal = AgentJournal()
+            await agent_journal.initialize()
+        except Exception:
+            logger.debug("AgentJournal not available for dream mode", exc_info=True)
+            agent_journal = None
+
     dm = DreamMode(
         long_term=long_term,
         episodic=episodic,
@@ -1037,6 +1114,7 @@ async def build_dream_mode(
         data_event_bus=data_event_bus,
         db_path=db_path,
         dream_log_path=dream_log_path,
+        agent_journal=agent_journal,
     )
     await dm.initialize()
     return dm

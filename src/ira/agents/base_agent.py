@@ -16,6 +16,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -66,20 +67,85 @@ class BaseAgent(ABC):
     model_provider: str = "openai"  # "openai" or "anthropic"
     knowledge_categories: list[str] = []
     timeout: int | None = None
+    created_at: datetime = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-    def _compose_system_prompt(
+    @property
+    def age_in_days(self) -> int:
+        """Days since this agent's creation (identity continuity)."""
+        delta = datetime.now(timezone.utc) - self.created_at
+        return max(0, delta.days)
+
+    async def _compose_system_prompt(
         self,
         system_prompt: str = "",
         *,
         allow_default: bool = True,
     ) -> str:
-        """Build a system prompt with SOUL preamble injected exactly once."""
+        """Build a system prompt with SOUL preamble, identity (age), and latest journal."""
         prompt = system_prompt.strip()
         if not prompt and allow_default:
             prompt = (
                 f"You are {self.name}, the {self.role} of the Machinecraft AI Pantheon. "
                 f"{self.description}"
             )
+
+        identity = f"You are {self.name}, the {self.role}. You are {self.age_in_days} days old."
+        prompt = f"{identity}\n\n{prompt}"
+
+        journal = None
+        journal_svc = self._services.get(SK.AGENT_JOURNAL)
+        if journal_svc is not None:
+            try:
+                journal = await journal_svc.get_latest_journal_entry(self.name)
+            except Exception:
+                logger.debug("Failed to get latest journal for %s", self.name, exc_info=True)
+        if journal and journal.strip():
+            prompt = f"{prompt}\n\nYour most recent journal entry:\n{journal.strip()}"
+
+        sense_lost = {}
+        immune = self._services.get(SK.IMMUNE)
+        if immune is not None and hasattr(immune, "get_sense_lost"):
+            try:
+                sense_lost = immune.get_sense_lost()
+            except Exception:
+                pass
+        if sense_lost:
+            lost = [k for k, v in sense_lost.items() if v]
+            if lost:
+                warnings = []
+                if "qdrant" in lost:
+                    warnings.append(
+                        "WARNING: Your semantic memory (Qdrant) is currently severed. "
+                        "You cannot search past documents. Rely on immediate context and ask the user for clarification or documents if needed."
+                    )
+                if "neo4j" in lost:
+                    warnings.append(
+                        "WARNING: Your knowledge graph (Neo4j) is currently unavailable. "
+                        "You cannot traverse relationships. Rely on other sources."
+                    )
+                if "openai" in lost or "voyage" in lost:
+                    warnings.append(
+                        "WARNING: Some model/embedding services are degraded. "
+                        "Be explicit about limitations if you cannot fulfill a request."
+                    )
+                if warnings:
+                    prompt = f"{prompt}\n\n" + "\n\n".join(warnings)
+
+        tracker = self._services.get(SK.POWER_LEVEL_TRACKER)
+        if tracker is not None and hasattr(tracker, "get_trust_matrix"):
+            try:
+                trust_matrix = tracker.get_trust_matrix(self.name)
+                if trust_matrix:
+                    lines = []
+                    for other, score in sorted(trust_matrix.items()):
+                        if score >= 0.6:
+                            lines.append(f"You trust {other}'s outputs (Trust: {score:.1f}).")
+                        else:
+                            lines.append(f"You do not trust {other}'s outputs (Trust: {score:.1f}); verify before relying.")
+                    if lines:
+                        prompt = f"{prompt}\n\n" + " ".join(lines)
+            except Exception:
+                logger.debug("Trust matrix injection failed for %s", self.name, exc_info=True)
 
         soul = load_soul_preamble()
         if soul and not prompt.startswith(soul):
@@ -203,6 +269,14 @@ class BaseAgent(ABC):
                 description="Delegate a question to another specialist agent in the Pantheon.",
                 parameters={"agent_name": "Name of the agent (e.g. 'clio', 'prometheus')", "question": "The question to ask"},
                 handler=self._tool_ask_agent,
+            ))
+
+        if self._services.get(SK.AGENT_JOURNAL):
+            self.register_tool(AgentTool(
+                name="read_my_journal",
+                description="Look up your own past journal entries (nightly reflections written during Dream Mode).",
+                parameters={"query": "Optional search query to filter entries; leave empty for recent entries"},
+                handler=self._tool_read_journal,
             ))
 
         self.register_tool(AgentTool(
@@ -347,6 +421,27 @@ class BaseAgent(ABC):
             return get_settings().app.max_delegation_depth
         except Exception:
             return 5
+
+    async def _tool_read_journal(self, query: str = "") -> str:
+        """Return this agent's past journal entries (from Dream Mode reflections)."""
+        journal = self._services.get(SK.AGENT_JOURNAL)
+        if not journal:
+            return "Journal service not available."
+        try:
+            entries = await journal.search_past_journals(
+                agent_name=self.name,
+                query=query.strip(),
+                limit=10,
+            )
+        except Exception as exc:
+            logger.warning("read_my_journal failed in %s: %s", self.name, exc)
+            return f"Journal lookup error: {exc}"
+        if not entries:
+            return "No journal entries found."
+        lines = []
+        for e in entries:
+            lines.append(f"[{e.get('date', '?')}] {e.get('reflection_text', '')[:500]}")
+        return "\n\n".join(lines)
 
     async def _tool_ask_agent(self, agent_name: str, question: str) -> str:
         depth = self._services.get("_delegation_depth", 0)
@@ -494,6 +589,20 @@ class BaseAgent(ABC):
         if not matches:
             return f"No known entity match for '{query}'. Proceed with normal classification."
         return "\n".join(matches)
+
+    async def _log_journal_action(self, query: str, outcome: str) -> None:
+        """Log this agent's action to the journal when the service is available."""
+        journal = self._services.get(SK.AGENT_JOURNAL)
+        if journal is None:
+            return
+        try:
+            await journal.log_action(
+                agent_name=self.name,
+                action_text=f"Handled query: {query[:100]}",
+                outcome=outcome,
+            )
+        except Exception:
+            logger.debug("AgentJournal.log_action failed for %s", self.name, exc_info=True)
 
     # ── grounding score ────────────────────────────────────────────────────
 
@@ -682,7 +791,7 @@ class BaseAgent(ABC):
         async with self._tools_lock:
             self._register_default_tools()
 
-        agent_prompt = self._compose_system_prompt(system_prompt)
+        agent_prompt = await self._compose_system_prompt(system_prompt)
 
         scratchpad: list[dict[str, str]] = []
         self.state = AgentState.THINKING
@@ -708,12 +817,14 @@ class BaseAgent(ABC):
                     "%s reached final answer after %d iterations (grounding=%.1f)",
                     self.name, iteration + 1, self._last_grounding_score,
                 )
+                await self._log_journal_action(query, "success")
                 return decision["final_answer"]
 
             tool_call = decision.get("tool_to_use")
             if not isinstance(tool_call, dict) or "name" not in tool_call:
                 self.state = AgentState.RESPONDING
                 self._last_grounding_score = self._compute_grounding_score(scratchpad)
+                await self._log_journal_action(query, "success")
                 return decision.get("final_answer", thought or "(No response)")
 
             tool_name = tool_call["name"]
@@ -745,6 +856,7 @@ class BaseAgent(ABC):
             self.name, self.max_iterations,
         )
         self._last_grounding_score = self._compute_grounding_score(scratchpad)
+        await self._log_journal_action(query, "success")
         return await self._force_final_answer(agent_prompt, query, scratchpad)
 
     # ── abstract interface ───────────────────────────────────────────────
@@ -776,7 +888,7 @@ class BaseAgent(ABC):
     ) -> str:
         """Call the primary LLM provider; fall back to the other on failure."""
         redis = self._services.get(SK.REDIS)
-        resolved_system_prompt = self._compose_system_prompt(system_prompt)
+        resolved_system_prompt = await self._compose_system_prompt(system_prompt)
         cache_key = self._llm_cache_key(resolved_system_prompt, user_message, temperature)
 
         if redis is not None and temperature <= 0.3:

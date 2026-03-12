@@ -21,7 +21,7 @@ _DECAY_RATE = 0.02
 _MIN = 0.0
 _MAX = 1.0
 
-_HORMONES = ("confidence", "energy", "growth_signal", "stress", "caution")
+_HORMONES = ("confidence", "energy", "growth_signal", "stress", "caution", "boredom")
 
 
 def _clamp(value: float) -> float:
@@ -55,6 +55,15 @@ class EndocrineSystem:
         self.boost("caution", 0.03)
         self.dampen("energy", 0.02)
 
+    def tick_idle(self, amount: float = 0.05) -> None:
+        """Increase boredom when the system has been idle (call periodically, e.g. hourly)."""
+        self.boost("boredom", amount)
+
+    def reset_boredom(self) -> None:
+        """Reset boredom to zero after user interaction or curiosity cycle."""
+        if "boredom" in self._levels:
+            self._levels["boredom"] = _MIN
+
     def get_behavioral_modifiers(self) -> dict[str, Any]:
         """Return modifiers consumed by VoiceSystem and the pipeline."""
         self._apply_decay()
@@ -64,6 +73,14 @@ class EndocrineSystem:
         verbosity = "concise" if lvl["energy"] < 0.35 else "detailed" if lvl["energy"] > 0.65 else "normal"
         hedging = "heavy" if lvl["caution"] > 0.65 else "light" if lvl["caution"] < 0.35 else "normal"
 
+        prompt_addendum = ""
+        if lvl["stress"] > 0.8:
+            prompt_addendum = (
+                "The system is under significant stress (e.g. a capability is degraded). "
+                "Be highly cautious and explicit about any limitations or uncertainties. "
+                "Do not overstate confidence."
+            )
+
         return {
             "assertiveness": assertiveness,
             "verbosity": verbosity,
@@ -71,6 +88,7 @@ class EndocrineSystem:
             "confidence_level": round(lvl["confidence"], 3),
             "energy_level": round(lvl["energy"], 3),
             "stress_level": round(lvl["stress"], 3),
+            "prompt_addendum": prompt_addendum,
         }
 
     def get_status(self) -> dict[str, float]:

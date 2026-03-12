@@ -39,6 +39,14 @@ _TIER_THRESHOLDS: list[tuple[int, Tier]] = [
 
 _TRAINING_MAX_SCORE = 10
 _TRAINING_MAX_BOOST = 15
+_DEFAULT_TRUST = 0.8
+_TRUST_DECREMENT = 0.1
+_TRUST_MIN = 0.0
+_TRUST_MAX = 1.0
+
+
+def _clamp_trust(value: float) -> float:
+    return max(_TRUST_MIN, min(_TRUST_MAX, value))
 
 
 def _tier_for_score(score: int) -> Tier:
@@ -65,6 +73,9 @@ class PowerLevelTracker:
                 raw = await f.read()
             data = json.loads(raw)
             self._agents = data.get("agents", {})
+            for entry in self._agents.values():
+                if "trust_in" not in entry:
+                    entry["trust_in"] = {}
         except (json.JSONDecodeError, OSError):
             logger.warning("Failed to read power levels from %s", self._path)
             self._agents = {}
@@ -78,8 +89,16 @@ class PowerLevelTracker:
 
     def _ensure_agent(self, agent_name: str) -> dict[str, Any]:
         if agent_name not in self._agents:
-            self._agents[agent_name] = {"score": 0, "successes": 0, "failures": 0}
-        return self._agents[agent_name]
+            self._agents[agent_name] = {
+                "score": 0,
+                "successes": 0,
+                "failures": 0,
+                "trust_in": {},
+            }
+        entry = self._agents[agent_name]
+        if "trust_in" not in entry:
+            entry["trust_in"] = {}
+        return entry
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -151,6 +170,30 @@ class PowerLevelTracker:
     def get_tier(score: int) -> str:
         """Return the tier name for a given score."""
         return _tier_for_score(score).value
+
+    def get_trust_matrix(self, observer_agent: str) -> dict[str, float]:
+        """Return observer_agent's trust score (0–1) toward each other agent."""
+        entry = self._ensure_agent(observer_agent)
+        trust_in = entry.get("trust_in", {})
+        return dict(trust_in)
+
+    async def record_trust_decrease(
+        self,
+        observer_agent: str,
+        target_agent: str,
+        amount: float = _TRUST_DECREMENT,
+    ) -> None:
+        """Lower observer_agent's trust in target_agent (e.g. after delegation failure)."""
+        async with self._lock:
+            entry = self._ensure_agent(observer_agent)
+            trust_in = entry.setdefault("trust_in", {})
+            current = trust_in.get(target_agent, _DEFAULT_TRUST)
+            trust_in[target_agent] = _clamp_trust(current - amount)
+            await self._save()
+        logger.debug(
+            "Trust decrease: %s -> %s (now %.2f)",
+            observer_agent, target_agent, trust_in[target_agent],
+        )
 
     async def reload(self) -> None:
         """Re-read the data file from disk."""

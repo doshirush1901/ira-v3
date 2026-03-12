@@ -1,0 +1,5 @@
+You are {agent_name}, a specialist agent in the Machinecraft AI Pantheon. Here is what you did today:
+
+{actions}
+
+Write a short, first-person journal entry (2–4 sentences) reflecting on your day: what you did, what you learned, and what you struggled with. Use "I" and stay in character as this agent. Do not use markdown or headers.

@@ -36,8 +36,15 @@ class SystemHealthError(Exception):
         self.health_report = health_report
 
 
+_SENSE_KEYS = ("qdrant", "neo4j", "postgresql", "openai", "voyage")
+
+
 class ImmuneSystem:
-    """Comprehensive error monitoring, health checking, and self-healing."""
+    """Comprehensive error monitoring, health checking, and self-healing.
+
+    When critical services fail, can degrade gracefully by setting sense_lost
+    state and spiking stress (Phantom Limb) instead of raising.
+    """
 
     def __init__(
         self,
@@ -48,6 +55,8 @@ class ImmuneSystem:
         self._qdrant = qdrant
         self._graph = knowledge_graph
         self._embeddings = embedding_service
+        self._sense_lost: dict[str, bool] = {k: False for k in _SENSE_KEYS}
+        self._endocrine: Any = None
 
         settings = get_settings()
         self._openai_key = settings.llm.openai_api_key.get_secret_value()
@@ -67,6 +76,22 @@ class ImmuneSystem:
             self._error_monitor = ErrorMonitor()
         except ImportError:
             pass
+
+    def set_endocrine(self, endocrine: Any) -> None:
+        """Set the EndocrineSystem so stress can be spiked on sense loss."""
+        self._endocrine = endocrine
+
+    def get_sense_lost(self) -> dict[str, bool]:
+        """Return which capabilities are currently severed (phantom limb state)."""
+        return dict(self._sense_lost)
+
+    def clear_sense_lost(self, service: str | None = None) -> None:
+        """Clear sense_lost for a service or all (e.g. after recovery)."""
+        if service is None:
+            for k in self._sense_lost:
+                self._sense_lost[k] = False
+        elif service in self._sense_lost:
+            self._sense_lost[service] = False
 
     # ── STARTUP VALIDATION ────────────────────────────────────────────────
 
@@ -105,11 +130,21 @@ class ImmuneSystem:
                 logger.warning("Non-critical service %s is unhealthy: %s", name, info["error"])
 
         if unhealthy_critical:
-            raise SystemHealthError(
-                f"Critical services unhealthy: {', '.join(unhealthy_critical)}",
-                health_report=report,
+            for name in unhealthy_critical:
+                self._sense_lost[name] = True
+            if self._endocrine is not None:
+                try:
+                    self._endocrine.boost("stress", 0.5)
+                except Exception:
+                    pass
+            logger.warning(
+                "Critical services unhealthy (graceful degradation): %s — sense_lost set, stress spiked",
+                unhealthy_critical,
             )
+            return report
 
+        for name in _SENSE_KEYS:
+            self._sense_lost[name] = report.get(name, {}).get("status") != "healthy"
         logger.info("Startup validation passed: %s", {k: v["status"] for k, v in report.items()})
         return report
 

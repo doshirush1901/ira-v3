@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 (Nothing yet.)
 
+## [3.4.0] - 2026-03-11
+
+### Added
+- **Agent Journaling** — Per-agent daily action logs and nightly reflections. `AgentJournal` (SQLite at `data/brain/agent_journals.db`) with `daily_actions` and `journal_entries`; pipeline logs every agent run (success/timeout/error); Dream Mode stage 11 writes first-person journal entries; agents get `created_at`, `age_in_days`, and latest journal in system prompt; `read_my_journal` tool for all agents; Athena-only `read_agent_journal(agent_name, query)` to read any agent's journal.
+- **Living System (v3.9)** — Intrinsic curiosity (boredom hormone, hourly tick, CuriosityLoop wakes random agent when boredom > 0.8); inter-agent trust matrix (PowerLevelTracker `trust_in`, FeedbackHandler records trust decrease on negative feedback, trust lines injected into agent prompts); phantom limb / graceful degradation (ImmuneSystem sets `sense_lost` and spikes stress instead of raising, BaseAgent gets sense-lost warnings, Voice uses stress addendum for cautious tone).
+
+### Changed
+- **EndocrineSystem** — New hormone `boredom`; `tick_idle()`, `reset_boredom()`; `get_behavioral_modifiers()` adds `prompt_addendum` when stress > 0.8.
+- **ImmuneSystem** — Graceful degradation: sets `_sense_lost` and spikes stress on critical failure instead of raising; `get_sense_lost()`, `set_endocrine()`, `clear_sense_lost()`.
+- **PowerLevelTracker** — Per-agent `trust_in` dict; `get_trust_matrix()`, `record_trust_decrease()`; persisted in same JSON.
+- **FeedbackHandler** — Optional `power_level_tracker`; on negative feedback, records trust decrease for consecutive agent pairs in `agents_used`.
+- **BaseAgent** — Async `_compose_system_prompt()`; injects sense-lost warnings (when Immune in services) and trust-matrix lines (when PowerLevelTracker in services); `_log_journal_action()` from `run()` on success; `read_my_journal` tool.
+- **Pipeline** — Resets boredom on each user request; passes `_agent_journal` in context; Pantheon logs journal on agent timeout/error.
+- **Server/CLI** — Wire AgentJournal, PowerLevelTracker, CuriosityLoop; inject IMMUNE, POWER_LEVEL_TRACKER, AGENT_JOURNAL into pantheon; immune.set_endocrine(endocrine).
+
 ## [3.3.3] - 2026-03-10
 
 ### Added

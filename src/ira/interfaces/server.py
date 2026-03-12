@@ -385,6 +385,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.warning("SensorySystem table creation slow/failed — continuing")
     voice = VoiceSystem()
     endocrine = EndocrineSystem()
+    immune.set_endocrine(endocrine)
 
     _services["digestive"] = digestive
     _services["immune"] = immune
@@ -445,15 +446,25 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     dream_mode.configure(procedural_memory=procedural_memory)
 
+    # ── Agent journal (daily actions + nightly reflections) ─────────────
+    from ira.memory.agent_journal import AgentJournal
+    agent_journal = AgentJournal()
+    await _safe_init("agent_journal", agent_journal.initialize())
+    dream_mode.configure(agent_journal=agent_journal)
+
     _services["procedural_memory"] = procedural_memory
+    _services["agent_journal"] = agent_journal
     _services["learning_hub"] = learning_hub
 
-    # ── Feedback handler ─────────────────────────────────────────────
+    # ── Feedback handler & power levels (trust matrix) ─────────────────
     from ira.brain.correction_store import CorrectionStore
     from ira.brain.feedback_handler import FeedbackHandler
+    from ira.brain.power_levels import PowerLevelTracker
 
     correction_store = CorrectionStore()
     await _safe_init("correction_store", correction_store.initialize())
+    power_level_tracker = PowerLevelTracker()
+    await _safe_init("power_level_tracker", power_level_tracker._load())
 
     feedback_handler = FeedbackHandler(
         learning_hub=learning_hub,
@@ -461,11 +472,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         mem0_client=mem0_client,
         procedural_memory=procedural_memory,
         data_event_bus=data_event_bus,
+        power_level_tracker=power_level_tracker,
     )
     await feedback_handler.load_scores()
 
     _services["feedback_handler"] = feedback_handler
     _services["correction_store"] = correction_store
+    _services["power_level_tracker"] = power_level_tracker
 
     nemesis = pantheon.get_agent("nemesis")
     if nemesis is not None:
@@ -518,6 +531,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         SK.DOCUMENT_AI: document_ai,
         SK.PDFCO: pdfco,
         SK.DLP: dlp,
+        SK.AGENT_JOURNAL: agent_journal,
+        SK.IMMUNE: immune,
+        SK.POWER_LEVEL_TRACKER: power_level_tracker,
     })
 
     # ── Unified context ───────────────────────────────────────────────
@@ -552,6 +568,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         episodic_memory=episodic,
         long_term_memory=long_term,
         tool_stats_tracker=tool_stats_tracker,
+        agent_journal=agent_journal,
+        power_level_tracker=power_level_tracker,
     )
     _services["pipeline"] = request_pipeline
 
@@ -623,6 +641,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await respiratory.start()
     _services["respiratory"] = respiratory
 
+    # ── Curiosity loop (boredom-driven inter-agent exploration) ──────
+    from ira.systems.curiosity_loop import CuriosityLoop
+    curiosity_loop = CuriosityLoop(endocrine=endocrine, bus=bus, pantheon=pantheon)
+    await curiosity_loop.start()
+    _services["curiosity_loop"] = curiosity_loop
+
     # ── Email polling background task ─────────────────────────────────
     email_poll_task = None
     if settings.google.email_poll_enabled:
@@ -673,6 +697,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except asyncio.CancelledError:
             pass
 
+    curiosity_loop = _services.get("curiosity_loop")
+    if curiosity_loop is not None and hasattr(curiosity_loop, "stop"):
+        try:
+            await curiosity_loop.stop()
+        except (IraError, Exception):
+            logger.exception("CuriosityLoop stop failed")
     await respiratory.stop()
     await data_event_bus.stop()
     await pantheon.stop()
@@ -1180,6 +1210,26 @@ async def memory_recall(
         if m.get("memory") or m.get("content")
     ]
     return {"memories": memories, "source": "mem0"}
+
+
+class MemoryStoreRequest(BaseModel):
+    content: str
+    user_id: str = "global"
+    metadata: dict[str, Any] | None = None
+
+
+@app.post("/api/memory/store")
+async def memory_store(req: MemoryStoreRequest) -> dict[str, Any]:
+    """Store a long-term memory (Mem0). Use for master updates e.g. contact quote summary."""
+    mem = _svc(SK.LONG_TERM_MEMORY)
+    if mem is None:
+        return {"stored": False, "detail": "Mem0 not configured"}
+    result = await mem.store(
+        content=req.content,
+        user_id=req.user_id,
+        metadata=req.metadata,
+    )
+    return {"stored": True, "result": result}
 
 
 @app.post("/api/email/search")

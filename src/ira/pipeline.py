@@ -77,6 +77,7 @@ class RequestPipeline:
         episodic_memory: Any | None = None,
         long_term_memory: Any | None = None,
         tool_stats_tracker: Any | None = None,
+        agent_journal: Any | None = None,
     ) -> None:
         self._sensory = sensory
         self._conversation = conversation_memory
@@ -98,6 +99,7 @@ class RequestPipeline:
         self._episodic = episodic_memory
         self._long_term = long_term_memory
         self._tool_stats_tracker = tool_stats_tracker
+        self._agent_journal = agent_journal
 
         self._router = pantheon.router
         self._pending_clarifications: dict[str, dict[str, Any]] = {}
@@ -264,6 +266,13 @@ class RequestPipeline:
                     return shaped, [pending["agent_name"]]
                 except (ToolExecutionError, Exception):
                     logger.exception("Clarification resume failed")
+
+        # ── 0.9 RESET BOREDOM (living system: any user interaction resets idle) ──
+        if self._endocrine is not None:
+            try:
+                self._endocrine.reset_boredom()
+            except Exception:
+                logger.debug("reset_boredom failed", exc_info=True)
 
         # ── 1. PERCEIVE ───────────────────────────────────────────────
         if on_progress:
@@ -572,6 +581,8 @@ class RequestPipeline:
             enrichment="\n\n".join(enrichment_parts) if enrichment_parts else "",
         )
         context: dict[str, Any] = ctx.model_dump()
+        if self._agent_journal is not None:
+            context["_agent_journal"] = self._agent_journal
 
         raw_response: str
         agents_used: list[str]
