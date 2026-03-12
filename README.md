@@ -310,7 +310,7 @@ This is where it gets interesting. Ira has **ten memory subsystems**, modeled lo
 
 ### Dream Mode
 
-Every night (or on demand), Ira runs an **11-stage dream cycle** — consolidating memories, extracting insights, pruning stale data, checking for price conflicts, generating follow-up campaigns, and producing a morning summary. It's the AI equivalent of sleeping on it.
+Every night (or on demand), Ira runs an **11-stage dream cycle** — consolidating memories, extracting insights, pruning stale data, checking for price conflicts, generating follow-up campaigns, producing a morning summary, and **stage 11: agent journaling** (first-person nightly reflections per agent). It's the AI equivalent of sleeping on it.
 
 ## The Body Systems
 
@@ -344,6 +344,15 @@ The codebase uses a **biological metaphor** for its subsystems:
 | **CRM Populator** | Contact classification and import from Gmail, KB, Neo4j |
 
 Endocrine (behavioral modifiers like urgency and formality) and Musculoskeletal (action recording) are wired into the pipeline as lightweight service-key integrations rather than standalone system files.
+
+### Living System (v3.9)
+
+Ira’s body systems are wired for **emergent, autonomous behavior** (not just passive state):
+
+- **Agent Journaling** — Every agent’s actions are logged; Dream Mode writes a first-person nightly reflection per agent. Agents see their age, latest journal entry, and a `read_my_journal` tool; Athena can read any agent’s journal via `read_agent_journal`.
+- **Intrinsic Curiosity** — A boredom hormone (Endocrine) rises when the system is idle. When it exceeds a threshold, the **CuriosityLoop** wakes a random agent to explore the knowledge base and ask other agents questions; the exchange can be stored in memory. Boredom resets on any user request or after a cycle.
+- **Inter-Agent Trust** — PowerLevelTracker maintains a **trust matrix** (each agent’s trust in others, 0–1). When feedback is negative, trust decreases along the delegation chain; agents see trust lines in their prompt and tend to verify or hedge when trust is low.
+- **Phantom Limb (graceful degradation)** — If a critical service (e.g. Qdrant, Neo4j) fails, the Immune system sets a **sense_lost** state and spikes stress instead of crashing. Agents get explicit warnings in their prompt (“Your semantic memory is currently severed…”), and Voice shapes tone to be cautious when stress is high.
 
 ## Shared Identity
 
