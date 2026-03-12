@@ -92,10 +92,8 @@ class CuriosityLoop:
             except Exception:
                 logger.warning("CuriosityLoop idle tick failed", exc_info=True)
 
-    async def _handle_idle(self, message: AgentMessage) -> None:
-        """Run one curiosity cycle: wake a random agent, prompt, then reset boredom."""
-        if message.query != "idle":
-            return
+    async def run_one_cycle(self) -> None:
+        """Run one curiosity cycle (e.g. from dream mode). Resets boredom after."""
         try:
             await self._run_curiosity_cycle()
         finally:
@@ -103,6 +101,12 @@ class CuriosityLoop:
                 self._endocrine.reset_boredom()
             except Exception:
                 logger.debug("reset_boredom failed", exc_info=True)
+
+    async def _handle_idle(self, message: AgentMessage) -> None:
+        """Run one curiosity cycle: wake a random agent, prompt, then reset boredom."""
+        if message.query != "idle":
+            return
+        await self.run_one_cycle()
 
     async def _run_curiosity_cycle(self) -> None:
         """Pick a random agent (excluding athena) and run the boredom prompt."""

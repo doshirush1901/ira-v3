@@ -310,7 +310,7 @@ This is where it gets interesting. Ira has **ten memory subsystems**, modeled lo
 
 ### Dream Mode
 
-Every night (or on demand), Ira runs an **11-stage dream cycle** — consolidating memories, extracting insights, pruning stale data, checking for price conflicts, generating follow-up campaigns, producing a morning summary, and **stage 11: agent journaling** (first-person nightly reflections per agent). It's the AI equivalent of sleeping on it.
+Dream runs **on demand only** — when you say **dream** or **sleep** in Cursor (or run `ira dream` / call the dream-report API). It is not scheduled automatically at night. The cycle runs: **agent journaling first** (first-person reflections per agent), then a **sleep phase** (phantom-limb re-check, trust reconciliation, one curiosity cycle when the API is wired), then the rest: deferred ingestion, sleep training, episodic consolidation, insights, gaps, procedural learning, pruning, price check, graph, follow-up, morning summary. It's the AI equivalent of sleeping on it.
 
 ## The Body Systems
 
@@ -353,6 +353,15 @@ Ira’s body systems are wired for **emergent, autonomous behavior** (not just p
 - **Intrinsic Curiosity** — A boredom hormone (Endocrine) rises when the system is idle. When it exceeds a threshold, the **CuriosityLoop** wakes a random agent to explore the knowledge base and ask other agents questions; the exchange can be stored in memory. Boredom resets on any user request or after a cycle.
 - **Inter-Agent Trust** — PowerLevelTracker maintains a **trust matrix** (each agent’s trust in others, 0–1). When feedback is negative, trust decreases along the delegation chain; agents see trust lines in their prompt and tend to verify or hedge when trust is low.
 - **Phantom Limb (graceful degradation)** — If a critical service (e.g. Qdrant, Neo4j) fails, the Immune system sets a **sense_lost** state and spikes stress instead of crashing. Agents get explicit warnings in their prompt (“Your semantic memory is currently severed…”), and Voice shapes tone to be cautious when stress is high.
+
+### Testing the new modes
+
+| Mode | How it activates | How to test |
+|:-----|:------------------|:-------------|
+| **Agent Journaling** | Every agent run logs an action; Dream Mode stage 11 writes nightly reflections. | Run a few `ira ask "…"` then `ira dream`. Check `data/brain/agent_journals.db` or ask Athena to "read Prometheus's journal" (uses `read_agent_journal`). |
+| **Intrinsic Curiosity** | Idle loop: only when the **API server** is running (boredom ticks every hour; when &gt; 0.8 a random agent is woken). **Also runs during dream** when you trigger dream via the API — one curiosity cycle in the sleep phase. | Idle: start the server, then wait or lower `_IDLE_CHECK_INTERVAL_SEC` / `_BOREDOM_THRESHOLD` in `curiosity_loop.py`. Dream: run `ira dream` with the server running and check stage `sleep_curiosity` in the report. |
+| **Inter-Agent Trust** | Negative feedback (correction) decreases trust along the delegation chain. | Ask something that uses multiple agents (e.g. "What's our best price for a PF1 for Acme?"), then submit negative feedback via `/api/feedback`. Inspect `data/brain/power_levels.json` for `trust_in`; agents see trust lines in their prompt. |
+| **Phantom Limb** | When a critical service is down at startup or health-check time. | Stop Qdrant: `docker compose -f docker-compose.local.yml stop qdrant`. Start the server or run a query — startup should succeed; agents get sense_lost warnings and cautious tone. Restore with `docker compose -f docker-compose.local.yml start qdrant`. |
 
 ## Shared Identity
 

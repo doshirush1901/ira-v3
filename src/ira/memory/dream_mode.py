@@ -24,6 +24,7 @@ Each cycle is logged to ``data/dream_log.json`` for auditability.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -84,6 +85,9 @@ class DreamMode:
         db_path: str = "data/conversations.db",
         dream_log_path: str | Path | None = None,
         agent_journal: Any | None = None,
+        immune_system: Any | None = None,
+        power_level_tracker: Any | None = None,
+        curiosity_runner: Any | None = None,
     ) -> None:
         self._long_term = long_term
         self._episodic = episodic
@@ -98,6 +102,9 @@ class DreamMode:
         self._db: aiosqlite.Connection | None = None
         self._dream_log_path = Path(dream_log_path) if dream_log_path else _DREAM_LOG_PATH
         self._agent_journal = agent_journal
+        self._immune_system = immune_system
+        self._power_level_tracker = power_level_tracker
+        self._curiosity_runner = curiosity_runner
 
     def configure(self, **kwargs: Any) -> None:
         """Late-bind optional dependencies after construction."""
@@ -111,6 +118,12 @@ class DreamMode:
             self._retriever = kwargs["retriever"]
         if "agent_journal" in kwargs:
             self._agent_journal = kwargs["agent_journal"]
+        if "immune_system" in kwargs:
+            self._immune_system = kwargs["immune_system"]
+        if "power_level_tracker" in kwargs:
+            self._power_level_tracker = kwargs["power_level_tracker"]
+        if "curiosity_runner" in kwargs:
+            self._curiosity_runner = kwargs["curiosity_runner"]
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self._db_path)
@@ -141,9 +154,15 @@ class DreamMode:
 
     @observe()
     async def run_dream_cycle(self) -> DreamReport:
-        """Execute the full 11-stage dream cycle and return a report."""
+        """Execute the full dream cycle: journaling first, then sleep phase, then stages 0..10."""
         logger.info("DREAM CYCLE starting")
         stage_log: dict[str, Any] = {"cycle_date": date.today().isoformat(), "stages": {}}
+
+        # Stage 11 — Agent Journaling first (write down the day before sleep)
+        await self._stage11_agent_journaling(stage_log)
+
+        # Sleep phase — phantom limb, trust, curiosity (optional when deps configured)
+        await self._sleep_phase(stage_log)
 
         # Stage 0 — Deferred Ingestion (files accessed via Alexandros fallback)
         await self._stage0_deferred_ingestion(stage_log)
@@ -185,9 +204,6 @@ class DreamMode:
         # Stage 10 — Morning Summary
         await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
 
-        # Stage 11 — Agent Journaling (nightly reflections)
-        await self._stage11_agent_journaling(stage_log)
-
         stage_results = {
             name: info.get("status", "unknown")
             for name, info in stage_log.get("stages", {}).items()
@@ -213,6 +229,54 @@ class DreamMode:
             len(campaign_insights),
         )
         return report
+
+    async def _sleep_phase(self, stage_log: dict[str, Any]) -> None:
+        """Run optional sleep-phase steps: phantom limb re-check, trust reconciliation, curiosity."""
+        # Phantom limb — re-check health and update sense_lost
+        if self._immune_system is not None:
+            try:
+                report = await self._immune_system.run_startup_validation()
+                healthy = [k for k, v in report.items() if v.get("status") == "healthy"]
+                stage_log["stages"]["sleep_phantom_limb"] = {
+                    "status": "ok",
+                    "healthy": healthy,
+                }
+                logger.info("Sleep phase: phantom limb re-check — %s healthy", len(healthy))
+            except Exception:
+                logger.exception("Sleep phase phantom limb re-check failed")
+                stage_log["stages"]["sleep_phantom_limb"] = {"status": "error"}
+
+        # Trust reconciliation — nudge trust toward default
+        if self._power_level_tracker is not None and hasattr(
+            self._power_level_tracker, "nudge_trust_toward_default"
+        ):
+            try:
+                await self._power_level_tracker.nudge_trust_toward_default(step=0.05)
+                stage_log["stages"]["sleep_trust"] = {"status": "ok"}
+                logger.info("Sleep phase: trust reconciliation done")
+            except Exception:
+                logger.exception("Sleep phase trust reconciliation failed")
+                stage_log["stages"]["sleep_trust"] = {"status": "error"}
+
+        # Curiosity — run one cycle if runner provided (timeout so dream doesn't hang)
+        _CURIOSITY_TIMEOUT_SEC = 120
+        if self._curiosity_runner is not None:
+            try:
+                runner = self._curiosity_runner
+                if asyncio.iscoroutinefunction(runner):
+                    await asyncio.wait_for(runner(), timeout=_CURIOSITY_TIMEOUT_SEC)
+                else:
+                    coro = runner()
+                    if asyncio.iscoroutine(coro):
+                        await asyncio.wait_for(coro, timeout=_CURIOSITY_TIMEOUT_SEC)
+                stage_log["stages"]["sleep_curiosity"] = {"status": "ok"}
+                logger.info("Sleep phase: curiosity cycle done")
+            except asyncio.TimeoutError:
+                logger.warning("Sleep phase: curiosity cycle timed out after %ds", _CURIOSITY_TIMEOUT_SEC)
+                stage_log["stages"]["sleep_curiosity"] = {"status": "timeout"}
+            except Exception:
+                logger.exception("Sleep phase curiosity cycle failed")
+                stage_log["stages"]["sleep_curiosity"] = {"status": "error"}
 
     # ── Stage 0: Deferred Ingestion ──────────────────────────────────────
 

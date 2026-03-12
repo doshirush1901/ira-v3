@@ -647,6 +647,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await curiosity_loop.start()
     _services["curiosity_loop"] = curiosity_loop
 
+    # ── Dream mode: sleep phase (phantom limb, trust, curiosity) ──────
+    dream_mode.configure(
+        immune_system=immune,
+        power_level_tracker=power_level_tracker,
+        curiosity_runner=lambda: curiosity_loop.run_one_cycle(),
+    )
+
     # ── Email polling background task ─────────────────────────────────
     email_poll_task = None
     if settings.google.email_poll_enabled:

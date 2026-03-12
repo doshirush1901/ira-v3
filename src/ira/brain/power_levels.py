@@ -195,6 +195,26 @@ class PowerLevelTracker:
             observer_agent, target_agent, trust_in[target_agent],
         )
 
+    async def nudge_trust_toward_default(self, step: float = 0.05) -> None:
+        """Nudge all trust_in values toward _DEFAULT_TRUST (gentle recovery during dream)."""
+        async with self._lock:
+            changed = False
+            for entry in self._agents.values():
+                trust_in = entry.get("trust_in", {})
+                if not trust_in:
+                    continue
+                for other, current in list(trust_in.items()):
+                    current_f = float(current)
+                    if current_f < _DEFAULT_TRUST:
+                        trust_in[other] = _clamp_trust(current_f + step)
+                        changed = True
+                    elif current_f > _DEFAULT_TRUST:
+                        trust_in[other] = _clamp_trust(current_f - step)
+                        changed = True
+            if changed:
+                await self._save()
+        logger.debug("Trust nudged toward default (step=%.2f)", step)
+
     async def reload(self) -> None:
         """Re-read the data file from disk."""
         await self._load()
