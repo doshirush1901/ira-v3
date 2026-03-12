@@ -1184,11 +1184,29 @@ async def board_meeting(req: BoardMeetingRequest) -> dict[str, Any]:
     }
 
 
-@app.get("/api/dream-report")
-async def dream_report() -> dict[str, Any]:
-    """Trigger a dream cycle and return the report."""
+@app.get("/api/journal")
+async def journal_only(
+    since_last: bool = True,
+    last_24h: bool = False,
+) -> dict[str, Any]:
+    """Run journal only (no dream cycle). since_last=true journals from each agent's last entry till now.
+    last_24h=true uses last 24 hours instead."""
     dm = _svc(SK.DREAM_MODE)
-    report = await dm.run_dream_cycle()
+    result = await dm.run_journal_only(
+        since_last_journal=since_last and not last_24h,
+        lookback_hours=24.0 if last_24h else 168.0,
+    )
+    return result
+
+
+@app.get("/api/dream-report")
+async def dream_report(
+    journal_last_24h: bool = False,
+) -> dict[str, Any]:
+    """Trigger a dream cycle and return the report.
+    Set journal_last_24h=true to journal agent actions from the last 24 hours."""
+    dm = _svc(SK.DREAM_MODE)
+    report = await dm.run_dream_cycle(journal_last_24h=journal_last_24h)
     return {
         "cycle_date": str(report.cycle_date),
         "memories_consolidated": report.memories_consolidated,

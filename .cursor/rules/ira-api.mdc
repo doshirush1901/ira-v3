@@ -83,7 +83,17 @@ curl -s -N -X POST http://localhost:8000/api/task/clarify \
   -d '{"task_id": "<task_id from stream>", "answer": "<user answer>"}'
 ```
 
-## 2c. Dream / Sleep ("dream", "sleep", "Ira go to sleep")
+## 2c. Journal only ("journal", "save journal")
+
+When the user says **"journal"** or **"save"** in the sense of saving what agents did (no full dream cycle), run **journal only** — reflections from where each agent left off till now:
+
+```bash
+cd "$(git rev-parse --show-toplevel)" && poetry run ira journal
+```
+
+Use `ira journal --last-24h` to journal the last 24 hours of actions instead of since last journal. Display the result (entries saved, agents). API: `GET /api/journal` or `GET /api/journal?last_24h=true`.
+
+## 2d. Dream / Sleep ("dream", "sleep", "Ira go to sleep")
 
 Dream runs **on demand only** — it is not scheduled automatically at night. When the user says **"dream"**, **"sleep"**, or similar (e.g. "Ira go to sleep", "run dream"), run the dream cycle from the **project root** and show the report:
 
@@ -91,7 +101,13 @@ Dream runs **on demand only** — it is not scheduled automatically at night. Wh
 cd "$(git rev-parse --show-toplevel)" && poetry run ira dream
 ```
 
-Display the dream report (stage results, gaps, connections, campaign insights). If the API server is already running, you can instead call `GET /api/dream-report` and show the JSON report.
+To journal **the last 24 hours** of agent activity inside a full dream cycle, use:
+
+```bash
+cd "$(git rev-parse --show-toplevel)" && poetry run ira dream --last-24h
+```
+
+Display the dream report (stage results, gaps, connections, campaign insights). If the API server is already running, you can call `GET /api/dream-report` or `GET /api/dream-report?journal_last_24h=true` and show the JSON report.
 
 ## 3. Feedback / Corrections ("that's wrong", "actually it's...")
 

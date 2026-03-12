@@ -7,7 +7,7 @@ during the pipeline, and Dream Mode writes first-person journal entries.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +136,50 @@ class AgentJournal:
             logger.warning("AgentJournal.get_agents_with_actions_for_date failed", exc_info=True)
             return []
 
+    async def get_agents_with_actions_since_hours(self, hours: float = 24.0) -> list[str]:
+        """Return distinct agent names that have at least one action in the last N hours (by created_at)."""
+        if self._db is None:
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        try:
+            cursor = await self._db.execute(
+                "SELECT DISTINCT agent_name FROM daily_actions WHERE created_at >= ? ORDER BY agent_name",
+                (since,),
+            )
+            rows = await cursor.fetchall()
+            await cursor.close()
+            return [r[0] for r in rows]
+        except Exception:
+            logger.warning("AgentJournal.get_agents_with_actions_since_hours failed", exc_info=True)
+            return []
+
+    async def get_actions_since_hours(
+        self, agent_name: str, hours: float = 24.0
+    ) -> list[dict[str, Any]]:
+        """Return all actions for this agent in the last N hours (by created_at)."""
+        if self._db is None:
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        try:
+            cursor = await self._db.execute(
+                """
+                SELECT action_text, outcome, created_at
+                FROM daily_actions
+                WHERE agent_name = ? AND created_at >= ?
+                ORDER BY created_at ASC
+                """,
+                (agent_name, since),
+            )
+            rows = await cursor.fetchall()
+            await cursor.close()
+            return [
+                {"action_text": r[0], "outcome": r[1], "created_at": r[2]}
+                for r in rows
+            ]
+        except Exception:
+            logger.warning("AgentJournal.get_actions_since_hours failed", exc_info=True)
+            return []
+
     async def save_journal_entry(
         self,
         agent_name: str,
@@ -233,6 +277,61 @@ class AgentJournal:
         except Exception:
             logger.warning("AgentJournal.get_latest_journal_entry failed", exc_info=True)
             return None
+
+    async def get_latest_journal_created_at(self, agent_name: str) -> datetime | None:
+        """Return the created_at of the most recent journal entry for this agent, or None."""
+        if self._db is None:
+            return None
+        try:
+            cursor = await self._db.execute(
+                """
+                SELECT created_at
+                FROM journal_entries
+                WHERE agent_name = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (agent_name,),
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            if not row or not row[0]:
+                return None
+            # created_at is ISO string; parse to datetime (assume UTC if naive)
+            dt = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            logger.warning("AgentJournal.get_latest_journal_created_at failed", exc_info=True)
+            return None
+
+    async def get_actions_since_datetime(
+        self, agent_name: str, since: datetime
+    ) -> list[dict[str, Any]]:
+        """Return all actions for this agent with created_at >= since."""
+        if self._db is None:
+            return []
+        since_iso = since.isoformat()
+        try:
+            cursor = await self._db.execute(
+                """
+                SELECT action_text, outcome, created_at
+                FROM daily_actions
+                WHERE agent_name = ? AND created_at >= ?
+                ORDER BY created_at ASC
+                """,
+                (agent_name, since_iso),
+            )
+            rows = await cursor.fetchall()
+            await cursor.close()
+            return [
+                {"action_text": r[0], "outcome": r[1], "created_at": r[2]}
+                for r in rows
+            ]
+        except Exception:
+            logger.warning("AgentJournal.get_actions_since_datetime failed", exc_info=True)
+            return []
 
     async def close(self) -> None:
         """Close the database connection."""

@@ -312,6 +312,10 @@ This is where it gets interesting. Ira has **ten memory subsystems**, modeled lo
 
 Dream runs **on demand only** — when you say **dream** or **sleep** in Cursor (or run `ira dream` / call the dream-report API). It is not scheduled automatically at night. The cycle runs: **agent journaling first** (first-person reflections per agent), then a **sleep phase** (phantom-limb re-check, trust reconciliation, one curiosity cycle when the API is wired), then the rest: deferred ingestion, sleep training, episodic consolidation, insights, gaps, procedural learning, pruning, price check, graph, follow-up, morning summary. It's the AI equivalent of sleeping on it.
 
+**Journal only (no dream cycle):** Say **journal** or **save** to run only agent journaling — like a save. `ira journal` writes reflections from **where each agent left off** (since their last journal entry) till now. Use `ira journal --last-24h` to journal the last 24 hours of actions. API: `GET /api/journal` and `GET /api/journal?last_24h=true`. No consolidation or sleep phase.
+
+**Dream with last 24h:** `ira dream --last-24h` (or `GET /api/dream-report?journal_last_24h=true`) runs the full dream cycle but stage 11 uses the last 24 hours of actions instead of only today’s date, so agents see recent work regardless of calendar day.
+
 ## The Body Systems
 
 The codebase uses a **biological metaphor** for its subsystems:
@@ -358,7 +362,7 @@ Ira’s body systems are wired for **emergent, autonomous behavior** (not just p
 
 | Mode | How it activates | How to test |
 |:-----|:------------------|:-------------|
-| **Agent Journaling** | Every agent run logs an action; Dream Mode stage 11 writes nightly reflections. | Run a few `ira ask "…"` then `ira dream`. Check `data/brain/agent_journals.db` or ask Athena to "read Prometheus's journal" (uses `read_agent_journal`). |
+| **Agent Journaling** | Every agent run logs an action; Dream Mode stage 11 writes reflections. **Journal only:** `ira journal` (since last journal) or `ira journal --last-24h`; no full dream. | Run `ira ask "…"` then `ira dream` or `ira journal`. Check `data/brain/agent_journals.db` or ask Athena to "read Prometheus's journal" (uses `read_agent_journal`). |
 | **Intrinsic Curiosity** | Idle loop: only when the **API server** is running (boredom ticks every hour; when &gt; 0.8 a random agent is woken). **Also runs during dream** when you trigger dream via the API — one curiosity cycle in the sleep phase. | Idle: start the server, then wait or lower `_IDLE_CHECK_INTERVAL_SEC` / `_BOREDOM_THRESHOLD` in `curiosity_loop.py`. Dream: run `ira dream` with the server running and check stage `sleep_curiosity` in the report. |
 | **Inter-Agent Trust** | Negative feedback (correction) decreases trust along the delegation chain. | Ask something that uses multiple agents (e.g. "What's our best price for a PF1 for Acme?"), then submit negative feedback via `/api/feedback`. Inspect `data/brain/power_levels.json` for `trust_in`; agents see trust lines in their prompt. |
 | **Phantom Limb** | When a critical service is down at startup or health-check time. | Stop Qdrant: `docker compose -f docker-compose.local.yml stop qdrant`. Start the server or run a query — startup should succeed; agents get sense_lost warnings and cautious tone. Restore with `docker compose -f docker-compose.local.yml start qdrant`. |

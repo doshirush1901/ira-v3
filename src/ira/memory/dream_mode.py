@@ -153,13 +153,17 @@ class DreamMode:
     # ── public API ────────────────────────────────────────────────────────
 
     @observe()
-    async def run_dream_cycle(self) -> DreamReport:
-        """Execute the full dream cycle: journaling first, then sleep phase, then stages 0..10."""
-        logger.info("DREAM CYCLE starting")
+    async def run_dream_cycle(self, *, journal_last_24h: bool = False) -> DreamReport:
+        """Execute the full dream cycle: journaling first, then sleep phase, then stages 0..10.
+
+        If journal_last_24h is True, stage 11 journals actions from the last 24 hours
+        instead of only today's date, so agents see recent activity regardless of calendar day.
+        """
+        logger.info("DREAM CYCLE starting (journal_last_24h=%s)", journal_last_24h)
         stage_log: dict[str, Any] = {"cycle_date": date.today().isoformat(), "stages": {}}
 
         # Stage 11 — Agent Journaling first (write down the day before sleep)
-        await self._stage11_agent_journaling(stage_log)
+        await self._stage11_agent_journaling(stage_log, journal_last_24h=journal_last_24h)
 
         # Sleep phase — phantom limb, trust, curiosity (optional when deps configured)
         await self._sleep_phase(stage_log)
@@ -229,6 +233,95 @@ class DreamMode:
             len(campaign_insights),
         )
         return report
+
+    async def run_journal_only(
+        self,
+        *,
+        since_last_journal: bool = True,
+        lookback_hours: float = 168.0,
+    ) -> dict[str, Any]:
+        """Run only agent journaling (no dream cycle). Like a save: journal from where it left off till now.
+
+        When since_last_journal is True, for each recently active agent we get actions since their
+        last journal entry and write one new reflection. When False, we use last lookback_hours.
+        """
+        if self._agent_journal is None:
+            return {"entries_saved": 0, "agents_processed": 0, "reason": "no agent_journal"}
+
+        _EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        today = date.today()
+        entries_saved = 0
+        agents_processed: list[str] = []
+
+        try:
+            agent_names = await self._agent_journal.get_agents_with_actions_since_hours(lookback_hours)
+            if not agent_names:
+                return {"entries_saved": 0, "agents_processed": 0, "agents": []}
+
+            for agent_name in agent_names:
+                if since_last_journal:
+                    since = await self._agent_journal.get_latest_journal_created_at(agent_name)
+                    if since is None:
+                        since = _EPOCH_UTC
+                    actions_list = await self._agent_journal.get_actions_since_datetime(
+                        agent_name, since
+                    )
+                    actions_intro = "Since your last journal entry:\n"
+                else:
+                    actions_list = await self._agent_journal.get_actions_since_hours(
+                        agent_name, lookback_hours
+                    )
+                    actions_intro = f"Your actions in the last {int(lookback_hours)} hours:\n"
+
+                if not actions_list:
+                    continue
+
+                agents_processed.append(agent_name)
+                actions_text = actions_intro + "\n".join(
+                    f"- {a.get('action_text', '')} (outcome: {a.get('outcome', '')})"
+                    for a in actions_list
+                )
+                system_prompt = _JOURNAL_SYSTEM_PROMPT.format(
+                    agent_name=agent_name,
+                    actions=actions_text,
+                )
+                try:
+                    reflection = await self._llm.generate_text(
+                        system_prompt,
+                        "Write your journal entry now.",
+                        temperature=0.3,
+                        name="dream.agent_journal",
+                    )
+                    if reflection and reflection.strip():
+                        await self._agent_journal.save_journal_entry(
+                            agent_name=agent_name,
+                            reflection_text=reflection.strip(),
+                            mood="",
+                            at_date=today,
+                        )
+                        entries_saved += 1
+                        logger.debug("Journal only: entry saved for %s", agent_name)
+                except (LLMError, Exception):
+                    logger.warning("Journal only: LLM failed for %s", agent_name, exc_info=True)
+
+            logger.info(
+                "Journal only complete — %d entries saved for %d agents (since_last=%s)",
+                entries_saved, len(agents_processed), since_last_journal,
+            )
+            return {
+                "entries_saved": entries_saved,
+                "agents_processed": len(agents_processed),
+                "agents": agents_processed,
+                "since_last_journal": since_last_journal,
+            }
+        except Exception:
+            logger.exception("Journal only failed")
+            return {
+                "entries_saved": entries_saved,
+                "agents_processed": len(agents_processed),
+                "agents": agents_processed,
+                "error": True,
+            }
 
     async def _sleep_phase(self, stage_log: dict[str, Any]) -> None:
         """Run optional sleep-phase steps: phantom limb re-check, trust reconciliation, curiosity."""
@@ -954,8 +1047,10 @@ class DreamMode:
 
     # ── Stage 11: Agent Journaling ───────────────────────────────────────
 
-    async def _stage11_agent_journaling(self, stage_log: dict[str, Any]) -> None:
-        """For each agent with actions today, generate and save a first-person journal entry."""
+    async def _stage11_agent_journaling(
+        self, stage_log: dict[str, Any], *, journal_last_24h: bool = False
+    ) -> None:
+        """For each agent with actions (today or last 24h), generate and save a first-person journal entry."""
         entries_saved = 0
         try:
             if self._agent_journal is None:
@@ -963,13 +1058,19 @@ class DreamMode:
                 return
 
             today = date.today()
-            agent_names = await self._agent_journal.get_agents_with_actions_for_date(today)
+            if journal_last_24h:
+                agent_names = await self._agent_journal.get_agents_with_actions_since_hours(24.0)
+            else:
+                agent_names = await self._agent_journal.get_agents_with_actions_for_date(today)
             if not agent_names:
                 stage_log["stages"]["11_agent_journaling"] = {"status": "ok", "entries_saved": 0}
                 return
 
             for agent_name in agent_names:
-                actions_list = await self._agent_journal.get_actions_for_date(agent_name, today)
+                if journal_last_24h:
+                    actions_list = await self._agent_journal.get_actions_since_hours(agent_name, 24.0)
+                else:
+                    actions_list = await self._agent_journal.get_actions_for_date(agent_name, today)
                 if not actions_list:
                     continue
                 actions_text = "\n".join(
@@ -1003,8 +1104,12 @@ class DreamMode:
                 "status": "ok",
                 "entries_saved": entries_saved,
                 "agents_processed": len(agent_names),
+                "window": "last_24h" if journal_last_24h else "today",
             }
-            logger.info("Stage 11: agent journaling — %d entries saved for %d agents", entries_saved, len(agent_names))
+            logger.info(
+                "Stage 11: agent journaling — %d entries saved for %d agents (window=%s)",
+                entries_saved, len(agent_names), "last_24h" if journal_last_24h else "today",
+            )
         except (IraError, Exception):
             logger.exception("Dream Stage 11 (agent journaling) failed")
             stage_log["stages"]["11_agent_journaling"] = {"status": "error"}

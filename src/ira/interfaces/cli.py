@@ -2411,12 +2411,61 @@ def ingest(
         )
 
 
+# ── Journal only (no dream cycle) ──────────────────────────────────────────
+
+
+@app.command()
+def journal(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    last_24h: bool = typer.Option(
+        False,
+        "--last-24h",
+        help="Journal last 24 hours of actions instead of since last journal entry.",
+    ),
+) -> None:
+    """Journal only: save agent reflections from where it left off till now (no full dream cycle)."""
+    _configure_logging(verbose)
+
+    async def _journal() -> None:
+        from ira.memory.dream_mode import build_dream_mode
+
+        dream_mode = await build_dream_mode()
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[bold cyan]Journaling..."),
+                console=err_console,
+                transient=True,
+            ) as progress:
+                progress.add_task("journal", total=None)
+                result = await dream_mode.run_journal_only(
+                    since_last_journal=not last_24h,
+                    lookback_hours=24.0 if last_24h else 168.0,
+                )
+            console.print(Panel(
+                f"[bold]Entries saved:[/bold]  {result.get('entries_saved', 0)}\n"
+                f"[bold]Agents:[/bold]       {', '.join(result.get('agents', []) or ['none'])}\n"
+                f"[bold]Window:[/bold]       {'last 24h' if last_24h else 'since last journal'}",
+                title="Journal",
+                border_style="cyan",
+            ))
+        finally:
+            await dream_mode.close()
+
+    _run(_journal())
+
+
 # ── Dream ─────────────────────────────────────────────────────────────────
 
 
 @app.command()
 def dream(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+    last_24h: bool = typer.Option(
+        False,
+        "--last-24h",
+        help="Journal agent actions from the last 24 hours instead of only today (so agents know recent work).",
+    ),
 ) -> None:
     """Trigger a dream cycle and print the consolidation report."""
     _configure_logging(verbose)
@@ -2433,7 +2482,7 @@ def dream(
                 transient=True,
             ) as progress:
                 progress.add_task("dream", total=None)
-                report = await dream_mode.run_dream_cycle()
+                report = await dream_mode.run_dream_cycle(journal_last_24h=last_24h)
 
             console.print(Panel(
                 f"[bold]Date:[/bold]                  {report.cycle_date}\n"
