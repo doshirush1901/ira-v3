@@ -109,9 +109,12 @@ class DigestiveSystem:
     async def _classify_window(self, text: str) -> dict[str, list[str]]:
         """Send a single text window to the LLM for nutrient classification."""
         prepared = self._prepare_classification_input(text)
+        # NutrientClassification can be large (protein/carbs/waste lists); default 4096
+        # truncates mid-JSON and raises IncompleteOutputException. Use 8192.
         result = await self._llm.generate_structured(
             _NUTRIENT_SYSTEM_PROMPT, prepared, NutrientClassification,
             name="digestive.classify",
+            max_tokens=8192,
         )
         return result.model_dump()
 
@@ -202,9 +205,11 @@ class DigestiveSystem:
 
     async def _call_summarize(self, text: str) -> list[str]:
         """Send nutrient items to the LLM for summarization into searchable statements."""
+        # DigestiveSummary.statements can be long; use 8192 to avoid truncation.
         result = await self._llm.generate_structured(
             _SUMMARIZE_SYSTEM_PROMPT, text, DigestiveSummary,
             name="digestive.summarize",
+            max_tokens=8192,
         )
         return [s for s in result.statements if isinstance(s, str) and s.strip()]
 
@@ -429,9 +434,11 @@ class DigestiveSystem:
 
     async def _extract_email_metadata(self, body: str) -> dict[str, Any]:
         """Extract email-specific metadata (sender info, mentions, dates)."""
+        # EmailMetadata lists can be long for long emails; use 8192 to avoid truncation.
         result = await self._llm.generate_structured(
             _EMAIL_META_SYSTEM_PROMPT, body[:12_000], EmailMetadata,
             name="digestive.email_meta",
+            max_tokens=8192,
         )
         return result.model_dump()
 

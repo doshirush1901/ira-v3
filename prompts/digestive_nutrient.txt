@@ -15,3 +15,4 @@ Definitions:
 
 Be thorough. Every sentence should appear in exactly one category.
 Use empty lists when nothing fits a category.
+If the text is very long, limit each list to at most 60 items per category so the response stays compact.

@@ -1708,9 +1708,33 @@ def takeout_ingest(
                                     if await memory.store_fact(fact=fact, source=src, confidence=0.85):
                                         mem0_added += 1
                             return (k, chunks_added, entities_delta, mem0_added)
-                        except Exception:
-                            logger.warning("Parallel process_one failed for key=%s", k[:16], exc_info=True)
-                            return (k, 0, {}, 0)
+                        except Exception as exc:
+                            logger.warning(
+                                "Nutrient extraction failed for key=%s, falling back to raw body: %s",
+                                k[:16], exc,
+                                exc_info=True,
+                            )
+                            # Fallback: absorb full body as single protein (match DigestiveSystem.ingest)
+                            chunks_added = 0
+                            entities_delta = {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
+                            mem0_added = 0
+                            if not dry_run and body_text.strip():
+                                fallback = {"protein": [body_text.strip()], "carbs": [], "waste": []}
+                                try:
+                                    chunks_added = int(await digestive._absorb(
+                                        fallback,
+                                        source=src,
+                                        source_category="takeout_email_protein",
+                                        source_id=sid,
+                                    ))
+                                    entities = await digestive._extract_entities(body_text.strip())
+                                    for key_ in ("companies", "people", "machines", "relationships"):
+                                        entities_delta[key_] = int(entities.get(key_, 0))
+                                    if await memory.store_fact(fact=body_text.strip()[:2000], source=src, confidence=0.7):
+                                        mem0_added = 1
+                                except Exception as fallback_exc:
+                                    logger.warning("Fallback absorb also failed for key=%s: %s", k[:16], fallback_exc)
+                            return (k, chunks_added, entities_delta, mem0_added)
 
                     stats["messages_with_protein"] += 1
                     pending_tasks.append(
