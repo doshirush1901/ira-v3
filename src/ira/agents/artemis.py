@@ -213,6 +213,23 @@ class Artemis(BaseAgent):
             parameters={"query": "Knowledge query"},
             handler=self._tool_search_knowledge_base_skill,
         ))
+        self.register_tool(AgentTool(
+            name="pull_email_data_skill",
+            description=(
+                "Data pulling from email past conversations: run pull_contact_email_history "
+                "and download_email_attachments for a contact. Use when asked to pull all "
+                "context from email for a lead (threads, logic tree, PDFs, quote data)."
+            ),
+            parameters={
+                "email": "Contact email address",
+                "folder": "Subfolder name (e.g. forma3d_eduardo) under downloaded_from_emails",
+                "analyze": "Run PDF analysis and extract quote data (default true)",
+                "store_memory": "Store summary in long-term memory (default false)",
+                "to_send_path": "Optional path to TO_SEND.md to fill price placeholders",
+                "name": "Contact name for context",
+            },
+            handler=self._tool_pull_email_data_skill,
+        ))
 
     # ── Tool implementations ─────────────────────────────────────────────
 
@@ -493,6 +510,25 @@ class Artemis(BaseAgent):
 
     async def _tool_search_knowledge_base_skill(self, query: str) -> str:
         return await self.use_skill("search_knowledge_base", query=query)
+
+    async def _tool_pull_email_data_skill(
+        self,
+        email: str,
+        folder: str = "",
+        analyze: str = "true",
+        store_memory: str = "false",
+        to_send_path: str = "",
+        name: str = "",
+    ) -> str:
+        return await self.use_skill(
+            "data_pulling_from_email_past_conversations",
+            email=email,
+            folder=folder or email.split("@")[0].replace(".", "_"),
+            analyze=analyze.lower() in ("true", "1", "yes"),
+            store_memory=store_memory.lower() in ("true", "1", "yes"),
+            to_send_path=to_send_path or "",
+            name=name or "",
+        )
 
     # ── Handle ───────────────────────────────────────────────────────────
 

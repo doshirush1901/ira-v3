@@ -109,6 +109,8 @@ class DigestiveSystem:
     async def _classify_window(self, text: str) -> dict[str, list[str]]:
         """Send a single text window to the LLM for nutrient classification."""
         prepared = self._prepare_classification_input(text)
+        if not prepared or len(prepared.strip()) < 20:
+            return {"protein": [], "carbs": [], "waste": []}
         # NutrientClassification can be large (protein/carbs/waste lists); default 4096
         # truncates mid-JSON and raises IncompleteOutputException. Use 8192.
         result = await self._llm.generate_structured(
@@ -118,12 +120,43 @@ class DigestiveSystem:
         )
         return result.model_dump()
 
+    def _is_noise_line(self, line: str) -> bool:
+        """True if line is HTML/XML/binary junk that would blow LLM output (e.g. Office markup, PNG dump)."""
+        if len(line) > 800:
+            # Long lines that look like binary or repeated padding often blow completion tokens.
+            non_printable = sum(1 for c in line if c not in " \t\n\r" and (ord(c) < 32 or ord(c) > 126))
+            if non_printable > 0.25 * len(line):
+                return True
+            # Repeated short pattern (e.g. "E@ P E@ P E@ ") from binary.
+            if len(line) > 200:
+                for chunk_len in (4, 5, 6, 8):
+                    if chunk_len * 20 > len(line):
+                        break
+                    first = line[:chunk_len]
+                    if line.count(first) * chunk_len > 0.7 * len(line):
+                        return True
+        # Office/HTML/XML markup: model puts whole blob in carbs and hits max_tokens.
+        markup_markers = (
+            "<!--[if ", "<![endif]-->", "<o:shapelayout", "<o:idmap", "v:ext=\"edit\"",
+            "</xml>", "tEXtSoftware", "Microsoft Office",
+        )
+        lower = line.lower()
+        for m in markup_markers:
+            if m.lower() in lower or m in line:
+                return True
+        # PNG/binary dump only in long lines (avoid dropping "We support PNG").
+        if len(line) > 200 and (" IHDR " in line or " IDAT" in line or "PNG" in line):
+            return True
+        if line.startswith("data:image/"):
+            return True
+        return False
+
     def _prepare_classification_input(self, text: str) -> str:
         """Bound high-cardinality input to avoid oversized structured outputs."""
         if not text:
             return ""
 
-        # Drop noisy placeholders that explode waste output size.
+        # Drop noisy placeholders and HTML/binary blobs that explode waste output size.
         filtered_lines = []
         for raw_line in text.splitlines():
             line = raw_line.strip()
@@ -132,6 +165,8 @@ class DigestiveSystem:
             if line in {"<!-- image -->", "![image]", "[image]"}:
                 continue
             if line.startswith("data:image/"):
+                continue
+            if self._is_noise_line(line):
                 continue
             filtered_lines.append(line)
 

@@ -18,6 +18,7 @@ import io
 import logging
 import re
 import sqlite3
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -411,13 +412,20 @@ def chunk_text(
         from chonkie import SemanticChunker
 
         embedding_model = _get_voyage_embeddings() or "minishlab/potion-base-32M"
-        chunker = SemanticChunker(
-            embedding_model=embedding_model,
-            chunk_size=chunk_size,
-            threshold=0.7,
-            similarity_window=3,
-        )
-        chunks = chunker.chunk(protected_text)
+        # Chonkie may warn when model2vec is not installed and it falls back to SentenceTransformer; suppress.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*model2vec is not available.*",
+                category=UserWarning,
+            )
+            chunker = SemanticChunker(
+                embedding_model=embedding_model,
+                chunk_size=chunk_size,
+                threshold=0.7,
+                similarity_window=3,
+            )
+            chunks = chunker.chunk(protected_text)
         result = [c.text for c in chunks if c.text.strip()]
         if result:
             return _restore_tables(result, tables)

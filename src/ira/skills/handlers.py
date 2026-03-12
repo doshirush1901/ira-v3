@@ -455,6 +455,86 @@ async def build_lead_report(**kwargs: Any) -> str:
     }, default=str, indent=2)
 
 
+async def data_pulling_from_email_past_conversations(**kwargs: Any) -> str:
+    """Run pull_contact_email_history and download_email_attachments for a contact.
+    Requires: email, folder. Optional: output_path, analyze, store_memory, to_send_path, name."""
+    import asyncio
+    from pathlib import Path
+
+    email = kwargs.get("email", "").strip()
+    folder = kwargs.get("folder", "").strip()
+    if not email or not folder:
+        return "Error: 'email' and 'folder' arguments required (e.g. folder=forma3d_eduardo)"
+
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    output_path = kwargs.get("output_path") or str(
+        project_root / "data" / "imports" / "24_WebSite_Leads" / f"{folder}_email_history.md"
+    )
+    analyze = kwargs.get("analyze", True)
+    store_memory = kwargs.get("store_memory", False)
+    to_send_path = kwargs.get("to_send_path", "")
+    contact_name = kwargs.get("name", "")
+
+    results = []
+
+    # 1. Pull contact email history
+    pull_cmd = [
+        "poetry", "run", "python",
+        str(project_root / "scripts" / "pull_contact_email_history.py"),
+        "--email", email,
+        "--output", output_path,
+    ]
+    if store_memory:
+        pull_cmd.append("--store-memory")
+    pull_cmd.append("--summarize")
+    if contact_name:
+        pull_cmd.extend(["--name", contact_name])
+
+    proc = await asyncio.create_subprocess_exec(
+        *pull_cmd,
+        cwd=str(project_root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        results.append(f"Pull history failed (exit {proc.returncode}): {stderr.decode()[:500]}")
+    else:
+        results.append(f"Pull history OK: {output_path}")
+
+    # 2. Download PDF attachments
+    download_cmd = [
+        "poetry", "run", "python",
+        str(project_root / "scripts" / "download_email_attachments.py"),
+        "--email", email,
+        "--folder", folder,
+    ]
+    if analyze:
+        download_cmd.append("--analyze")
+    if store_memory:
+        download_cmd.append("--memory")
+    if to_send_path:
+        download_cmd.extend(["--to-send", to_send_path])
+    if contact_name:
+        download_cmd.extend(["--name", contact_name])
+
+    proc2 = await asyncio.create_subprocess_exec(
+        *download_cmd,
+        cwd=str(project_root),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout2, stderr2 = await proc2.communicate()
+    if proc2.returncode != 0:
+        results.append(f"Download PDFs failed (exit {proc2.returncode}): {stderr2.decode()[:500]}")
+    else:
+        results.append("Download PDFs OK: data/imports/downloaded_from_emails/" + folder + "/")
+        if stdout2:
+            results.append(stdout2.decode()[-800:])
+
+    return "\n".join(results)
+
+
 async def schedule_campaign(**kwargs: Any) -> str:
     campaign_name = kwargs.get("name", "")
     target_segment = kwargs.get("segment", {})
