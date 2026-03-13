@@ -1078,6 +1078,18 @@ async def crm_list(limit: int = 200) -> dict[str, Any]:
     return {"deals": deals, "count": len(deals)}
 
 
+@app.get("/api/deals")
+async def deals_list(
+    limit: int = 200,
+    sort: str = "heat_desc",
+) -> dict[str, Any]:
+    """Return deals with heat score (hottest = quote sent + customer replied). sort: heat_desc (hottest first) or heat_asc (least hot)."""
+    crm = _svc(SK.CRM)
+    sort_heat = "desc" if sort == "heat_desc" else "asc"
+    deals = await crm.list_deals_with_heat(limit=limit, sort_heat=sort_heat)
+    return {"deals": deals, "count": len(deals)}
+
+
 @app.get("/api/agents")
 async def list_agents() -> dict[str, Any]:
     """List all Pantheon agents with optional power level and tool success rate."""

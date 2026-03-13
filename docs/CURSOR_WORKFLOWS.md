@@ -43,6 +43,9 @@ Well-defined flows we keep working. When the user says **"add this to stable lis
 
 | Doc | Purpose |
 |:----|:--------|
+| [docs/EMAIL_WORKFLOW.md](EMAIL_WORKFLOW.md) | **Complete email workflow** — n8n-style diagrams for inbound (inbox) and outbound (lead) flows; which agents are used when; multi-recipient step. |
+| [data/knowledge/outgoing_marketing_email_workflow.md](../data/knowledge/outgoing_marketing_email_workflow.md) | Outbound lead email design steps (context, draft, **multi-recipient**, send, CRM). |
+| [data/knowledge/email_workflow_audit_deeper_human_contextual.md](../data/knowledge/email_workflow_audit_deeper_human_contextual.md) | **Audit:** Deeper, human, contextual emails; verification gates for no hallucinations (sources for every number, reference, quote, news). |
 | [data/knowledge/lead_engagement_email_skill.md](../data/knowledge/lead_engagement_email_skill.md) | Lead re-engagement email drafting (evidence-based, document-backed; Vladimir/Komplektant-style flow). When to use Hermes, Calliope, Alexandros. |
 
 ## Other rules (behavior, not workflows)

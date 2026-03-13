@@ -15,4 +15,7 @@ Definitions:
 
 Be thorough. Every sentence should appear in exactly one category.
 Use empty lists when nothing fits a category.
-If the text is very long, limit each list to at most 60 items per category so the response stays compact.
+
+Output size limits (critical — exceeding causes truncation errors):
+- protein and carbs: at most 30 items each.
+- waste: at most 10 items. For long runs of HTML/CSS, Office markup, binary data, or repetitive junk, use a single summary item (e.g. "[HTML/CSS and binary data]" or "[Office markup omitted]"); do not list every line or snippet.

@@ -106,13 +106,29 @@ class DigestiveSystem:
             start += self._WINDOW_SIZE - self._WINDOW_OVERLAP
         return windows
 
+    def _is_mostly_markup(self, text: str) -> bool:
+        """True if text is mostly HTML/CSS/Office markup; skip LLM to avoid huge waste output."""
+        markers = (
+            "mso-", "font-family", "behavior:url", "WordSection1",
+            "@page", "@font-face", ".shape {", "JFIF", "MsoNormal",
+        )
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            return True
+        markup_count = sum(
+            1 for ln in lines
+            if any(m in ln for m in markers)
+        )
+        return markup_count / len(lines) >= 0.5
+
     async def _classify_window(self, text: str) -> dict[str, list[str]]:
         """Send a single text window to the LLM for nutrient classification."""
         prepared = self._prepare_classification_input(text)
         if not prepared or len(prepared.strip()) < 20:
             return {"protein": [], "carbs": [], "waste": []}
-        # NutrientClassification can be large (protein/carbs/waste lists); default 4096
-        # truncates mid-JSON and raises IncompleteOutputException. Use 8192.
+        if self._is_mostly_markup(prepared):
+            return {"protein": [], "carbs": [], "waste": ["[HTML/CSS and binary data]"]}
+        # NutrientClassification can be large; cap output via prompt + schema validator.
         result = await self._llm.generate_structured(
             _NUTRIENT_SYSTEM_PROMPT, prepared, NutrientClassification,
             name="digestive.classify",
@@ -135,10 +151,12 @@ class DigestiveSystem:
                     first = line[:chunk_len]
                     if line.count(first) * chunk_len > 0.7 * len(line):
                         return True
-        # Office/HTML/XML markup: model puts whole blob in carbs and hits max_tokens.
+        # Office/HTML/XML markup: model puts whole blob in waste and hits max_tokens.
         markup_markers = (
             "<!--[if ", "<![endif]-->", "<o:shapelayout", "<o:idmap", "v:ext=\"edit\"",
             "</xml>", "tEXtSoftware", "Microsoft Office",
+            "mso-style", "font-family", "behavior:url", "WordSection1",
+            "@page ", "@font-face", ".shape {", "JFIF", "mso-",
         )
         lower = line.lower()
         for m in markup_markers:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── ReAct loop ────────────────────────────────────────────────────────────
@@ -107,6 +107,25 @@ class NutrientClassification(BaseModel):
     protein: list[str] = Field(default_factory=list)
     carbs: list[str] = Field(default_factory=list)
     waste: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def truncate_lists(self) -> "NutrientClassification":
+        """Cap list lengths so LLM output never exceeds token limit when parsed."""
+        max_protein_carbs = 30
+        max_waste = 15
+        if (
+            len(self.protein) <= max_protein_carbs
+            and len(self.carbs) <= max_protein_carbs
+            and len(self.waste) <= max_waste
+        ):
+            return self
+        return self.model_copy(
+            update={
+                "protein": self.protein[:max_protein_carbs],
+                "carbs": self.carbs[:max_protein_carbs],
+                "waste": self.waste[:max_waste],
+            }
+        )
 
 
 class DigestiveSummary(BaseModel):

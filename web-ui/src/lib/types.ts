@@ -43,6 +43,31 @@ export interface PipelineResponse {
   };
 }
 
+// ── Deals with heat (for CRM dashboard sort) ─────────────────────────
+
+export interface DealWithHeat {
+  id: string;
+  title: string;
+  stage: string;
+  value: number;
+  currency?: string;
+  machine_model?: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  contact_id: string;
+  contact_name: string | null;
+  contact_email: string | null;
+  company_name: string | null;
+  account_summary?: string | null;
+  heat_score: number;
+  heat_label: "hot" | "warm" | "cold";
+}
+
+export interface DealsResponse {
+  deals: DealWithHeat[];
+  count: number;
+}
+
 // ── Vendors ──────────────────────────────────────────────────────────
 
 export interface OverduePayable {

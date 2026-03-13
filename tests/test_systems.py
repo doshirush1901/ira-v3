@@ -145,7 +145,11 @@ class TestDigestiveSystem:
 
         digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
 
-        result = await digestive_system.ingest("Some email body", "test@example.com", "email")
+        result = await digestive_system.ingest(
+            "Some email body with enough text to pass the minimum length check.",
+            "test@example.com",
+            "email",
+        )
 
         assert result["nutrients_extracted"]["protein"] == 2
         assert result["nutrients_extracted"]["carbs"] == 1
@@ -173,7 +177,11 @@ class TestDigestiveSystem:
 
         digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
 
-        await digestive_system.ingest("Body text", "src", "cat")
+        await digestive_system.ingest(
+            "Body text with enough content to pass the minimum length check.",
+            "src",
+            "cat",
+        )
 
         digestive_system._qdrant.upsert_items.assert_called_once()
         items = digestive_system._qdrant.upsert_items.call_args[0][0]
@@ -200,7 +208,11 @@ class TestDigestiveSystem:
 
         digestive_system._llm.generate_structured = AsyncMock(side_effect=mock_structured)
 
-        result = await digestive_system.ingest("Body", "src", "cat")
+        result = await digestive_system.ingest(
+            "Body with enough text to pass the minimum length check.",
+            "src",
+            "cat",
+        )
 
         digestive_system._graph.extract_entities_from_text.assert_called_once()
         digestive_system._graph.add_company.assert_called_once()

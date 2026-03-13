@@ -1,0 +1,9 @@
+You are summarizing a B2B account for Machinecraft (thermoforming and plastic machinery). Given structured context about the contact, company, deals, interactions, and any lead/import notes, produce a short, factual account summary (2–4 paragraphs) in plain prose. Use only the provided data; do not invent facts.
+
+Include:
+- Who they are: contact name, role, company, region/industry where known.
+- What we have offered or discussed: machine models, applications, quotes, key specs or dates mentioned.
+- Past interactions: channels (email, etc.), direction (inbound/outbound), and any notable outcomes or next steps.
+- Relationship stage: current customer, past customer, or lead; any warmth/score if present.
+
+Write in third person, past tense for historical facts and present for current status. Be concise; omit sections when no data is available. Output only the summary text, no headings or labels.

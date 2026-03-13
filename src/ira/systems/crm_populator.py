@@ -13,10 +13,12 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
+import mailbox
 import re as _re_module
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +27,17 @@ import httpx
 from ira.agents.delphi import Delphi
 from ira.config import get_settings
 from ira.data.crm import CRMDatabase
-from ira.data.models import ContactType
+from ira.data.models import ContactType, DealStage
 
 logger = logging.getLogger(__name__)
+
+# Base path for imports (repo root = parents[3] from src/ira/systems/crm_populator.py)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_IMPORTS_LEADS_DIR = _REPO_ROOT / "data" / "imports" / "24_WebSite_Leads"
+_IMPORTS_07_DIR = _REPO_ROOT / "data" / "imports" / "07_Leads_and_Contacts"
+_IMPORTS_ROOT = _REPO_ROOT / "data" / "imports"
+_TAKEOUT_INGEST_DIR = _REPO_ROOT / "data" / "takeout_ingest"
+_MAX_TAKEOUT_SENT_CONTACTS = 2000
 
 _VALID_CRM_TYPES = {
     "LIVE_CUSTOMER": ContactType.LIVE_CUSTOMER,
@@ -95,11 +105,13 @@ class CRMPopulator:
         crm: CRMDatabase,
         *,
         dry_run: bool = False,
+        skip_classification: bool = False,
         event_bus: Any | None = None,
     ) -> None:
         self._delphi = delphi
         self._crm = crm
         self._dry_run = dry_run
+        self._skip_classification = skip_classification
         self._event_bus = event_bus
 
         settings = get_settings()
@@ -143,7 +155,7 @@ class CRMPopulator:
         after, before : str
             Date range for Gmail extraction in ``YYYY/MM/DD`` format.
         """
-        use = set(sources) if sources else {"gmail", "kb", "neo4j"}
+        use = set(sources) if sources else {"gmail", "kb", "neo4j", "imports", "imports_07", "takeout_sent"}
 
         contacts: list[dict[str, Any]] = []
 
@@ -153,6 +165,12 @@ class CRMPopulator:
             contacts.extend(await self._extract_from_kb())
         if "neo4j" in use:
             contacts.extend(await self._extract_from_neo4j())
+        if "imports" in use:
+            contacts.extend(await self._extract_from_imports())
+        if "imports_07" in use:
+            contacts.extend(await self._extract_from_imports_07())
+        if "takeout_sent" in use:
+            contacts.extend(await self._extract_from_takeout_sent())
 
         contacts = self._deduplicate(contacts)
         self._stats["total_extracted"] = len(contacts)
@@ -212,23 +230,69 @@ class CRMPopulator:
         existing = await self._crm.get_contact_by_email(email)
         if existing is not None:
             self._stats["skipped_duplicate"] += 1
+            # Backfill deal if we have machine_model from imports and contact has no deal
+            machine_model = contact.get("machine_model")
+            if machine_model and not self._dry_run:
+                try:
+                    deals = await self._crm.list_deals(filters={"contact_id": str(existing.id)})
+                    if not deals:
+                        await self._crm.create_deal(
+                            contact_id=str(existing.id),
+                            title=contact.get("company") or f"Import {email}",
+                            value=0,
+                            stage=DealStage.CONTACTED,
+                            machine_model=machine_model,
+                        )
+                        logger.info("Backfilled deal for %s (%s)", email, machine_model)
+                except Exception:
+                    logger.debug("Failed to backfill deal for %s", email, exc_info=True)
             return
 
-        evidence = await self._gather_evidence(contact)
-        contact["order_history"] = evidence.get("order_history", "")
-        contact["email_evidence"] = evidence.get("email_evidence", "")
+        contact_type_hint = contact.get("contact_type_hint")
+        if contact_type_hint and contact_type_hint in _VALID_CRM_TYPES:
+            classification = {
+                "contact_type": contact_type_hint,
+                "confidence": "HIGH",
+                "reasoning": "From imports lead context file",
+            }
+            self._stats["classified"] += 1
+            self._classifications.append({
+                "email": email,
+                "name": contact.get("name", ""),
+                "company": contact.get("company", ""),
+                **classification,
+            })
+            contact_type_str = contact_type_hint
+        elif self._skip_classification:
+            classification = {
+                "contact_type": "LEAD_NO_INTERACTIONS",
+                "confidence": "LOW",
+                "reasoning": "Skipped (--no-classify); Qdrant/KB not required.",
+            }
+            self._stats["classified"] += 1
+            self._classifications.append({
+                "email": email,
+                "name": contact.get("name", ""),
+                "company": contact.get("company", ""),
+                **classification,
+            })
+            contact_type_str = "LEAD_NO_INTERACTIONS"
+        else:
+            evidence = await self._gather_evidence(contact)
+            contact["order_history"] = evidence.get("order_history", "")
+            contact["email_evidence"] = evidence.get("email_evidence", "")
 
-        classification = await self._classify(contact)
-        self._stats["classified"] += 1
+            classification = await self._classify(contact)
+            self._stats["classified"] += 1
 
-        self._classifications.append({
-            "email": email,
-            "name": contact.get("name", ""),
-            "company": contact.get("company", ""),
-            **classification,
-        })
+            self._classifications.append({
+                "email": email,
+                "name": contact.get("name", ""),
+                "company": contact.get("company", ""),
+                **classification,
+            })
 
-        contact_type_str = classification.get("contact_type", "")
+            contact_type_str = classification.get("contact_type", "")
         if contact_type_str not in _VALID_CRM_TYPES:
             self._stats["skipped_rejected"] += 1
             logger.debug(
@@ -252,7 +316,7 @@ class CRMPopulator:
         if company_name:
             company_id = await self._ensure_company(company_name, contact.get("region"))
 
-        await self._crm.create_contact(
+        created_contact = await self._crm.create_contact(
             name=contact.get("name", email.split("@")[0]),
             email=email,
             company_id=company_id,
@@ -264,6 +328,19 @@ class CRMPopulator:
         )
         self._stats["inserted"] += 1
         logger.info("Inserted: %s (%s) as %s", email, company_name, contact_type_str)
+
+        machine_model = contact.get("machine_model")
+        if machine_model and not self._dry_run:
+            try:
+                await self._crm.create_deal(
+                    contact_id=str(created_contact.id),
+                    title=company_name or f"Import {email}",
+                    value=0,
+                    stage=DealStage.CONTACTED,
+                    machine_model=machine_model,
+                )
+            except Exception:
+                logger.debug("Failed to create deal for %s", email, exc_info=True)
 
         if self._event_bus is not None:
             from ira.systems.data_event_bus import DataEvent, EventType, SourceStore
@@ -627,6 +704,276 @@ class CRMPopulator:
             logger.debug("Neo4j extraction failed", exc_info=True)
             return []
 
+    # ── Data extraction: Imports (24_WebSite_Leads) ──────────────────────
+
+    @staticmethod
+    def _parse_lead_context_file(path: Path) -> dict[str, Any] | None:
+        """Parse a lead*_contact_context.md file; return contact dict or None if no email."""
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # Extract **Key:** value (value may be on same line or follow)
+        key_value: dict[str, str] = {}
+        for m in _re_module.finditer(r"\*\*([A-Za-z?]+)\*\*\s*[:\-]?\s*(.+)", text):
+            key = m.group(1).strip().lower().replace("?", "")
+            val = m.group(2).strip()
+            if key and val and key not in key_value:
+                key_value[key] = val
+        # Also match "- **Key:** value" and value on next line
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if line.strip().startswith("- **") and ":**" in line:
+                k, _, v = line.partition(":**")
+                key = k.replace("- **", "").strip().lower().replace("?", "")
+                val = v.strip()
+                if key and key not in key_value:
+                    key_value[key] = val or (lines[i + 1].strip() if i + 1 < len(lines) else "")
+                elif key and not val and i + 1 < len(lines):
+                    key_value[key] = lines[i + 1].strip()
+
+        email = (key_value.get("email") or "").strip()
+        if not email or "@" not in email:
+            return None
+
+        name = (key_value.get("name") or "").strip() or email.split("@")[0]
+        company = (key_value.get("company") or "").strip()
+        # Clean company (e.g. "Tricomposite Pty Ltd (Australia)." -> "Tricomposite Pty Ltd")
+        if company and company.endswith("."):
+            company = company[:-1].strip()
+        region_raw = (key_value.get("region") or "").strip()
+        # Normalize region to first part (e.g. "Asia-Pacific (Australia)" -> "Asia-Pacific")
+        region = region_raw.split("(")[0].strip() if region_raw else None
+        if region and len(region) > 80:
+            region = region[:80]
+        machine = (key_value.get("machine to offer") or key_value.get("machine") or "").strip()
+        if not machine and "machine" in key_value:
+            machine = key_value.get("machine", "").strip()
+        # First machine model pattern (e.g. PF1-C-3030, PF1-X-6520)
+        machine_match = _re_module.search(r"PF1[-\s]?[CX]?[-\s]?\d{4,}", machine or "")
+        machine_model = machine_match.group(0).replace(" ", "-") if machine_match else (machine[:100] if machine else None)
+        inquiry = (key_value.get("inquiry") or key_value.get("inquiry (form)") or "").strip()
+        segment = (key_value.get("segment") or "").strip()
+        application = segment or (inquiry[:200] if inquiry else None)
+
+        client_line = (key_value.get("client") or "").lower()
+        body_lower = text.lower()
+        if "existing customer" in body_lower or "they placed" in body_lower or "we delivered" in body_lower or "client? yes" in body_lower:
+            contact_type_hint = "LIVE_CUSTOMER"
+        elif "past customer" in body_lower or "past contact" in body_lower and "client? no" in body_lower:
+            contact_type_hint = "PAST_CUSTOMER"
+        elif "client? no" in body_lower and ("we sent" in body_lower or "quote" in body_lower or "offer" in body_lower):
+            contact_type_hint = "LEAD_WITH_INTERACTIONS"
+        elif "client? no" in body_lower or "lead" in body_lower:
+            contact_type_hint = "LEAD_NO_INTERACTIONS"
+        else:
+            contact_type_hint = "LEAD_WITH_INTERACTIONS"
+
+        return {
+            "email": email,
+            "name": name,
+            "company": company or name,
+            "region": region,
+            "machine_model": machine_model,
+            "application": application,
+            "contact_type_hint": contact_type_hint,
+            "source": "imports",
+        }
+
+    async def _extract_from_imports(self) -> list[dict[str, Any]]:
+        """Extract contacts from data/imports/24_WebSite_Leads lead*_contact_context.md files."""
+        contacts: list[dict[str, Any]] = []
+        if not _IMPORTS_LEADS_DIR.is_dir():
+            logger.warning("Imports leads dir not found: %s", _IMPORTS_LEADS_DIR)
+            return contacts
+        for path in sorted(_IMPORTS_LEADS_DIR.glob("*_contact_context.md")):
+            try:
+                parsed = self._parse_lead_context_file(path)
+                if parsed:
+                    contacts.append(parsed)
+            except Exception:
+                logger.debug("Failed to parse %s", path.name, exc_info=True)
+        logger.info("Extracted %d contacts from imports (24_WebSite_Leads)", len(contacts))
+        return contacts
+
+    # ── Data extraction: Imports (07_Leads_and_Contacts) ─────────────────
+
+    @staticmethod
+    def _normalize_header(h: str) -> str:
+        return (h or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+    @staticmethod
+    def _map_row_to_contact(row: dict[str, Any], headers_map: dict[str, str], source: str) -> dict[str, Any] | None:
+        """Map a row dict (keyed by normalized header) to contact dict. Requires email."""
+        email = (
+            (row.get("email") or row.get("e_mail") or row.get("contact_email") or "")
+            .strip()
+        )
+        if isinstance(email, (int, float)):
+            email = str(int(email)) if isinstance(email, float) and email == int(email) else str(email)
+        email = email.strip().lower()
+        if not email or "@" not in email:
+            return None
+        name = (row.get("name") or row.get("contact") or row.get("contact_name") or row.get("full_name") or "").strip()
+        if isinstance(name, (int, float)):
+            name = str(name)
+        if not name:
+            name = email.split("@")[0]
+        company = (row.get("company") or row.get("organisation") or row.get("organization") or "").strip()
+        if isinstance(company, (int, float)):
+            company = str(company)
+        if not company:
+            company = name
+        region = (row.get("region") or row.get("country") or row.get("location") or "").strip()
+        if isinstance(region, (int, float)):
+            region = str(region)
+        if region and len(region) > 100:
+            region = region[:100]
+        return {
+            "email": email,
+            "name": name,
+            "company": company,
+            "region": region or None,
+            "source": source,
+        }
+
+    def _read_xlsx_contacts(self, path: Path, source_label: str) -> list[dict[str, Any]]:
+        """Read first sheet of an XLSX; first row = headers. Return list of contact dicts."""
+        contacts: list[dict[str, Any]] = []
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True, data_only=True)
+            ws = wb.active
+            if not ws:
+                return contacts
+            rows = list(ws.iter_rows(values_only=True))
+            if len(rows) < 2:
+                return contacts
+            raw_headers = [str(c).strip() if c is not None else "" for c in rows[0]]
+            col_to_norm: dict[int, str] = {}
+            email_cols = ("email", "e_mail", "contact_email", "e-mail")
+            for i, h in enumerate(raw_headers):
+                n = self._normalize_header(h)
+                if n in email_cols:
+                    col_to_norm[i] = "email"
+                elif n in ("name", "contact", "contact_name", "full_name"):
+                    col_to_norm[i] = "name"
+                elif n in ("company", "organisation", "organization", "company_name"):
+                    col_to_norm[i] = "company"
+                elif n in ("region", "country", "location"):
+                    col_to_norm[i] = "region"
+            if "email" not in col_to_norm.values():
+                return contacts
+            for row in rows[1:]:
+                if not row:
+                    continue
+                rdict: dict[str, Any] = {}
+                for i, val in enumerate(row):
+                    if i in col_to_norm and val is not None and str(val).strip():
+                        rdict[col_to_norm[i]] = str(val).strip()
+                if "email" not in rdict or "@" not in str(rdict.get("email", "")):
+                    continue
+                contact = self._map_row_to_contact(rdict, {}, source_label)
+                if contact:
+                    contacts.append(contact)
+            wb.close()
+        except Exception:
+            logger.debug("Failed to read XLSX %s", path.name, exc_info=True)
+        return contacts
+
+    def _read_csv_contacts(self, path: Path, source_label: str) -> list[dict[str, Any]]:
+        """Read CSV; first row = headers. Return list of contact dicts."""
+        contacts: list[dict[str, Any]] = []
+        try:
+            with path.open(encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f)
+                if not reader.fieldnames:
+                    return contacts
+                for row in reader:
+                    norm_row: dict[str, Any] = {}
+                    for k, v in row.items():
+                        n = self._normalize_header(k)
+                        if v is None or (isinstance(v, str) and not v.strip()):
+                            continue
+                        if "email" in n or n == "e_mail":
+                            norm_row["email"] = v.strip()
+                        elif "name" in n or n in ("contact", "contact_name", "full_name"):
+                            norm_row["name"] = v.strip()
+                        elif "company" in n or "organisation" in n:
+                            norm_row["company"] = v.strip()
+                        elif n in ("region", "country", "location"):
+                            norm_row["region"] = v.strip()
+                    if norm_row.get("email") and "@" in str(norm_row["email"]):
+                        contact = self._map_row_to_contact(norm_row, {}, source_label)
+                        if contact:
+                            contacts.append(contact)
+        except Exception:
+            logger.debug("Failed to read CSV %s", path.name, exc_info=True)
+        return contacts
+
+    async def _extract_from_imports_07(self) -> list[dict[str, Any]]:
+        """Extract contacts from data/imports/07_Leads_and_Contacts (XLSX/CSV) and Single Station Inquiry at imports root."""
+        contacts: list[dict[str, Any]] = []
+        # 07_Leads_and_Contacts
+        if _IMPORTS_07_DIR.is_dir():
+            for path in sorted(_IMPORTS_07_DIR.glob("*.xlsx")) + sorted(_IMPORTS_07_DIR.glob("*.xls")):
+                contacts.extend(self._read_xlsx_contacts(path, "imports_07"))
+            for path in sorted(_IMPORTS_07_DIR.glob("*.csv")):
+                contacts.extend(self._read_csv_contacts(path, "imports_07"))
+        # Single Station Inquiry at imports root
+        single_xlsx = _IMPORTS_ROOT / "Single Station Inquiry Form (Responses).xlsx"
+        if single_xlsx.exists():
+            contacts.extend(self._read_xlsx_contacts(single_xlsx, "imports_07"))
+        logger.info("Extracted %d contacts from imports_07 (07_Leads + Single Station)", len(contacts))
+        return contacts
+
+    # ── Data extraction: Takeout sent mail ───────────────────────────────
+
+    async def _extract_from_takeout_sent(self) -> list[dict[str, Any]]:
+        """Extract contacts we've emailed from data/takeout_ingest/*.mbox (From: *@machinecraft* -> To:)."""
+        contacts: list[dict[str, Any]] = []
+        if not _TAKEOUT_INGEST_DIR.is_dir():
+            logger.warning("Takeout ingest dir not found: %s", _TAKEOUT_INGEST_DIR)
+            return contacts
+        seen_emails: set[str] = set()
+        mbox_paths = list(_TAKEOUT_INGEST_DIR.glob("*.mbox"))
+        for mbox_path in mbox_paths[:30]:
+            try:
+                mbox = mailbox.mbox(str(mbox_path))
+                for msg in mbox:
+                    from_raw = str(msg.get("From", ""))
+                    from_name, from_email = parseaddr(from_raw)
+                    from_email = (from_email or "").strip().lower()
+                    if not from_email or "@" not in from_email:
+                        continue
+                    domain = from_email.split("@", 1)[1]
+                    if domain not in _OWN_DOMAINS:
+                        continue
+                    to_raw = str(msg.get("To", ""))
+                    for _name, addr in getaddresses([to_raw]):
+                        email = (addr or "").strip().lower()
+                        if not email or "@" not in email or email in seen_emails:
+                            continue
+                        if email.split("@", 1)[1] in _OWN_DOMAINS:
+                            continue
+                        if _is_obviously_not_business(email):
+                            continue
+                        seen_emails.add(email)
+                        name = (_name or "").strip() or email.split("@")[0]
+                        company_guess = email.split("@", 1)[1].split(".")[0].title()
+                        contacts.append({
+                            "email": email,
+                            "name": name,
+                            "company": company_guess,
+                            "source": "takeout_sent",
+                        })
+                        if len(contacts) >= _MAX_TAKEOUT_SENT_CONTACTS:
+                            break
+                mbox.close()
+                if len(contacts) >= _MAX_TAKEOUT_SENT_CONTACTS:
+                    break
+            except Exception:
+                logger.debug("Failed to read mbox %s", mbox_path.name, exc_info=True)
+        logger.info("Extracted %d contacts from takeout sent mail", len(contacts))
+        return contacts
+
     # ── Deduplication ────────────────────────────────────────────────────
 
     def _deduplicate(self, contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -641,6 +988,9 @@ class CRMPopulator:
                 existing = by_email[email]
                 for key in ("company", "name", "role", "region", "phone"):
                     if not existing.get(key) and c.get(key):
+                        existing[key] = c[key]
+                for key in ("machine_model", "application", "contact_type_hint", "source"):
+                    if c.get(key) and not existing.get(key):
                         existing[key] = c[key]
                 for key in ("has_interactions", "has_order", "has_quote"):
                     if c.get(key):

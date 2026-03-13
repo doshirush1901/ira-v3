@@ -2,6 +2,7 @@
 
 import { usePipeline } from "@/lib/swr";
 import { Loader2, AlertCircle, TrendingUp } from "lucide-react";
+import DealsByHeat from "@/components/DealsByHeat";
 
 const STAGE_ORDER = [
   "NEW",
@@ -94,6 +95,14 @@ export default function PipelineBoard() {
             </div>
           );
         })}
+      </div>
+
+      {/* Deals by heat: sort by hottest (quote sent + reply) to least */}
+      <div className="mt-8">
+        <h2 className="mb-3 text-sm font-semibold text-[var(--text-primary)]">
+          Deals by heat
+        </h2>
+        <DealsByHeat />
       </div>
     </div>
   );

@@ -40,6 +40,7 @@ from sqlalchemy.orm import (
     Mapped,
     mapped_column,
     relationship,
+    selectinload,
 )
 
 from ira.config import get_settings
@@ -121,6 +122,7 @@ class ContactModel(Base):
         Enum(WarmthLevel, native_enum=False, create_constraint=False),
     )
     tags: Mapped[dict | None] = mapped_column(JSON)
+    account_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -144,6 +146,7 @@ class ContactModel(Base):
             "lead_score": self.lead_score,
             "warmth_level": self.warmth_level.value if self.warmth_level else None,
             "tags": self.tags,
+            "account_summary": self.account_summary,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -418,13 +421,22 @@ class CRMDatabase:
             session.add(contact)
             await session.commit()
             await session.refresh(contact)
-            _ = contact.company  # eager-load so to_dict() works after session closes
+            # Eager-load company so to_dict() works after session closes (async-safe)
+            result = await session.execute(
+                select(ContactModel).options(selectinload(ContactModel.company)).where(ContactModel.id == contact.id)
+            )
+            contact = result.unique().scalar_one()
         await self._emit("contact_created", "contact", str(contact.id), contact.to_dict())
         return contact
 
     async def get_contact(self, contact_id: str | UUID) -> ContactModel | None:
         async with self._session_factory() as session:
-            return await session.get(ContactModel, str(contact_id))
+            result = await session.execute(
+                select(ContactModel)
+                .options(selectinload(ContactModel.company))
+                .where(ContactModel.id == str(contact_id))
+            )
+            return result.unique().scalar_one_or_none()
 
     async def get_contact_by_email(self, email: str) -> ContactModel | None:
         async with self._session_factory() as session:
@@ -437,14 +449,20 @@ class CRMDatabase:
         self, contact_id: str | UUID, **kwargs: Any
     ) -> ContactModel | None:
         async with self._session_factory() as session:
-            contact = await session.get(ContactModel, str(contact_id))
+            result = await session.execute(
+                select(ContactModel)
+                .options(selectinload(ContactModel.company))
+                .where(ContactModel.id == str(contact_id))
+            )
+            contact = result.unique().scalar_one_or_none()
             if not contact:
                 return None
             for k, v in kwargs.items():
                 setattr(contact, k, v)
             await session.commit()
             await session.refresh(contact)
-        await self._emit("contact_updated", "contact", str(contact.id), contact.to_dict())
+            payload = contact.to_dict()
+        await self._emit("contact_updated", "contact", str(contact.id), payload)
         return contact
 
     async def list_contacts(
@@ -476,9 +494,10 @@ class CRMDatabase:
                 stmt = stmt.where(ContactModel.lead_score >= filters["lead_score_min"])
             if "lead_score_max" in filters:
                 stmt = stmt.where(ContactModel.lead_score <= filters["lead_score_max"])
+        stmt = stmt.options(selectinload(ContactModel.company))
         async with self._session_factory() as session:
             result = await session.execute(stmt)
-            return list(result.scalars().all())
+            return list(result.unique().scalars().all())
 
     # ── Deal CRUD ────────────────────────────────────────────────────────
 
@@ -557,6 +576,88 @@ class CRMDatabase:
             result = await session.execute(stmt)
             return list(result.scalars().all())
 
+    async def list_deals_with_details(
+        self, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """List deals with contact and company loaded for dashboard/API."""
+        stmt = (
+            select(DealModel)
+            .options(selectinload(DealModel.contact).selectinload(ContactModel.company))
+            .order_by(DealModel.updated_at.desc())
+            .limit(limit)
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            deals = list(result.scalars().unique().all())
+        out: list[dict[str, Any]] = []
+        for d in deals:
+            contact = d.contact
+            company_name = contact.company.name if contact and contact.company else None
+            out.append({
+                "id": str(d.id),
+                "title": d.title,
+                "stage": d.stage.value if isinstance(d.stage, DealStage) else str(d.stage),
+                "value": float(d.value) if d.value else 0,
+                "currency": d.currency or "USD",
+                "machine_model": d.machine_model,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                "contact_id": str(d.contact_id),
+                "contact_name": contact.name if contact else None,
+                "contact_email": contact.email if contact else None,
+                "company_name": company_name,
+                "account_summary": contact.account_summary if contact else None,
+            })
+        return out
+
+    async def list_deals_with_heat(
+        self,
+        limit: int = 200,
+        sort_heat: str = "desc",
+    ) -> list[dict[str, Any]]:
+        """List deals with contact/company and a heat score (hottest = we sent quote and customer replied).
+
+        Heat: 2 = has outbound + inbound (quote sent, they replied), 1 = outbound only, 0 = else.
+        sort_heat: 'desc' = hottest first, 'asc' = least hot first.
+        """
+        # Per-contact interaction flags in one query
+        outbound = (
+            select(InteractionModel.contact_id)
+            .where(InteractionModel.direction == Direction.OUTBOUND)
+            .distinct()
+        )
+        inbound = (
+            select(InteractionModel.contact_id)
+            .where(InteractionModel.direction == Direction.INBOUND)
+            .distinct()
+        )
+        async with self._session_factory() as session:
+            out_res = await session.execute(outbound)
+            inbound_res = await session.execute(inbound)
+        contact_has_outbound = {str(r[0]) for r in out_res.all()}
+        contact_has_inbound = {str(r[0]) for r in inbound_res.all()}
+
+        def heat_for_contact(cid: str | None) -> int:
+            if not cid:
+                return 0
+            o = cid in contact_has_outbound
+            i = cid in contact_has_inbound
+            if o and i:
+                return 2
+            if o:
+                return 1
+            return 0
+
+        deals = await self.list_deals_with_details(limit=limit)
+        for d in deals:
+            cid = d.get("contact_id")
+            h = heat_for_contact(cid)
+            d["heat_score"] = h
+            d["heat_label"] = "hot" if h == 2 else ("warm" if h == 1 else "cold")
+        reverse = sort_heat.lower() == "desc"
+        deals.sort(key=lambda x: (x["heat_score"], x.get("updated_at") or ""), reverse=reverse)
+        return deals
+
     # ── Interaction CRUD ─────────────────────────────────────────────────
 
     async def create_interaction(self, **kwargs: Any) -> InteractionModel:
@@ -575,7 +676,9 @@ class CRMDatabase:
             return await session.get(InteractionModel, str(interaction_id))
 
     async def list_interactions(
-        self, filters: dict[str, Any] | None = None
+        self,
+        filters: dict[str, Any] | None = None,
+        limit: int | None = None,
     ) -> list[InteractionModel]:
         stmt = select(InteractionModel)
         if filters:
@@ -588,6 +691,8 @@ class CRMDatabase:
             if "channel" in filters:
                 stmt = stmt.where(InteractionModel.channel == filters["channel"])
         stmt = stmt.order_by(InteractionModel.created_at.desc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
         async with self._session_factory() as session:
             result = await session.execute(stmt)
             return list(result.scalars().all())

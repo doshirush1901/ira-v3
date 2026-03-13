@@ -11,6 +11,7 @@ import type {
   FeedbackRequest,
   FeedbackResponse,
   PipelineResponse,
+  DealsResponse,
   OverdueResponse,
   EmailSearchRequest,
   EmailSearchResponse,
@@ -87,6 +88,16 @@ export async function fetchPipeline(): Promise<PipelineResponse> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`GET /api/pipeline failed: ${res.status}`);
+  return res.json();
+}
+
+// ── Deals with heat (sort: heat_desc = hottest first, heat_asc = least hot) ─
+
+export async function fetchDeals(sort: "heat_desc" | "heat_asc" = "heat_desc"): Promise<DealsResponse> {
+  const res = await fetch(`${API_URL}/api/deals?limit=200&sort=${sort}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET /api/deals failed: ${res.status}`);
   return res.json();
 }
 

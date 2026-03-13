@@ -2742,15 +2742,18 @@ def graduate(
 @app.command("populate-crm")
 def populate_crm(
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify contacts but don't insert into CRM."),
-    source: str = typer.Option("all", "--source", "-s", help="Data source: all, gmail, kb, neo4j."),
+    source: str = typer.Option("all", "--source", "-s", help="Data source: all, gmail, kb, neo4j, imports, imports_07, takeout_sent."),
+    no_classify: bool = typer.Option(False, "--no-classify", help="Skip Delphi/KB classification; insert all as LEAD_NO_INTERACTIONS (use when Qdrant is down)."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Classify contacts and populate the CRM with eligible entries.
 
-    Extracts contacts from Gmail inbox, the Qdrant knowledge base, and
-    Neo4j.  Delphi classifies each contact (with Clio-style KB cross-
-    referencing for evidence), and only live customers, past customers,
-    and sales leads are inserted.
+    Extracts contacts from Gmail, Qdrant KB, Neo4j, data/imports/24_WebSite_Leads (imports),
+    data/imports/07_Leads_and_Contacts and Single Station xlsx (imports_07), and/or
+    data/takeout_ingest/*.mbox sent mail (takeout_sent). For imports, contact type is
+    taken from lead context files; otherwise Delphi classifies.
+    Only live customers, past customers, and sales leads are inserted.
+    Use --no-classify to run without Qdrant (e.g. Docker not running).
     """
     _configure_logging(verbose)
 
@@ -2775,17 +2778,22 @@ def populate_crm(
         crm = CRMDatabase()
         await crm.create_tables()
 
-        sources = None if source == "all" else [source]
+        sources = None if source == "all" else [s.strip() for s in source.split(",") if s.strip()]
 
-        populator = CRMPopulator(delphi=delphi, crm=crm, dry_run=dry_run)
+        populator = CRMPopulator(delphi=delphi, crm=crm, dry_run=dry_run, skip_classification=no_classify)
 
         mode_label = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
+        classify_note = (
+            "[dim]Classification skipped (--no-classify); all new contacts as LEAD_NO_INTERACTIONS.[/dim]"
+            if no_classify else (
+                "Delphi will classify each contact (with KB evidence) as:\n"
+                "  [green]LIVE_CUSTOMER[/green] | [green]PAST_CUSTOMER[/green] | "
+                "[green]LEAD_WITH_INTERACTIONS[/green] | [green]LEAD_NO_INTERACTIONS[/green]\n"
+                "  [red]VENDOR[/red] | [red]PARTNER[/red] | [red]OWN_COMPANY[/red] | [red]OTHER[/red] → rejected"
+            )
+        )
         console.print(Panel(
-            f"Mode: {mode_label}\nSources: {source}\n\n"
-            "Delphi will classify each contact (with KB evidence) as:\n"
-            "  [green]LIVE_CUSTOMER[/green] | [green]PAST_CUSTOMER[/green] | "
-            "[green]LEAD_WITH_INTERACTIONS[/green] | [green]LEAD_NO_INTERACTIONS[/green]\n"
-            "  [red]VENDOR[/red] | [red]PARTNER[/red] | [red]OWN_COMPANY[/red] | [red]OTHER[/red] → rejected",
+            f"Mode: {mode_label}\nSources: {source}\n\n{classify_note}",
             title="CRM Population Pipeline",
             border_style="cyan",
         ))
@@ -3459,6 +3467,61 @@ def crm_enrich(
         console.print(table)
 
     _run(_enrich())
+
+
+@crm_app.command("refresh-summaries")
+def crm_refresh_summaries(
+    contact_id: str = typer.Option("", "--contact", "-c", help="Refresh only this contact ID (default: all contacts)."),
+    limit: int = typer.Option(200, "--limit", "-n", help="Max contacts to process when refreshing all."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Generate or refresh LLM account summaries for CRM contacts.
+
+    Gathers context from CRM (contact, company, deals, interactions) and
+    from data/imports/24_WebSite_Leads lead context files, then produces
+    a short prose summary per contact and stores it in account_summary.
+    """
+    _configure_logging(verbose)
+
+    async def _refresh() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.services.llm_client import LLMClient
+        from ira.systems.account_summary import refresh_account_summary
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        llm = LLMClient()
+
+        if contact_id:
+            ok = await refresh_account_summary(crm, llm, contact_id)
+            if ok:
+                console.print(f"[green]Refreshed account summary for contact {contact_id}[/green]")
+            else:
+                console.print(f"[yellow]No context or failed to refresh for contact {contact_id}[/yellow]")
+            return
+
+        contacts = await crm.list_contacts()
+        if limit and len(contacts) > limit:
+            contacts = contacts[:limit]
+        updated = 0
+        failed = 0
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold green]Refreshing account summaries..."),
+            console=err_console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("refresh", total=len(contacts))
+            for c in contacts:
+                ok = await refresh_account_summary(crm, llm, c.id)
+                if ok:
+                    updated += 1
+                else:
+                    failed += 1
+                progress.advance(task)
+        console.print(f"[green]Updated {updated}[/green] summaries; [dim]{failed} skipped or failed.[/dim]")
+
+    _run(_refresh())
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────

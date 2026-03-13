@@ -7,7 +7,7 @@ For **structure, typography, spacing, and data-driven layout** (MBB-style, organ
 ## HUMAN, NOT BOT — ENGAGEMENT OVER COMPLETENESS
 
 - **Goal: they reply.** Not that they have a full dossier. One clear idea + one CTA. If in doubt, shorter and warmer wins.
-- **Sound like a person talking to one person.** Contractions (I'm, you'd, we've, it's). Mix short and longer sentences. Avoid bullet-heavy reports or tables in the body unless the contact asked for a summary.
+- **Sound like a person talking to one person.** Contractions (I'm, you'd, we've, it's). Mix short and longer sentences; use a single short line for emphasis when it fits (e.g. "No pressure."). Avoid bullet-heavy reports or tables in the body unless the contact asked for a summary.
 - **Summary in prose, not tables.** For catch-ups with history: give a short narrative summary (2–4 sentences) of the relationship and proposals — e.g. "We've been in touch since [X]; you'd looked at [machine], we [met/sent Y], and you'd said you'd get back when [Z]. Last [period] we sent [proposal]; I've kept everything on file." That shows we remember and adds value without dumping a table or a one-liner with no detail.
 - **No process-y openers.** Avoid "I was going through our thread", "I wanted to touch base", "Following up on the below". Prefer "Hope things are good", "Quick note", or a specific reference to them.
 - **One ask.** One call, one reply, one slot — not "let me know if you have questions or would like to schedule or need more info".

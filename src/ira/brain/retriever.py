@@ -579,7 +579,7 @@ class UnifiedRetriever:
         """
         try:
             from ira.agents.mnemon import _load_ledger
-            ledger = _load_ledger()
+            ledger = await _load_ledger()
             entities = ledger.get("entities", {})
             if not entities:
                 return results
