@@ -60,7 +60,7 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 | **Nemesis** | Trainer | Corrections, adversarial training, sleep training cycles |
 | **Plutus** | Finance | Pricing, revenue, margins, budgets, quote analytics |
 | **Populator** | CRM Populator | Hunts leads/customers across imports, 07_Leads, Neo4j, KB, Gmail; classifies client vs lead; enriches via web/scraping (Iris); adds to CRM with full detail |
-| **Prometheus** | Sales | CRM pipeline, deals, conversion rates, sales strategy |
+| **Prometheus** | Sales / CRM | CRM pipeline, deals, conversion rates, sales strategy; tracks all emails sent to each contact (what, when); gets punch list from Asclepius/Atlas; logs customer complaints and resolutions in CRM |
 | **Quotebuilder** | Quotes | Structured formal quotes with specs, pricing, delivery; auto-creates CRM deals |
 | **Sophia** | Reflector | Post-interaction reflection, pattern detection, quality scoring |
 | **Sphinx** | Gatekeeper | Detects vague queries, generates clarifying questions |

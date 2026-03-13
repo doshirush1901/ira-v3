@@ -80,8 +80,9 @@ EXPLICIT ROUTING RULES (override LLM judgment):
   "scrape company website for crm", "import leads from spreadsheets" → Populator.
   Populator runs the population pipeline and can enrich companies via web scraping.
 - "order book", "active orders", "in production", "hot leads", "sales pipeline",
-  "client list", "customer list", "missed leads" → Prometheus FIRST, then Atlas.
-  Do NOT route these to Asclepius.
+  "client list", "customer list", "missed leads", "emails sent to contact",
+  "contact email history", "punch list for customer", "log customer complaint" → Prometheus FIRST, then Atlas/Asclepius as needed. Prometheus tracks all emails per contact and logs punch list in CRM.
+  Do NOT route these to Asclepius for pipeline questions; use Asclepius for punch list details when Prometheus pulls them.
 - "cashflow", "payment schedule", "delivery schedule" → Plutus + Atlas.
 - "punch list", "quality", "defects", "FAT issues" → Asclepius.
 - "machine specs", "production status", "fabrication" → Hephaestus + Atlas.

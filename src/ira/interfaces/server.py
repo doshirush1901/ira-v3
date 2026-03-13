@@ -23,7 +23,7 @@ import httpx
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -146,6 +146,22 @@ class TaskRetryRequest(BaseModel):
 # Endpoints access services through this dict rather than globals.
 
 _services: dict[str, Any] = {}
+
+# WebSocket connections for Command Center event stream (DataEventBus broadcast).
+_ws_connections: set[WebSocket] = set()
+
+
+async def _broadcast_ws(payload: dict[str, Any]) -> None:
+    """Send a JSON payload to all connected WebSocket clients; remove dead connections."""
+    dead: list[WebSocket] = []
+    for ws in _ws_connections:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+            logger.debug("WS send failed, dropping connection", exc_info=True)
+    for ws in dead:
+        _ws_connections.discard(ws)
 
 
 def _svc(name: str) -> Any:
@@ -318,10 +334,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
 
     from ira.brain.correction_learner import CorrectionLearner
-    from ira.systems.data_event_bus import EventType
+    from ira.systems.data_event_bus import DataEvent, EventType
 
     correction_learner = CorrectionLearner()
     data_event_bus.subscribe(EventType.KNOWLEDGE_CORRECTED, correction_learner.on_knowledge_corrected)
+
+    async def _ws_bus_handler(evt: DataEvent) -> None:
+        """Broadcast DataEventBus events to Command Center WebSocket clients."""
+        payload = {
+            "ts": evt.timestamp.isoformat(),
+            "type": evt.event_type.value,
+            "entity_type": evt.entity_type,
+            "entity_id": evt.entity_id,
+            "source_store": evt.source_store.value,
+            "payload_keys": list(evt.payload.keys()),
+        }
+        await _broadcast_ws(payload)
+
+    data_event_bus.subscribe_all(_ws_bus_handler)
 
     _services[SK.DATA_EVENT_BUS] = data_event_bus
     _services[SK.CIRCULATORY] = circulatory
@@ -1040,19 +1070,133 @@ async def pipeline_summary() -> dict[str, Any]:
     return {"pipeline": summary}
 
 
+@app.get("/api/crm/list")
+async def crm_list(limit: int = 200) -> dict[str, Any]:
+    """Return CRM list: deals with contact and company for Command Center."""
+    crm = _svc(SK.CRM)
+    deals = await crm.list_deals_with_details(limit=limit)
+    return {"deals": deals, "count": len(deals)}
+
+
 @app.get("/api/agents")
 async def list_agents() -> dict[str, Any]:
-    """List all Pantheon agents."""
+    """List all Pantheon agents with optional power level and tool success rate."""
     pantheon = _svc(SK.PANTHEON)
-    agents = [
-        {
+    leaderboard_map: dict[str, dict[str, Any]] = {}
+    tool_rate_map: dict[str, float] = {}
+
+    try:
+        tracker = _services.get(SK.POWER_LEVEL_TRACKER)
+        if tracker is not None:
+            leaderboard = tracker.get_leaderboard()
+            for row in leaderboard:
+                leaderboard_map[row["agent"]] = {
+                    "score": row["score"],
+                    "tier": row["tier"],
+                    "successes": row.get("successes", 0),
+                    "failures": row.get("failures", 0),
+                }
+    except Exception:
+        logger.debug("Power levels unavailable for /api/agents", exc_info=True)
+
+    try:
+        tool_tracker = _services.get("tool_stats_tracker")
+        if tool_tracker is not None:
+            rates = await tool_tracker.get_tool_success_rates(by_tool=False)
+            for row in rates:
+                tool_rate_map[row["agent"]] = row["rate"]
+    except Exception:
+        logger.debug("Tool stats unavailable for /api/agents", exc_info=True)
+
+    agents = []
+    for agent in pantheon.agents.values():
+        entry: dict[str, Any] = {
             "name": agent.name,
             "role": getattr(agent, "role", ""),
             "description": getattr(agent, "description", ""),
         }
-        for agent in pantheon.agents.values()
-    ]
+        if agent.name in leaderboard_map:
+            entry["power_level"] = leaderboard_map[agent.name]["score"]
+            entry["tier"] = leaderboard_map[agent.name]["tier"]
+        if agent.name in tool_rate_map:
+            entry["tool_success_rate"] = tool_rate_map[agent.name]
+        agents.append(entry)
+
     return {"agents": agents, "count": len(agents)}
+
+
+@app.get("/api/endocrine")
+async def endocrine_status() -> dict[str, Any]:
+    """Return current hormone levels from the EndocrineSystem (for Command Center)."""
+    endocrine = _services.get("endocrine")
+    if endocrine is None:
+        raise HTTPException(status_code=503, detail="Endocrine system not available")
+    return endocrine.get_status()
+
+
+@app.get("/api/pipeline/timings")
+async def pipeline_timings(limit: int = 24) -> dict[str, Any]:
+    """Return recent pipeline run stage timings (for Command Center ticker)."""
+    pipeline = _services.get("pipeline")
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not available")
+    timings = pipeline.get_recent_stage_timings(limit)
+    return {"timings": timings}
+
+
+@app.get("/api/terminal/metrics")
+async def terminal_metrics() -> dict[str, Any]:
+    """Aggregated metrics for Command Center: pipeline, campaigns, stale leads, recent interactions."""
+    crm = _svc(SK.CRM)
+    pipeline = await crm.get_pipeline_summary()
+    campaigns = await crm.list_campaigns(filters={"status": "ACTIVE"})
+    stale_leads = await crm.get_stale_leads(days=14)
+    interactions = await crm.list_interactions(limit=5)
+    recent = [
+        {
+            "id": str(ix.id),
+            "created_at": ix.created_at.isoformat() if ix.created_at else None,
+            "channel": ix.channel,
+            "direction": ix.direction.value if hasattr(ix.direction, "value") else str(ix.direction),
+            "contact_id": str(ix.contact_id) if ix.contact_id else None,
+        }
+        for ix in interactions
+    ]
+    return {
+        "pipeline": pipeline,
+        "active_campaigns": len(campaigns),
+        "stale_leads": stale_leads,
+        "recent_interactions": recent,
+    }
+
+
+@app.websocket("/api/ws/stream")
+async def ws_event_stream(websocket: WebSocket) -> None:
+    """Stream DataEventBus events to Command Center clients in real time."""
+    await websocket.accept()
+    _ws_connections.add(websocket)
+    try:
+        circulatory = _services.get(SK.CIRCULATORY)
+        if circulatory is not None:
+            recent = circulatory.recent_events(50)
+            for evt in recent:
+                try:
+                    await websocket.send_json({
+                        "ts": evt.get("timestamp", ""),
+                        "type": evt.get("event_type", ""),
+                        "entity_type": evt.get("entity_type", ""),
+                        "entity_id": evt.get("entity_id", ""),
+                        "source_store": evt.get("source_store", ""),
+                        "payload_keys": evt.get("payload_keys", []),
+                    })
+                except Exception:
+                    break
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        logger.debug("WebSocket stream closed", exc_info=True)
+    finally:
+        _ws_connections.discard(websocket)
 
 
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -1359,7 +1503,10 @@ async def email_send(req: EmailSendRequest) -> dict[str, Any]:
     """Send an email via Gmail. Only call when the user explicitly said 'send'.
 
     Explicit user send is allowed in any IRA_EMAIL_MODE (script or UI Send).
+    Logs the outbound email to CRM interactions so the CRM agent has full context.
     """
+    from email.utils import parseaddr
+
     ep = _svc(SK.EMAIL_PROCESSOR)
     if ep is None:
         raise HTTPException(status_code=503, detail="Email processor not available")
@@ -1372,6 +1519,25 @@ async def email_send(req: EmailSendRequest) -> dict[str, Any]:
             thread_id=req.thread_id,
             user_initiated=True,
         )
+        # Log outbound email to CRM so CRM agent has full history (what was sent, when)
+        crm = _svc(SK.CRM)
+        if crm is not None:
+            try:
+                to_email = (parseaddr(req.to)[1] or req.to).strip().lower()
+                if to_email and "@" in to_email:
+                    contact = await crm.get_contact_by_email(to_email)
+                    if contact is not None:
+                        from ira.data.models import Channel, Direction
+                        await crm.create_interaction(
+                            contact_id=str(contact.id),
+                            channel=Channel.EMAIL,
+                            direction=Direction.OUTBOUND,
+                            subject=req.subject,
+                            content=(req.body or "")[:4000],
+                        )
+                        logger.info("Logged outbound email to CRM for contact %s", to_email)
+            except Exception as log_exc:
+                logger.warning("Failed to log outbound email to CRM: %s", log_exc)
         return {
             "sent": True,
             "message_id": result.get("id"),
