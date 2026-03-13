@@ -1,0 +1,179 @@
+{
+  "6a2e9a6fbcbb": {
+    "id": "6a2e9a6fbcbb",
+    "name": "handle_machine_inquiry",
+    "trigger_patterns": [
+      "machine info",
+      "tell me about",
+      "specs for"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "action": "identify_model",
+        "required": true,
+        "parameters": {},
+        "description": "Identify which machine model"
+      },
+      {
+        "order": 2,
+        "action": "check_specs",
+        "required": true,
+        "parameters": {},
+        "description": "Look up specifications"
+      },
+      {
+        "order": 3,
+        "action": "provide_info",
+        "required": true,
+        "parameters": {},
+        "description": "Provide detailed information"
+      }
+    ],
+    "description": "Handle inquiries about machine specifications",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.6,
+    "source": "taught",
+    "created_at": "2026-02-28T12:39:22.790557"
+  },
+  "proc_f7afee7526": {
+    "id": "proc_f7afee7526",
+    "name": "PF1",
+    "trigger_patterns": [
+      "User asks about PF1 machine"
+    ],
+    "steps": [
+      {
+        "action": "step_1",
+        "description": "User asks what PF1 is"
+      },
+      {
+        "action": "step_2",
+        "description": "User requests more details about PF1 customers"
+      },
+      {
+        "action": "step_3",
+        "description": "User requests pricing and availability"
+      },
+      {
+        "action": "step_4",
+        "description": "Assistant provides quote"
+      }
+    ],
+    "description": "Workflow pattern: PF1 inquiry to pricing quote - triggered by 'User asks about PF1 machine'",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.5,
+    "source": "consolidation",
+    "created_at": "2026-03-05T02:10:31.812204"
+  },
+  "proc_41fff5bed9": {
+    "id": "proc_41fff5bed9",
+    "name": "Inquiry",
+    "trigger_patterns": [
+      "User asks about PF1"
+    ],
+    "steps": [
+      {
+        "action": "step_1",
+        "description": "User asks for information about PF1"
+      },
+      {
+        "action": "step_2",
+        "description": "User requests pricing or availability"
+      },
+      {
+        "action": "step_3",
+        "description": "Provide quote or details"
+      }
+    ],
+    "description": "Workflow pattern: Inquiry about PF1 leading to pricing discussion - triggered by 'User asks about PF1'",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.5,
+    "source": "consolidation",
+    "created_at": "2026-03-03T06:34:43.235155"
+  },
+  "proc_1c76cbfe21": {
+    "id": "proc_1c76cbfe21",
+    "name": "Company",
+    "trigger_patterns": [
+      "User asks for company names interested in thermoforming machines"
+    ],
+    "steps": [
+      {
+        "action": "step_1",
+        "description": "User requests company names"
+      },
+      {
+        "action": "step_2",
+        "description": "User specifies region (e.g., Europe)"
+      },
+      {
+        "action": "step_3",
+        "description": "User references existing customers (e.g., Minerex)"
+      },
+      {
+        "action": "step_4",
+        "description": "Assistant provides relevant company information"
+      }
+    ],
+    "description": "Workflow pattern: Company names inquiry sequence - triggered by 'User asks for company names interested in thermoforming machines'",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.5,
+    "source": "consolidation",
+    "created_at": "2026-03-05T02:10:33.648423"
+  },
+  "proc_15c2d85f1f": {
+    "id": "proc_15c2d85f1f",
+    "name": "Request",
+    "trigger_patterns": [
+      "User asks for company names in Europe"
+    ],
+    "steps": [
+      {
+        "action": "step_1",
+        "description": "Identify relevant companies"
+      },
+      {
+        "action": "step_2",
+        "description": "Provide list of potential customers"
+      }
+    ],
+    "description": "Workflow pattern: Request for company names - triggered by 'User asks for company names in Europe'",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.5,
+    "source": "consolidation",
+    "created_at": "2026-03-02T17:41:25.220753"
+  },
+  "proc_0db377921f": {
+    "id": "proc_0db377921f",
+    "name": "General",
+    "trigger_patterns": [
+      "User says Hello or Hey"
+    ],
+    "steps": [
+      {
+        "action": "step_1",
+        "description": "User greets"
+      },
+      {
+        "action": "step_2",
+        "description": "User asks who assistant is or what it can do"
+      },
+      {
+        "action": "step_3",
+        "description": "Assistant responds with introduction and capabilities"
+      }
+    ],
+    "description": "Workflow pattern: General greeting to assistant introduction - triggered by 'User says Hello or Hey'",
+    "success_count": 0,
+    "failure_count": 0,
+    "confidence": 0.5,
+    "source": "consolidation",
+    "created_at": "2026-03-05T02:10:34.303082"
+  }
+}

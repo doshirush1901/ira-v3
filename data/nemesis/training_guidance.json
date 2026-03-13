@@ -1,0 +1,117 @@
+[
+  {
+    "rule": "FINANCE DATA INTEGRITY: For cashflow, order book, and payment questions, ONLY cite customers and amounts that appear in the Plutus tool output (finance_overview, order_book_status, cashflow_forecast, revenue_history). NEVER combine old quotes or Qdrant/Mem0 results with finance data to fabricate orders. ALP has NO active order \u2014 old quotes are not orders.",
+    "severity": "critical",
+    "entity": "ALP",
+    "category": "customer",
+    "occurrences": 1,
+    "source": "telegram_feedback",
+    "added_at": "2026-03-03T04:23:47"
+  },
+  {
+    "rule": "DATE AWARENESS: We are in 2026. Do not reference dates from 2025 or earlier as upcoming events. Always check the current date before citing future payment dates or deadlines.",
+    "severity": "critical",
+    "entity": null,
+    "category": "fact",
+    "occurrences": 1,
+    "source": "telegram_feedback",
+    "added_at": "2026-03-03T04:23:47"
+  },
+  {
+    "rule": "[sales_strategy] When a deal has no reply for 5+ days, use the latest_news tool to find relevant current events (shipping disruptions, geopolitics, industry news) near the customer and draft a follow-up that ties the news to urgency. Frame inaction as risk and action as smart use of downtime. Include specific CTAs (ship the tool, release the PO). Example: NAFFCO deal used Strait of Hormuz shipping disruptions to push for immediate PO release and prototype tool shipment.",
+    "severity": "critical",
+    "category": "sales_playbook",
+    "source": "rushabh_direct_teaching",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668018"
+  },
+  {
+    "rule": "[ALP] There is NO current order from ALP Delhi. ALP is a past customer (quotes only). Cashflow data must come ONLY from the payment schedule PDF or MCT Orders 2025 Excel \u2014 never fabricate orders from old quotes or Qdrant results. We are in Feb/Mar 2026, not 2025.",
+    "severity": "critical",
+    "category": "customer",
+    "source": "telegram_feedback",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668035"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668037"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668038"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668039"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668040"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668041"
+  },
+  {
+    "rule": "All prices MUST include 'subject to configuration and current pricing'",
+    "severity": "important",
+    "category": "price",
+    "source": "sophia_reflection",
+    "occurrences": 1,
+    "added_at": "2026-03-04T21:46:45.668042"
+  },
+  {
+    "rule": "[Dutch Tides] Dutch Tides does NOT have ₹5.37 Cr outstanding. From our emails with them, the balance is approximately 100K EUR. When citing order book or receivables, always override the spreadsheet figure for Dutch Tides with this email-confirmed fact — do not state 5.37 Cr as their outstanding.",
+    "severity": "critical",
+    "entity": "Dutch Tides",
+    "category": "customer",
+    "occurrences": 1,
+    "source": "telegram_feedback",
+    "added_at": "2026-03-06"
+  },
+  {
+    "rule": "[sales_playbook / lead email] PF1-C = cut-sheet manual feeding only. Roll feeder is on PF1-R and ATF only (0.2–1.5 mm sheet max). Never offer 'PF1-C with roll feeder'. For 2–6 mm sheet offer PF1-C cut sheet; for thin-sheet roll feed offer PF1-R/ATF separately. Source: Lead 7 (Vignesh/Flexsol) final draft.",
+    "severity": "critical",
+    "category": "sales_playbook",
+    "source": "rushabh_direct_teaching",
+    "occurrences": 1,
+    "added_at": "2026-03-09"
+  },
+  {
+    "rule": "[sales_playbook / lead email] When re-engaging a lead after a long gap, ask explicitly: Is this inquiry still active? Did you already purchase a machine elsewhere? We'd appreciate knowing so we can update our side and still help. Source: Lead 7 (Vignesh/Flexsol).",
+    "severity": "important",
+    "category": "sales_playbook",
+    "source": "rushabh_direct_teaching",
+    "occurrences": 1,
+    "added_at": "2026-03-09"
+  },
+  {
+    "rule": "[sales_playbook / lead email] Match machine to inquiry size (e.g. 1×1.5 m → PF1-C-1015). If lead is in India (website/location), quote in INR. Use an ice-breaker link that connects their industry to thermoforming (e.g. India telecom → PLI for plastic enclosures). Source: Lead 7 (Vignesh/Flexsol).",
+    "severity": "important",
+    "category": "sales_playbook",
+    "source": "rushabh_direct_teaching",
+    "occurrences": 1,
+    "added_at": "2026-03-09"
+  }
+]

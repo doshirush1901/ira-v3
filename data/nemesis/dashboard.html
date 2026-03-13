@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Nemesis — Correction Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #f8f9fa; }
+    h1 { color: #333; }
+    h2 { margin-top: 1.5rem; color: #555; }
+    table { border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    th, td { border: 1px solid #ddd; padding: 0.5rem 0.75rem; text-align: left; }
+    th { background: #e9ecef; }
+    .summary { display: flex; gap: 2rem; flex-wrap: wrap; margin: 1rem 0; }
+    .stat { background: #fff; padding: 1rem 1.5rem; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .stat strong { display: block; font-size: 1.5rem; color: #0d6efd; }
+    .meta { color: #6c757d; font-size: 0.875rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Nemesis — Correction Dashboard</h1>
+  <p class="meta">Generated from correction_store. Open this file in a browser. No server required.</p>
+
+  <div class="summary">
+    <div class="stat"><strong>14</strong> Total corrections</div>
+    <div class="stat"><strong>6</strong> Awaiting training</div>
+    <div class="stat"><strong>1</strong> Training runs</div>
+  </div>
+
+  <h2>Pending corrections (top 50)</h2>
+  <table>
+    <thead><tr><th>Severity</th><th>Entity</th><th>Category</th><th>Confidence</th><th>Source</th><th>Correct info</th></tr></thead>
+    <tbody>
+      <tr><td>critical</td><td>Dutch Tides</td><td>customer</td><td>—</td><td>telegram_feedback</td><td>Dutch Tides balance is approximately 100K EUR, from our emails with them — not 5.37 Cr. Always use email-confirmed statu</td></tr><tr><td>important</td><td>—</td><td>price</td><td>—</td><td>sophia_reflection</td><td>All prices MUST include 'subject to configuration and current pricing'</td></tr><tr><td>important</td><td>—</td><td>price</td><td>—</td><td>sophia_reflection</td><td>All prices MUST include 'subject to configuration and current pricing'</td></tr><tr><td>important</td><td>—</td><td>price</td><td>—</td><td>sophia_reflection</td><td>All prices MUST include 'subject to configuration and current pricing'</td></tr><tr><td>important</td><td>—</td><td>price</td><td>—</td><td>sophia_reflection</td><td>All prices MUST include 'subject to configuration and current pricing'</td></tr><tr><td>important</td><td>—</td><td>price</td><td>—</td><td>sophia_reflection</td><td>All prices MUST include 'subject to configuration and current pricing'</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Repeat offenders</h2>
+  <table>
+    <thead><tr><th>Entity</th><th>Category</th><th>Occurrences</th></tr></thead>
+    <tbody>
+      <tr><td colspan='3'>None</td></tr>
+    </tbody>
+  </table>
+</body>
+</html>

@@ -1,0 +1,4 @@
+{
+  "comment": "Content performance: when provider supports opens/clicks, log here. Schema: items[].id, channel, sent_at, opens, clicks",
+  "items": []
+}

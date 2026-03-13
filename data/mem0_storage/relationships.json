@@ -1,0 +1,50 @@
+[
+  {
+    "source": "PF1",
+    "relation": "is_a",
+    "target": "vacuum forming machine",
+    "confidence": 0.8,
+    "learned_from": "consolidation",
+    "created_at": "2026-02-28T12:39:35.758944"
+  },
+  {
+    "source": "European customers",
+    "relation": "related_to",
+    "target": "thermoforming machines",
+    "confidence": 0.8,
+    "learned_from": "consolidation",
+    "created_at": "2026-02-28T12:39:37.403038"
+  },
+  {
+    "source": "PF1",
+    "relation": "related_to",
+    "target": "pricing",
+    "confidence": 0.7,
+    "learned_from": "consolidation",
+    "created_at": "2026-02-28T12:52:22.076153"
+  },
+  {
+    "source": "European companies",
+    "relation": "related_to",
+    "target": "thermoforming machines",
+    "confidence": 0.8,
+    "learned_from": "consolidation",
+    "created_at": "2026-02-28T13:10:11.750792"
+  },
+  {
+    "source": "PF1",
+    "relation": "related_to",
+    "target": "vacuum forming machine",
+    "confidence": 0.85,
+    "learned_from": "consolidation",
+    "created_at": "2026-03-05T02:10:34.986515"
+  },
+  {
+    "source": "Minerex",
+    "relation": "related_to",
+    "target": "Machinecraft",
+    "confidence": 0.7,
+    "learned_from": "consolidation",
+    "created_at": "2026-03-05T02:10:36.747293"
+  }
+]

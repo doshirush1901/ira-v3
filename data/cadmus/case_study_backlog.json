@@ -1,0 +1,171 @@
+{
+  "generated": "2026-03-04",
+  "source": "LinkedIn Shares.csv (703 posts)",
+  "backlog": [
+    {
+      "priority": "HIGH",
+      "customer": "Dutch Tides",
+      "machine": "PF1-X-6520",
+      "application": "Hydroponic Ebb Flow Trays (6x2 meter)",
+      "material": "PS (Polystyrene), 4mm",
+      "country": "Netherlands",
+      "date": "2026-02-11",
+      "contacts": ["Jurriaan van den Bos", "Jaap Van Pooy"],
+      "notes": "Most detailed LinkedIn post. Specs, material, dimensions, cycle time (~150s/shot). International. Startup collaboration.",
+      "status": "ready_to_build"
+    },
+    {
+      "priority": "HIGH",
+      "customer": "IAC (for Suzuki)",
+      "machine": "Servo thermoforming line",
+      "application": "Automotive instrument panel skins (IMG tooling)",
+      "material": "PU back-foaming",
+      "country": "India (Manesar)",
+      "date": "2025-07-18",
+      "contacts": [],
+      "notes": "First US-made IMG tooling running on Made-in-India machine. Likely first in India.",
+      "status": "ready_to_build"
+    },
+    {
+      "priority": "HIGH",
+      "customer": "Jaquar",
+      "machine": "Large-format PF1 platform",
+      "application": "Spa shells, wellness tubs, whirlpool systems (PU-backed, CNC-trimmed)",
+      "material": "ABS/PMMA + PU",
+      "country": "India (Manesar)",
+      "date": "2025-07-18",
+      "contacts": [],
+      "notes": "India's first fully local whirlpool system. Formed + PU-backed + CNC-trimmed on modular line.",
+      "status": "ready_to_build"
+    },
+    {
+      "priority": "BLACKLISTED",
+      "customer": "ALP Group / ALP Aeroflex",
+      "machine": "PF1-3520/S/A (Custom)",
+      "application": "Mahindra Scorpio pickup truck bedliners",
+      "material": "HDPE, 5.5mm",
+      "country": "India (Nashik)",
+      "date": "2022",
+      "contacts": ["Varun Dua", "Iqbal Anand", "Jitendra Sathe"],
+      "notes": "BLACKLISTED — parted on bad terms. Do NOT share this case study with prospects.",
+      "status": "blacklisted"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Dezet Plastics",
+      "machine": "PF1-X-1210",
+      "application": "Unknown (purchased at K2025)",
+      "material": "Unknown",
+      "country": "Netherlands (Galgoord)",
+      "date": "2025-10-14",
+      "contacts": [],
+      "notes": "Bought machine after private viewing at K2025. Short post but named customer.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "JO Plast A/S",
+      "machine": "Machinecraft (model unspecified)",
+      "application": "Large-scale vacuum forming (up to 2250x1500x650mm)",
+      "material": "Unknown",
+      "country": "Denmark",
+      "date": "2025-10-04",
+      "contacts": ["Jan Szklany (owner/plant manager)"],
+      "notes": "Owner who understands process deeply. Scale of components impressive.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Batelaan Kunststoffen B.V.",
+      "machine": "Machinecraft (model unspecified)",
+      "application": "Thermoforming (unspecified)",
+      "material": "Unknown",
+      "country": "Netherlands",
+      "date": "2020-10-01",
+      "contacts": [],
+      "notes": "HISTORICAL ONLY — company is now shut down. Do NOT use for outreach. Can reference as past success.",
+      "status": "historical_only"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Unknown (NDA) — Canada",
+      "machine": "Custom XL ZeroSag",
+      "application": "Polycarbonate Signage",
+      "material": "PC (Polycarbonate)",
+      "country": "Canada (New Brunswick)",
+      "date": "2024-09-04",
+      "contacts": [],
+      "notes": "XL vacuum former for PC signage. Customer under NDA.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Unknown — Scandinavia",
+      "machine": "ZeroSag automatic",
+      "application": "Polycarbonate parts",
+      "material": "PC (Polycarbonate)",
+      "country": "Scandinavia",
+      "date": "2024-08-05",
+      "contacts": [],
+      "notes": "ZeroSag machine for PC parts.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Unknown — Lyon, France",
+      "machine": "PF1 (800x800mm)",
+      "application": "Logistics trays",
+      "material": "Unknown",
+      "country": "France",
+      "date": "2022-06-30",
+      "contacts": [],
+      "notes": "Joint commissioning with FRIMO. Mitsubishi PLC, Busch vacuum, Festo pneumatics.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "MEDIUM",
+      "customer": "Unknown — India",
+      "machine": "Compact thermoformer",
+      "application": "Medical equipment parts",
+      "material": "Unknown",
+      "country": "India",
+      "date": "2025-01-06",
+      "contacts": [],
+      "notes": "Factory approval test for medical equipment parts.",
+      "status": "needs_more_data"
+    },
+    {
+      "priority": "LOW",
+      "customer": "Unknown — India",
+      "machine": "Medical fridge liner machine",
+      "application": "Medical fridge liners (vaccine storage)",
+      "material": "PS (Polystyrene)",
+      "country": "India",
+      "date": "2020-11-27",
+      "contacts": [],
+      "notes": "Co-developed medical fridge liner parts. Blog post exists on machinecraft.org.",
+      "status": "needs_more_data"
+    }
+  ],
+  "formpack_projects": [
+    {
+      "customer": "JCB, Volvo CE, Escorts Kubota, ACE, CASE",
+      "application": "Off-highway construction equipment panels (engine hoods, cabin canopies, headliners)",
+      "material": "ABS/PMMA, ASA",
+      "country": "India",
+      "date": "2025-04-21",
+      "notes": "Formpack (sister company), not Machinecraft machine sales. 100+ sets/month. Won Best Supplier Award at BULL Machines 2025."
+    }
+  ],
+  "partnership_stories": [
+    {
+      "partner": "FRIMO Innovative Technologies GmbH",
+      "country": "Germany",
+      "collaboration": "Thermoforming + PU back-foaming integration",
+      "applications": ["Shower trays", "NVH components", "Tractor interiors", "Wellness products"],
+      "events": ["K2019", "K2025 (Hall 3, Stand D85)", "ETD Conference Amsterdam"],
+      "post_count": 9,
+      "notes": "Deep partnership. Joint booth at K-Show. Live demo: PF1-X-1210 + FRIMO PU = NVH components."
+    }
+  ]
+}

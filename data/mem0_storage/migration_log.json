@@ -1,0 +1,10 @@
+{
+  "migrated_at": "2026-02-27T18:56:50.804553",
+  "stats": {
+    "episodes_migrated": 22,
+    "procedures_migrated": 1,
+    "entity_memories_migrated": 1222,
+    "user_memories_migrated": 36,
+    "errors": []
+  }
+}

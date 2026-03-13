@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Ira Knowledge Graph Visualization</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 {
+            color: #00d4ff;
+            margin-bottom: 10px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        #graph {
+            width: 70%;
+            height: 700px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background: #16213e;
+        }
+        .stats {
+            width: 28%;
+            background: #16213e;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #333;
+        }
+        .stat-card {
+            background: #1a1a2e;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #00d4ff;
+            font-size: 14px;
+        }
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        ul {
+            padding-left: 20px;
+            margin: 0;
+        }
+        li {
+            margin: 5px 0;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧠 Ira Knowledge Graph</h1>
+    <p style="color: #888; margin-bottom: 20px;">Interactive visualization of Machinecraft & Thermoforming knowledge</p>
+    
+    <div class="legend">
+        <div class="legend-item"><div class="legend-color" style="background: #4CAF50"></div> Machine Specs</div>
+        <div class="legend-item"><div class="legend-color" style="background: #2196F3"></div> Commercial</div>
+        <div class="legend-item"><div class="legend-color" style="background: #FF9800"></div> Operational</div>
+        <div class="legend-item"><div class="legend-color" style="background: #9C27B0"></div> Applications</div>
+        <div class="legend-item"><div class="legend-color" style="background: #E91E63"></div> Market Intel</div>
+        <div class="legend-item"><div class="legend-color" style="background: #00BCD4"></div> Leads</div>
+        <div class="legend-item"><div class="legend-color" style="background: #FFEB3B"></div> Clients</div>
+    </div>
+    
+    <div class="container">
+        <div id="graph"></div>
+        <div class="stats">
+            <div class="stat-card">
+                <h3>TOTAL NODES</h3>
+                <div class="stat-value">382</div>
+            </div>
+            <div class="stat-card">
+                <h3>RELATIONSHIPS</h3>
+                <div class="stat-value">8243</div>
+            </div>
+            <div class="stat-card">
+                <h3>CLUSTERS</h3>
+                <div class="stat-value">180</div>
+            </div>
+            
+            <div class="stat-card">
+                <h3>NODE TYPES</h3>
+                <ul>
+                    
+                </ul>
+            </div>
+            
+            <div class="stat-card">
+                <h3>RELATIONSHIP TYPES</h3>
+                <ul>
+                    <li>same_cluster: 921</li><li>same_entity: 2730</li><li>same_source: 2736</li><li>similar_content: 221</li><li>same_model_family: 997</li><li>same_series: 247</li><li>size_progression: 133</li><li>application_overlap: 256</li>
+                </ul>
+            </div>
+            
+            <div class="stat-card">
+                <h3>TOP ENTITIES</h3>
+                <ul>
+                    
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <script type="text/javascript">
+        var nodes = new vis.DataSet([]);
+        var edges = new vis.DataSet([]);
+        
+        var container = document.getElementById('graph');
+        var data = { nodes: nodes, edges: edges };
+        var options = {
+            nodes: {
+                shape: 'dot',
+                size: 16,
+                font: {
+                    size: 12,
+                    color: '#ffffff'
+                },
+                borderWidth: 2
+            },
+            edges: {
+                width: 0.5,
+                smooth: {
+                    type: 'continuous'
+                }
+            },
+            physics: {
+                stabilization: { iterations: 100 },
+                barnesHut: {
+                    gravitationalConstant: -2000,
+                    springLength: 150,
+                    springConstant: 0.01
+                }
+            },
+            interaction: {
+                hover: true,
+                tooltipDelay: 100,
+                hideEdgesOnDrag: true
+            }
+        };
+        
+        var network = new vis.Network(container, data, options);
+        
+        network.on("click", function(params) {
+            if (params.nodes.length > 0) {
+                var nodeId = params.nodes[0];
+                var node = nodes.get(nodeId);
+                console.log("Selected:", node);
+            }
+        });
+    </script>
+</body>
+</html>

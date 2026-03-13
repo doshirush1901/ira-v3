@@ -1,0 +1,260 @@
+{
+  "c_94311b58850a": {
+    "c0aeb7d0b0a46541": {
+      "id": "c0aeb7d0b0a46541",
+      "identity_id": "c_94311b58850a",
+      "timestamp": "2026-02-27T15:51:12.053162",
+      "summary": "User asked: What thermoforming machines do you make?",
+      "topics": [],
+      "outcome": "",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.5
+    }
+  },
+  "c_66ffd2ceb702": {
+    "e123afb80fe96cdd": {
+      "id": "e123afb80fe96cdd",
+      "identity_id": "c_66ffd2ceb702",
+      "timestamp": "2026-02-27T15:43:38.305377",
+      "summary": "User asked: Who are you?",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    },
+    "b3e1d98df2e3b873": {
+      "id": "b3e1d98df2e3b873",
+      "identity_id": "c_66ffd2ceb702",
+      "timestamp": "2026-02-27T15:38:58.883709",
+      "summary": "User asked: Hello",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    }
+  },
+  "c_3cbdc5a18da0": {
+    "421707bde6622de0": {
+      "id": "421707bde6622de0",
+      "identity_id": "c_3cbdc5a18da0",
+      "timestamp": "2026-02-27T15:37:58.208246",
+      "summary": "User asked: What thermoforming machines do you have?",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    },
+    "4d9b577c37d2c6ea": {
+      "id": "4d9b577c37d2c6ea",
+      "identity_id": "c_3cbdc5a18da0",
+      "timestamp": "2026-02-27T15:37:15.189244",
+      "summary": "User asked: What thermoforming machines do you have?",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    },
+    "5682e230589b9ece": {
+      "id": "5682e230589b9ece",
+      "identity_id": "c_3cbdc5a18da0",
+      "timestamp": "2026-02-27T15:25:06.997757",
+      "summary": "User asked: Hello, what can you help me with?",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    }
+  },
+  "id_db1a9b47e00d": {
+    "fd6f632e963a674c": {
+      "id": "fd6f632e963a674c",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:29:50.111904",
+      "summary": "User asked: How are you? Can you explain me who you are and what's your purpose in life? Who is your boss and wh. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "224ee69f8d36138a": {
+      "id": "224ee69f8d36138a",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:23:44.377243",
+      "summary": "User asked: Hey. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "fcced9528e84fa08": {
+      "id": "fcced9528e84fa08",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:13:58.897607",
+      "summary": "User asked: Minerex is our customer already\nand others in our list must be Forma3d type companies , not these. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "78571eff1aa572e2": {
+      "id": "78571eff1aa572e2",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:10:31.592916",
+      "summary": "User asked: From our list. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "f85d1adba502beb9": {
+      "id": "f85d1adba502beb9",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:10:06.837686",
+      "summary": "User asked: Looking for company names in Europe that might be interested in thermoforming machines,. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "344e962356c4aefb": {
+      "id": "344e962356c4aefb",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:09:40.389414",
+      "summary": "User asked: Yes. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "ef9aef5f8c5a1157": {
+      "id": "ef9aef5f8c5a1157",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:09:30.647395",
+      "summary": "User asked: In europe. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "d2586ba404616977": {
+      "id": "d2586ba404616977",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:09:13.283889",
+      "summary": "User asked: Tell me company names. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "0cbff217a11ce14c": {
+      "id": "0cbff217a11ce14c",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:08:57.287684",
+      "summary": "User asked: Name a few. ",
+      "topics": [],
+      "outcome": "general",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "df0f034d37a90687": {
+      "id": "df0f034d37a90687",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:08:31.475657",
+      "summary": "User asked: Tell me a bit more , who are Machinecraft's customers for pf1. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "3eea762f365ff811": {
+      "id": "3eea762f365ff811",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:07:46.936435",
+      "summary": "User asked: Pls correct PF1X in your memory. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "5a74062732fa2566": {
+      "id": "5a74062732fa2566",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:07:21.657343",
+      "summary": "User asked: No!!!! Its a vacuum forming machine. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "809ec0f9eae723d7": {
+      "id": "809ec0f9eae723d7",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T15:06:58.348951",
+      "summary": "User asked: what is pf1?. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    },
+    "1fec88cfc589e721": {
+      "id": "1fec88cfc589e721",
+      "identity_id": "id_db1a9b47e00d",
+      "timestamp": "2026-02-27T14:43:20.843236",
+      "summary": "User asked: what is pf1?. ",
+      "topics": [],
+      "outcome": "sales",
+      "channel": "telegram",
+      "emotional_valence": 0,
+      "importance": 0.4
+    }
+  },
+  "test_user": {
+    "1a70008542422099": {
+      "id": "1a70008542422099",
+      "identity_id": "test_user",
+      "timestamp": "2026-02-27T15:23:48.473341",
+      "summary": "User asked: Hello, what can you help me with?",
+      "topics": [],
+      "outcome": "",
+      "channel": "cli",
+      "emotional_valence": 0,
+      "importance": 0.5
+    }
+  },
+  "test_user_123": {
+    "ab6c59b54563f834": {
+      "id": "ab6c59b54563f834",
+      "identity_id": "test_user_123",
+      "timestamp": "2026-02-27T14:32:50.875365",
+      "summary": "User asked about PF1 pricing and availability. Provided quote for 3 units.",
+      "topics": [
+        "PF1",
+        "pricing",
+        "quote"
+      ],
+      "outcome": "Quote provided, user said they'll discuss with team",
+      "channel": "telegram",
+      "emotional_valence": 1,
+      "importance": 0.7
+    }
+  }
+}

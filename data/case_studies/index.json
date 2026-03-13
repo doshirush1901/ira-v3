@@ -1,0 +1,549 @@
+{
+  "case_studies": [
+    {
+      "id": "alp-group-bedliner-mahindra-scorpio",
+      "customer_name": "ALP Group / ALP Aeroflex",
+      "project_title": "Mahindra Scorpio Pickup Truck Bedliner",
+      "industry": "automotive",
+      "country": "India",
+      "machine_model": "PF1-3520/S/A (Custom)",
+      "application": "HDPE pickup truck bedliners for Mahindra Scorpio",
+      "material": "HDPE, 5.5mm",
+      "year": 2022,
+      "tags": [
+        "automotive",
+        "hdpe",
+        "bedliner",
+        "truck",
+        "pickup",
+        "deep-draw",
+        "custom-machine",
+        "india",
+        "mahindra",
+        "scorpio",
+        "oem-supply",
+        "sag-control",
+        "servo",
+        "automatic",
+        "large-format",
+        "thick-sheet"
+      ],
+      "relevant_for_machines": [
+        "PF1-3520",
+        "PF1-X-1520",
+        "PF1-C-2015",
+        "PF1-C-2020",
+        "PF1-C-3020"
+      ],
+      "relevant_for_materials": [
+        "HDPE",
+        "PP",
+        "ABS"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "truck accessories",
+        "off-highway vehicles",
+        "pickup trucks",
+        "automotive interiors",
+        "automotive exteriors"
+      ],
+      "summary_one_liner": "ALP Group uses Machinecraft's custom PF1-3520 to produce Mahindra Scorpio pickup truck bedliners in 5.5mm HDPE — featuring an innovative sag-following heater system designed from scratch.",
+      "status": "published"
+    },
+    {
+      "id": "dutch-tides-hydroponic-trays",
+      "customer_name": "Dutch Tides",
+      "project_title": "Largest Thermoformer in Europe for Hydroponic Trays",
+      "industry": "Agriculture / Hydroponics",
+      "country": "Netherlands",
+      "machine_model": "PF1-X-6520",
+      "application": "Hydroponic ebb-flow trays",
+      "material": "4mm PS (Polystyrene)",
+      "year": 2022,
+      "tags": [
+        "hydroponics",
+        "thermoforming",
+        "agriculture",
+        "sustainability",
+        "polystyrene",
+        "controlled environment agriculture",
+        "MadeInIndia",
+        "greenhouse",
+        "innovation",
+        "largeformat"
+      ],
+      "relevant_for_machines": [
+        "PF1-X-6520",
+        "PF1-X-6520-PRO",
+        "PF1-X-3535"
+      ],
+      "relevant_for_materials": [
+        "PS",
+        "HDPE",
+        "PET"
+      ],
+      "relevant_for_industries": [
+        "agriculture",
+        "hydroponics",
+        "greenhouse technology"
+      ],
+      "summary_one_liner": "We delivered the largest thermoformer in Europe, enabling a Dutch hydroponics leader to revolutionize their production.",
+      "status": "published"
+    },
+    {
+      "id": "iac-img-automotive-interiors",
+      "customer_name": "IAC International Automotive India",
+      "project_title": "First Made-in-India IMG Thermoforming Machine for Automotive Interiors",
+      "industry": "automotive",
+      "country": "India",
+      "machine_model": "MC-IMG-1608",
+      "application": "In-Mold Graining for automotive interior panels",
+      "material": "TPO (thermoplastic olefin)",
+      "year": 2024,
+      "tags": [
+        "automotive",
+        "thermoforming",
+        "IMG",
+        "TPO",
+        "MadeInIndia",
+        "manufacturing",
+        "self-reliance",
+        "automotiveinteriors",
+        "innovation",
+        "engineering"
+      ],
+      "relevant_for_machines": [
+        "MC-IMG-1608",
+        "PF1-X-1520",
+        "PF1-C-2015"
+      ],
+      "relevant_for_materials": [
+        "TPO",
+        "HDPE",
+        "ABS"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "plastics processing",
+        "manufacturing"
+      ],
+      "summary_one_liner": "India's first IMG thermoforming machine is here — delivering European quality at local prices.",
+      "status": "published"
+    },
+    {
+      "id": "thermic-energy-frimo-germany-first-machine",
+      "customer_name": "Thermic Energy (via FRIMO partnership)",
+      "project_title": "First Machinecraft Machine in Germany",
+      "industry": "Material handling / Industrial packaging",
+      "country": "Germany",
+      "machine_model": "PF1-1616/S/A",
+      "application": "Material handling trays",
+      "material": "PS (Polystyrene)",
+      "year": 2024,
+      "tags": [
+        "thermoforming",
+        "materialhandling",
+        "packaging",
+        "automation",
+        "germany",
+        "ps",
+        "indianmanufacturing",
+        "engineeringexcellence",
+        "industrialpackaging",
+        "MadeInIndia"
+      ],
+      "relevant_for_machines": [
+        "PF1-1616/S/A",
+        "PF1-1020",
+        "PF1-2116"
+      ],
+      "relevant_for_materials": [
+        "PS",
+        "ABS",
+        "HDPE",
+        "PP"
+      ],
+      "relevant_for_industries": [
+        "materialhandling",
+        "packaging",
+        "automotive"
+      ],
+      "summary_one_liner": "An Indian manufacturer makes its mark in Germany with a cutting-edge thermoforming machine that meets the highest engineering standards.",
+      "status": "published"
+    },
+    {
+      "id": "naffco-fire-safety-uae",
+      "customer_name": "NAFFCO FZCO",
+      "project_title": "Large-Format Thermoforming Machine for Fire Safety Equipment",
+      "industry": "Fire Safety Equipment Manufacturing",
+      "country": "UAE",
+      "machine_model": "PF1-4525",
+      "application": "Thermoforming components for fire safety equipment",
+      "material": "Various thermoplastics",
+      "year": 2022,
+      "tags": [
+        "fire-safety",
+        "thermoforming",
+        "UAE",
+        "large-format",
+        "industrial-manufacturing",
+        "thermoplastics",
+        "machinecraft",
+        "engineering",
+        "production-efficiency",
+        "MadeInIndia"
+      ],
+      "relevant_for_machines": [
+        "PF1-4525",
+        "PF1-2530-PRO",
+        "PF1-X-3535"
+      ],
+      "relevant_for_materials": [
+        "HDPE",
+        "ABS",
+        "polypropylene"
+      ],
+      "relevant_for_industries": [
+        "fire-safety",
+        "automotive",
+        "industrial-manufacturing"
+      ],
+      "summary_one_liner": "A leading fire safety company in the UAE chose our PF1-4525 for its unmatched capacity and precision — a game changer in thermoforming.",
+      "status": "published"
+    },
+    {
+      "id": "psg-signs-polycarbonate-canada",
+      "customer_name": "PSG Signs",
+      "project_title": "Polycarbonate Automotive Signage Production",
+      "industry": "Signage",
+      "country": "Canada",
+      "machine_model": "PF1-4825, PF1-2015",
+      "application": "Automotive dealership signage",
+      "material": "Polycarbonate",
+      "year": 2020,
+      "tags": [
+        "signage",
+        "automotive",
+        "polycarbonate",
+        "thermoforming",
+        "NorthAmerica",
+        "ULCSA",
+        "electricmachines",
+        "largeformat",
+        "productionefficiency",
+        "MadeInIndia"
+      ],
+      "relevant_for_machines": [
+        "PF1-4825",
+        "PF1-2015"
+      ],
+      "relevant_for_materials": [
+        "Polycarbonate"
+      ],
+      "relevant_for_industries": [
+        "signage",
+        "automotive"
+      ],
+      "summary_one_liner": "Transforming the automotive signage landscape in Canada with cutting-edge thermoforming technology.",
+      "status": "published"
+    },
+    {
+      "id": "mirsant-bathtub-manufacturing-russia",
+      "customer_name": "Mirsant",
+      "project_title": "High-Volume Bathtub Manufacturing Line",
+      "industry": "Sanitary ware",
+      "country": "Russia",
+      "machine_model": "PF1-2116",
+      "application": "Thermoforming bathtubs",
+      "material": "Acrylic/ABS",
+      "year": 2022,
+      "tags": [
+        "sanitaryware",
+        "thermoforming",
+        "bathtubs",
+        "acrylic",
+        "ABS",
+        "industrialproduction",
+        "highthroughput",
+        "MadeInIndia",
+        "CISmarket",
+        "manufacturing"
+      ],
+      "relevant_for_machines": [
+        "PF1-2116",
+        "PF1-1616/S/A",
+        "PF1-1020",
+        "PF1-3520/S/A"
+      ],
+      "relevant_for_materials": [
+        "Acrylic",
+        "ABS",
+        "HDPE"
+      ],
+      "relevant_for_industries": [
+        "sanitary ware",
+        "automotive",
+        "plastics processing"
+      ],
+      "summary_one_liner": "Machinecraft's PF1-2116 delivers 25 bathtubs/hour with unmatched precision and speed — a game changer for the sanitary ware industry.",
+      "status": "published"
+    },
+    {
+      "id": "donite-plastics-uno-uk",
+      "customer_name": "Donite Plastics Ltd",
+      "project_title": "Compact e-UNO-8060 for the UK Market",
+      "industry": "General thermoforming / Plastics processing",
+      "country": "United Kingdom",
+      "machine_model": "e-UNO-8060",
+      "application": "Compact thermoforming for small-batch production",
+      "material": "Various thermoplastics",
+      "year": 2022,
+      "tags": [
+        "thermoforming",
+        "plastics",
+        "compact",
+        "e-UNO",
+        "UK",
+        "generalthermoforming",
+        "smallbatch",
+        "electricmachine",
+        "zonecontrolled",
+        "MadeInIndia"
+      ],
+      "relevant_for_machines": [
+        "e-UNO-8060",
+        "PF1-X-1520",
+        "PF1-C-2015"
+      ],
+      "relevant_for_materials": [
+        "HDPE",
+        "ABS",
+        "PET",
+        "PS",
+        "PP"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "packaging",
+        "consumer goods",
+        "medical",
+        "education"
+      ],
+      "summary_one_liner": "A compact thermoformer that fits in a 20ft container — precision and efficiency for the UK market.",
+      "status": "published"
+    },
+    {
+      "id": "anatomic-sitt-tpo-lamination",
+      "customer_name": "Anatomic SITT AB",
+      "project_title": "TPO/TPU Vacuum Lamination Machine",
+      "industry": "Medical devices / Ergonomic seating",
+      "country": "Sweden",
+      "machine_model": "PF1-0810/S",
+      "application": "Vacuum lamination of TPO/TPU films",
+      "material": "TPO, TPU",
+      "year": 2021,
+      "tags": [
+        "vacuumlamination",
+        "tpo",
+        "tpu",
+        "medicaldevices",
+        "ergonomicseating",
+        "scandinavia",
+        "lamination",
+        "thermoforming",
+        "manufacturing",
+        "MadeInIndia"
+      ],
+      "relevant_for_machines": [
+        "PF1-0810/S",
+        "PF1-1020",
+        "PF1-1616/S/A"
+      ],
+      "relevant_for_materials": [
+        "TPO",
+        "TPU",
+        "HDPE"
+      ],
+      "relevant_for_industries": [
+        "medical",
+        "automotive",
+        "furniture"
+      ],
+      "summary_one_liner": "A leading ergonomic seating manufacturer in Sweden now produces high-quality TPO/TPU components with our advanced vacuum lamination machine.",
+      "status": "published"
+    },
+    {
+      "id": "massive-pf1-5028-xl",
+      "customer_name": "Pinnacle Industries",
+      "project_title": "Massive PF1-5028 XL for Large Format Thermoforming",
+      "industry": "Thermoforming / Plastics Processing",
+      "country": "India",
+      "machine_model": "PF1-5028 XL",
+      "application": "Large format thermoforming for automotive components",
+      "material": "Acrylic/ABS",
+      "year": 2022,
+      "tags": [
+        "thermoforming",
+        "automotive",
+        "acrylic",
+        "abs",
+        "largeformat",
+        "MadeInIndia",
+        "productionline",
+        "innovation",
+        "engineering",
+        "thermoformingmachine"
+      ],
+      "relevant_for_machines": [
+        "PF1-5028 XL",
+        "PF1-1616/S/A",
+        "PF1-2116",
+        "PF1-3520/S/A"
+      ],
+      "relevant_for_materials": [
+        "Acrylic",
+        "ABS",
+        "HDPE",
+        "TPU"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "thermoforming",
+        "sanitary ware",
+        "medical devices"
+      ],
+      "summary_one_liner": "A leading automotive group in India now produces large components faster than ever with our PF1-5028 XL thermoforming machine.",
+      "status": "published"
+    },
+    {
+      "id": "plastoranger-complete-line-india",
+      "customer_name": "Plastoranger Advanced Technologies",
+      "project_title": "Complete Thermoforming Line with CNC Router and Oven",
+      "industry": "Thermoforming / Plastics processing",
+      "country": "India",
+      "machine_model": "PF1-1020",
+      "application": "Complete thermoforming production",
+      "material": "Various plastics",
+      "year": 2022,
+      "tags": [
+        "thermoforming",
+        "plastics",
+        "CNC",
+        "turnkey",
+        "manufacturing",
+        "India",
+        "production",
+        "automation",
+        "industrial",
+        "engineering"
+      ],
+      "relevant_for_machines": [
+        "PF1-1020",
+        "RT-4A-1020",
+        "Curing Oven"
+      ],
+      "relevant_for_materials": [
+        "HDPE",
+        "ABS",
+        "PVC",
+        "PET"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "packaging",
+        "consumer goods",
+        "medical"
+      ],
+      "summary_one_liner": "A $200M automotive group streamlined production with our complete thermoforming line delivered in just 5 weeks.",
+      "status": "published"
+    },
+    {
+      "id": "dezet-plastics-legacy-replacement",
+      "customer_name": "Dezet Plastics",
+      "project_title": "Replacing a 42-Year-Old German Machine in South Holland",
+      "industry": "Precision thermoforming",
+      "country": "Netherlands",
+      "machine_model": "PF1-X-1210",
+      "application": "Thermoforming for mobility, aerospace, and medical components",
+      "material": "Various thermoplastics",
+      "year": 2025,
+      "tags": [
+        "precision-thermoforming",
+        "mobility",
+        "aerospace",
+        "medical-devices",
+        "thermoplastics",
+        "innovation",
+        "manufacturing",
+        "MadeInIndia",
+        "automation",
+        "energy-efficiency"
+      ],
+      "relevant_for_machines": [
+        "PF1-X-1210",
+        "PF1-X-1520",
+        "PF1-C-2015"
+      ],
+      "relevant_for_materials": [
+        "HDPE",
+        "ABS",
+        "PP",
+        "TPO",
+        "TPU"
+      ],
+      "relevant_for_industries": [
+        "automotive",
+        "medical",
+        "aerospace",
+        "mobility"
+      ],
+      "summary_one_liner": "An Indian-made machine replaced a 42-year-old German legacy, boosting throughput by 40% and modernizing production.",
+      "status": "published"
+    },
+    {
+      "id": "dezet-plastics-netherlands",
+      "customer_name": "Dezet Plastics",
+      "project_title": "Legacy Machine Replacement for Enhanced Throughput",
+      "industry": "Precision thermoforming",
+      "country": "Netherlands",
+      "machine_model": "PF1-X-1210",
+      "application": "Precision components for mobility, aerospace, and medical sectors",
+      "material": "Various thermoplastics",
+      "year": 2025,
+      "tags": [
+        "precision thermoforming",
+        "mobility",
+        "aerospace",
+        "medical",
+        "thermoplastics",
+        "servo-driven",
+        "IR quartz heating",
+        "Netherlands",
+        "european market",
+        "legacy replacement",
+        "energy efficiency",
+        "modern controls"
+      ],
+      "relevant_for_machines": [
+        "PF1-X-1210",
+        "PF1-1616/S/A",
+        "PF1-2116"
+      ],
+      "relevant_for_materials": [
+        "thermoplastics",
+        "ABS",
+        "HDPE",
+        "PP"
+      ],
+      "relevant_for_industries": [
+        "mobility",
+        "aerospace",
+        "medical",
+        "automotive"
+      ],
+      "summary_one_liner": "Replaced a 42-year-old German Illig with a PF1-X-1210, boosting throughput by 40% in the Netherlands.",
+      "status": "published"
+    }
+  ]
+}

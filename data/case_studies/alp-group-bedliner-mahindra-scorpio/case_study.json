@@ -1,0 +1,83 @@
+{
+  "id": "alp-group-bedliner-mahindra-scorpio",
+  "customer_name": "ALP Group / ALP Aeroflex",
+  "project_title": "Mahindra Scorpio Pickup Truck Bedliner",
+  "industry": "automotive",
+  "country": "India",
+  "machine_model": "PF1-3520/S/A (Custom)",
+  "application": "HDPE pickup truck bedliners for Mahindra Scorpio",
+  "material": "HDPE, 5.5mm",
+  "year": 2022,
+  "challenge": "ALP Group, a $200M automotive components conglomerate supplying Japanese OEMs in India, needed to enter the pickup truck bedliner market for Mahindra & Mahindra. The application demanded deep-draw thermoforming of 5.5mm thick HDPE sheets into large, complex bedliner geometries (mould size 1830 x 2550 mm) — a technically demanding process requiring precise sag control, automated sheet loading, and integration with imported tooling from Thailand.",
+  "solution": "Machinecraft designed and built a custom PF1-3520/S/A — a special open-type PF1 series with a 3500 x 2000 mm forming area and an innovative sag-following bottom heater system. As the HDPE sheet sags during heating (250-400mm), sensors on the bottom heater detect the sag level and servo motors move the heater downward to maintain optimal heating distance. The machine includes automatic sheet loading, 560 IR ceramic heating elements (top + bottom), servo-driven mould table (2.2 tonne capacity), plug assist, and closed-loop cooling with IR pyrometer feedback.",
+  "technical_highlights": [
+    "3500 x 2000 mm forming area — one of the largest single-station machines built for bedliner production",
+    "Innovative sag-following bottom heater: servo-driven up/down mechanism tracks HDPE sheet sag in real-time using sensors",
+    "560 IR ceramic heating elements (280 top + 280 bottom) with 8-zone PLC control per heater bank",
+    "435 kW total connected load with 300 m³/hr Busch vacuum pump and 9000-litre vacuum tank",
+    "Automatic sheet loader with servo-driven in/out and up/down mechanism for production efficiency",
+    "Closed-loop cooling: 12 EBM Papst centrifugal fans with IR pyrometer auto-shutoff at set temperature",
+    "Servo-driven mould table (2.2 tonnes), clamp frame, plug assist (450 kg), and heater movement — all-servo machine",
+    "Custom designed from scratch — not a catalog model — specifically engineered for HDPE bedliner deep-draw"
+  ],
+  "outcome": "The machine was installed at ALP Aeroflex's plant in Nashik (MIDC Satpur) and is producing bedliners for Mahindra Scorpio pickup trucks. ALP is M&M's sole supplier for this component. The project anchored a deepening relationship: Machinecraft now provides consulting services, introduced ALP to FRIMO (Germany) for LFI/SSRIM technology, and has supplied additional machines to the group.",
+  "quote_worthy": [
+    "ALP Group uses our custom PF1-3520 to produce Mahindra Scorpio bedliners in 5.5mm HDPE — one of the most technically demanding thermoforming applications in automotive.",
+    "We designed a machine from scratch with a sag-following bottom heater that tracks the HDPE sheet in real-time — no one else offers this.",
+    "Our client ALP, a $200M group, chose Machinecraft over importing a machine from Europe for their Mahindra bedliner line.",
+    "From machine supply to consulting to technology introduction — the ALP project shows how we become a long-term thermoforming partner, not just a machine vendor."
+  ],
+  "tags": [
+    "automotive",
+    "hdpe",
+    "bedliner",
+    "truck",
+    "pickup",
+    "deep-draw",
+    "custom-machine",
+    "india",
+    "mahindra",
+    "scorpio",
+    "oem-supply",
+    "sag-control",
+    "servo",
+    "automatic",
+    "large-format",
+    "thick-sheet"
+  ],
+  "relevant_for_machines": [
+    "PF1-3520",
+    "PF1-X-1520",
+    "PF1-C-2015",
+    "PF1-C-2020",
+    "PF1-C-3020"
+  ],
+  "relevant_for_materials": [
+    "HDPE",
+    "PP",
+    "ABS"
+  ],
+  "relevant_for_industries": [
+    "automotive",
+    "truck accessories",
+    "off-highway vehicles",
+    "pickup trucks",
+    "automotive interiors",
+    "automotive exteriors"
+  ],
+  "source_data_path": "data/case_studies/alp_bedliner/",
+  "key_visuals": [
+    "data/imports/11_Project_Case_Studies/ALP Bedliner/2.Order Details from Client/Cad Concept Pictures/Sheet_Down_Isometric.png",
+    "data/imports/11_Project_Case_Studies/ALP Bedliner/2.Order Details from Client/Cad Concept Pictures/Sheet_Loaded_Isometric.png",
+    "data/imports/11_Project_Case_Studies/ALP Bedliner/2.Order Details from Client/Tool Photos/57258.jpg",
+    "data/imports/11_Project_Case_Studies/ALP Bedliner/2.Order Details from Client/Tool CAD/Tool Drg. bedliner.png"
+  ],
+  "summary_one_liner": "ALP Group uses Machinecraft's custom PF1-3520 to produce Mahindra Scorpio pickup truck bedliners in 5.5mm HDPE — featuring an innovative sag-following heater system designed from scratch.",
+  "summary_paragraph": "ALP Group, a $200M automotive components conglomerate and Mahindra & Mahindra's sole bedliner supplier, partnered with Machinecraft to develop a custom PF1-3520/S/A thermoforming machine for producing pickup truck bedliners in 5.5mm HDPE. The machine features an innovative sag-following bottom heater system that uses sensors and servo motors to track the HDPE sheet sag in real-time, maintaining optimal heating distance throughout the cycle. With a 3500 x 2000 mm forming area, 435 kW connected load, and fully automatic sheet loading, it's one of the largest single-station bedliner machines in India. The project anchored a long-term partnership that expanded into consulting, additional machine orders, and technology introductions with FRIMO Germany.",
+  "full_document": "# ALP Group / ALP Aeroflex — Mahindra Scorpio Pickup Truck Bedliner\n\n**Industry:** automotive | **Country:** India | **Year:** 2022\n**Machine:** PF1-3520/S/A (Custom) | **Material:** HDPE, 5.5mm\n\n---\n\n## The Challenge\n\nALP Group, a $200M automotive components conglomerate supplying Japanese OEMs in India, needed to enter the pickup truck bedliner market for Mahindra & Mahindra. The application demanded deep-draw thermoforming of 5.5mm thick HDPE sheets into large, complex bedliner geometries (mould size 1830 x 2550 mm) — a technically demanding process requiring precise sag control, automated sheet loading, and integration with imported tooling from Thailand.\n\n## The Solution\n\nMachinecraft designed and built a custom PF1-3520/S/A — a special open-type PF1 series with a 3500 x 2000 mm forming area and an innovative sag-following bottom heater system. As the HDPE sheet sags during heating (250-400mm), sensors on the bottom heater detect the sag level and servo motors move the heater downward to maintain optimal heating distance. The machine includes automatic sheet loading, 560 IR ceramic heating elements (top + bottom), servo-driven mould table (2.2 tonne capacity), plug assist, and closed-loop cooling with IR pyrometer feedback.\n\n## Technical Highlights\n\n- 3500 x 2000 mm forming area — one of the largest single-station machines built for bedliner production\n- Innovative sag-following bottom heater: servo-driven up/down mechanism tracks HDPE sheet sag in real-time using sensors\n- 560 IR ceramic heating elements (280 top + 280 bottom) with 8-zone PLC control per heater bank\n- 435 kW total connected load with 300 m³/hr Busch vacuum pump and 9000-litre vacuum tank\n- Automatic sheet loader with servo-driven in/out and up/down mechanism for production efficiency\n- Closed-loop cooling: 12 EBM Papst centrifugal fans with IR pyrometer auto-shutoff at set temperature\n- Servo-driven mould table (2.2 tonnes), clamp frame, plug assist (450 kg), and heater movement — all-servo machine\n- Custom designed from scratch — not a catalog model — specifically engineered for HDPE bedliner deep-draw\n\n## The Outcome\n\nThe machine was installed at ALP Aeroflex's plant in Nashik (MIDC Satpur) and is producing bedliners for Mahindra Scorpio pickup trucks. ALP is M&M's sole supplier for this component. The project anchored a deepening relationship: Machinecraft now provides consulting services, introduced ALP to FRIMO (Germany) for LFI/SSRIM technology, and has supplied additional machines to the group.\n\n---\n\n*ALP Group uses Machinecraft's custom PF1-3520 to produce Mahindra Scorpio pickup truck bedliners in 5.5mm HDPE — featuring an innovative sag-following heater system designed from scratch.*\n",
+  "anonymous_name": "A $200M automotive components group in India",
+  "anonymous_one_liner": "We designed a custom PF1 series machine from scratch to produce pickup truck bedliners in 5.5mm HDPE for a leading Indian automaker — featuring an innovative sag-following heater system that tracks the sheet in real-time.",
+  "anonymous_paragraph": "A $200M automotive components conglomerate in India needed to enter the pickup truck bedliner market for a leading Indian automaker. Machinecraft designed and built a custom PF1 series thermoforming machine with a 3500 x 2000 mm forming area and an innovative sag-following bottom heater system — sensors track the HDPE sheet sag in real-time, and servo motors move the heater to maintain optimal heating distance. With 560 IR ceramic elements, 435 kW connected load, and fully automatic sheet loading, it is one of the largest single-station bedliner machines in India. The project anchored a long-term partnership that expanded into consulting, additional machines, and technology introductions.",
+  "order_value_range": "₹2-3 Crore",
+  "status": "published"
+}
