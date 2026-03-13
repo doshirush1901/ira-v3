@@ -39,6 +39,7 @@ from ira.agents.themis import Themis
 from ira.agents.tyche import Tyche
 from ira.agents.gapper import Gapper
 from ira.agents.mnemon import Mnemon
+from ira.agents.populator import Populator
 from ira.agents.vera import Vera
 from ira.agents.base_agent import BaseAgent
 from ira.brain.deterministic_router import DeterministicRouter
@@ -56,7 +57,7 @@ _AGENT_CLASSES: list[type[BaseAgent]] = [
     Athena, Clio, Prometheus, Plutus, Hermes, Hephaestus, Themis,
     Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
     Nemesis, Arachne, Alexandros, Hera, Atlas, Asclepius, Chiron,
-    Cadmus, Quotebuilder, Artemis, Gapper, Mnemon,
+    Cadmus, Quotebuilder, Artemis, Populator, Gapper, Mnemon,
 ]
 
 

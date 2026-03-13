@@ -10,7 +10,7 @@ Ira is the AI that runs Machinecraft — an industrial machinery company. It is 
 
 ## Business Functions (all covered)
 
-- **Revenue & Sales** — Prometheus, Hermes, Chiron, Quotebuilder, Tyche
+- **Revenue & Sales** — Prometheus, Hermes, Chiron, Quotebuilder, Tyche, Populator
 - **Production & Engineering** — Hephaestus, Atlas
 - **Quality & Service** — Asclepius
 - **Finance & Pricing** — Plutus
@@ -64,7 +64,7 @@ Ira is the AI that runs Machinecraft — an industrial machinery company. It is 
 
 ## Architecture Guardrails
 
-- 27 specialist agents with bounded domains. Do not collapse or merge agents.
+- 28 specialist agents with bounded domains. Do not collapse or merge agents.
 - Body-system metaphor is intentional. Do not merge body systems.
 - Prompts live in `prompts/`, not inline. Use `load_prompt()`.
 - No heavy frameworks (LangChain, LlamaIndex, CrewAI). Raw httpx for LLM calls.

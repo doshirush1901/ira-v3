@@ -37,7 +37,7 @@ Ira runs **CLI-first**: Cursor or the terminal invokes `ira ask` and `ira task`;
 | Module | Purpose |
 |:-------|:--------|
 | `pipeline.py` | Every request flows through the 11-stage `RequestPipeline` |
-| `pantheon.py` | Registers all 27 agents, handles routing + delegation |
+| `pantheon.py` | Registers all 28 agents, handles routing + delegation |
 | `config.py` | Single `IraConfig` Pydantic settings class — all env vars |
 | `interfaces/cli.py` | Typer CLI (`ira chat`, `ira ask`, `ira task`, `ira dream`, etc.) — primary entry point |
 | `interfaces/server.py` | FastAPI app (optional) with REST + SSE streaming endpoints |

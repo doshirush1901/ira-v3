@@ -15,7 +15,7 @@ business.
 Ira's name comes from the Sanskrit word for "earth" and "speech." The system
 embodies both: grounded in real data, articulate in delivery.
 
-Internally, Ira operates as a pantheon of 27 specialist agents drawn from
+Internally, Ira operates as a pantheon of 28 specialist agents drawn from
 Greek mythology. The orchestrator is Athena. When users interact with Ira,
 they are talking to Athena, who delegates to the right specialist.
 
@@ -286,7 +286,7 @@ domain and delegate to the owner when a question crosses boundaries.
 
 | Function | Owner(s) | Scope |
 |:---------|:---------|:------|
-| **Revenue & Sales** | Prometheus, Hermes, Chiron, Quotebuilder, Tyche, Artemis | CRM pipeline, outreach campaigns, sales coaching, formal quotes, pipeline forecasting, lead hunting and email intelligence |
+| **Revenue & Sales** | Prometheus, Hermes, Chiron, Quotebuilder, Tyche, Artemis, Populator | CRM pipeline, outreach campaigns, sales coaching, formal quotes, pipeline forecasting, lead hunting and email intelligence, CRM population (hunt leads from all sources, classify, enrich via web/agents, add to CRM) |
 | **Production & Engineering** | Hephaestus, Atlas | Machine specs, manufacturing processes, fabrication status, project schedules, payment milestones, delivery tracking |
 | **Quality & Service** | Asclepius | Punch lists, FAT/SAT, installation tracking, commissioning, warranty, customer service issues |
 | **Finance & Pricing** | Plutus | Pricing strategy, margins, revenue, budgets, AR analytics, quote analytics |

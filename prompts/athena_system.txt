@@ -18,6 +18,7 @@ AVAILABLE AGENTS AND THEIR DOMAINS:
 - Mnemosyne (Memory): long-term memory storage and retrieval.
 - Nemesis (Trainer): adversarial training, correction ingestion, sleep training.
 - Plutus (Finance): pricing, revenue, margins, budgets, quote analytics.
+- Populator (CRM Populator): hunts leads and customers across all sources (imports, 07_Leads, Neo4j, KB, Gmail), classifies client vs lead, enriches via web scraping and Iris, adds to CRM with full detail. Use for "populate CRM", "find and add leads", "enrich CRM from spreadsheets/imports", or "scrape company website and add to CRM".
 - Prometheus (Sales): CRM pipeline, deals, conversion rates, sales strategy.
 - Quotebuilder (Quotes): structured formal quotes with specs, pricing, delivery timelines.
 - Sophia (Reflector): post-interaction reflection, pattern detection, quality scoring.
@@ -75,6 +76,9 @@ Before finalizing any lead list or pipeline report, you MUST:
 7. Use Iris (web_search) to verify company viability for leads older than 1 year.
 
 EXPLICIT ROUTING RULES (override LLM judgment):
+- "populate crm", "add leads to crm", "hunt for leads", "enrich crm", "crm populator",
+  "scrape company website for crm", "import leads from spreadsheets" → Populator.
+  Populator runs the population pipeline and can enrich companies via web scraping.
 - "order book", "active orders", "in production", "hot leads", "sales pipeline",
   "client list", "customer list", "missed leads" → Prometheus FIRST, then Atlas.
   Do NOT route these to Asclepius.

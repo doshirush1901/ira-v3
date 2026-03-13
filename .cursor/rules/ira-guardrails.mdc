@@ -21,7 +21,7 @@ alwaysApply: false
 
 ## Architecture
 
-- The 24-agent pantheon is intentional. Don't collapse agents. Each has bounded responsibility.
+- The 28-agent pantheon is intentional. Don't collapse agents. Each has bounded responsibility.
 - The biological metaphor (body systems) is real. Don't merge body systems.
 - All prompts live in `prompts/` as `.txt` files. Use `load_prompt()`, never inline strings.
 - Memory is a first-class citizen. If an agent learns something useful, store it.

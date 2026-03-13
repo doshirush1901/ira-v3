@@ -24,7 +24,7 @@ alwaysApply: true
 
 ## Architectural Principles
 
-- The pantheon model (27 bounded agents) is intentional — debuggable, testable, extensible.
+- The pantheon model (28 bounded agents) is intentional — debuggable, testable, extensible.
 - The biological metaphor enforces separation of concerns.
 - Memory compounds value over time — never shortcut it.
 - Prompts are configuration, not code.

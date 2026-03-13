@@ -17,7 +17,7 @@ poetry run pytest -k "test_clio"         # specific test
 
 | File | Covers |
 |:-----|:-------|
-| `test_agents.py` | All 27 agents — routing, tool use, response quality |
+| `test_agents.py` | All 28 agents — routing, tool use, response quality |
 | `test_brain.py` | Retriever, embeddings, entity extraction |
 | `test_brain_modules.py` | Pricing, sales intelligence, correction store |
 | `test_brain_fixes.py` | Regression tests for brain bug fixes |

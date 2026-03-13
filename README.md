@@ -369,7 +369,7 @@ Ira’s body systems are wired for **emergent, autonomous behavior** (not just p
 
 ## Shared Identity
 
-Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 27 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 27 separate prompt files.
+Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 28 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 28 separate prompt files.
 
 Project priorities and architectural guardrails live in [`VISION.md`](VISION.md).
 
