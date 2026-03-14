@@ -1,0 +1,83 @@
+---
+description: In-chat "start Ira" / "end Ira" — all messages in this chat go through Ira until you say "end Ira".
+globs: 
+alwaysApply: true
+---
+
+# Ira Session Mode (per-chat)
+
+In **this chat tab**, you can turn on "Ira-only" mode. While it's on, **every** user message is sent to Ira (full stack); you display Ira's reply. When the user turns it off, messages are handled normally again.
+
+## Detecting session state from this chat
+
+- **Ira session ON:** The conversation history contains a user message that is clearly "start Ira" (or "start ira", "Ira start", "activate Ira for this chat", etc.), and there is **no later** user message that is "end Ira" (or "end ira", "stop Ira", "exit Ira", "Ira end").
+- **Ira session OFF:** Either the user has never said "start Ira" in this chat, or they said "end Ira" (or equivalent) after the last "start Ira".
+
+Use the **conversation history in this chat** to decide. Session state is per-chat only (no file, no cross-tab).
+
+## When the user says "start Ira" (or equivalent)
+
+1. Run the **start-Ira steps** from `ira-api.mdc` (Docker check, then `docker compose -f docker-compose.local.yml up -d` from project root, verify containers). This ensures Ira's stack is up.
+2. Reply with the **Ira running status card** (Cursor-only, so the user sees she is running). Use this exact block:
+
+   ```
+   ┌──────────────────────────────────────────────────┐
+   │  ● Ira is running                                │
+   │  Full stack: Qdrant · Neo4j · Postgres · Mem0    │
+   │  This chat → Ira until you say "end Ira"         │
+   └──────────────────────────────────────────────────┘
+   ```
+
+   If a container failed (e.g. Qdrant), mention it in one line under the block (e.g. *Qdrant container exited; using cloud or fallback.*)
+3. Do **not** run `ira ask` for the "start Ira" message itself.
+
+## When the user says "end Ira" (or equivalent)
+
+1. Reply in one short line that the session is off: e.g. *"Ira session ended. Messages will no longer go to Ira unless you say @Ira or ask Ira."*
+2. Do **not** run `ira ask` for "end Ira".
+
+## When Ira session is ON and the user sends any other message
+
+1. Treat the **entire current user message** as the question for Ira.
+2. **Cursor-only running indicator:** First post this single line so the user sees Ira is working:
+
+   **⟳ Ira is thinking…** *Running full pipeline (routing, agents, retrieval).*
+
+3. **Manus-style steps in Cursor** — show what Ira is doing (which agent, what data/tools):
+
+   - **If the API server is running** (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health` returns `200`): use the **streaming** endpoint so the user sees steps as they happen. POST to `http://localhost:8000/api/query/stream` with `{"query": "<user message>", "user_id": "cursor_user"}` and read the SSE stream. For each event (before `final_answer`), append a line to a **steps block** using this mapping:
+     - `perceiving` → "• Perceiving input"
+     - `remembering` → "• Recalling memory"
+     - `routing` → "• Routing (Athena)"
+     - `agent_started` → "▶ {agent} — {role}"
+     - `tool_called` → "  ↳ {agent} → {tool}"
+     - `agent_thinking` → "  … {agent} thinking (iter N)"
+     - `agent_done` → "✓ {agent} done"
+     - `synthesizing` → "• Athena synthesizing"
+     - `gap_resolving` → "• Gapper resolving gaps"
+     - `faithfulness_check` → "• Faithfulness check"
+     - `assessing` → "• Assessing confidence"
+     - `shaping` → "• Shaping response"
+     Emit the steps block (as a code block or bullet list) so it grows as events arrive, then when `final_answer` is received display the response. This gives a live "animation" of what Ira is doing. **If the stream fails** (timeout, connection refused, or error event): fall back to the CLI path below and show steps from the JSON.
+   - **If the API server is not running** (or stream failed): run the CLI and show the steps block from the JSON, then the response:
+     ```bash
+     cd "$(git rev-parse --show-toplevel)" && poetry run ira ask "<user message>" --json
+     ```
+     Parse stdout as JSON. The CLI now returns `{"response": "...", "agents_consulted": [...], "steps": ["• Perceiving input", "• Routing (Athena)", "▶ Clio — Researcher", "  ↳ Clio → search_qdrant", "✓ Clio done", ...]}` when steps are collected.
+     **Always display the steps block** (Manus-style) before the response: use a heading **What Ira did** and then a code block or bullet list with each step on its own line (e.g. `• Perceiving input`, `▶ Clio — Researcher`, `  ↳ Clio → search_qdrant`, `✓ Clio done`). Then display the `response` as Markdown. Optionally mention agents consulted.
+
+5. If the command or stream fails: follow the **Cursor-as-Ira fallback** in `ira-cursor-workflow.mdc` and say that Ira's full stack was unavailable.
+
+## When Ira session is OFF
+
+- Do **not** route the user's message to Ira unless they explicitly invoke Ira (e.g. "@Ira", "ask Ira", "tell Ira") as in `ira-api.mdc`.
+- Normal Cursor behavior for everything else.
+
+## Summary
+
+| User said in this chat     | Session state | What you do |
+|----------------------------|---------------|-------------|
+| "start Ira"                | → ON          | Run Docker/containers (ira-api), then confirm "Ira session started" for this chat. |
+| "end Ira"                  | → OFF         | Confirm "Ira session ended". |
+| Any other message, ON      | ON            | Run `ira ask "<message>" --json`, show Ira's response. |
+| Any other message, OFF     | OFF           | Normal Cursor; route to Ira only if they say @Ira / ask Ira. |

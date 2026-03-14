@@ -36,6 +36,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import httpx
 import typer
 from rich.console import Console
 from ira.exceptions import ConfigurationError, IraError
@@ -73,6 +74,12 @@ app.add_typer(takeout_app, name="takeout")
 system_app = typer.Typer(help="System lifecycle commands (inhale/exhale).")
 app.add_typer(system_app, name="system")
 
+qdrant_app = typer.Typer(help="Qdrant vector DB commands.")
+app.add_typer(qdrant_app, name="qdrant")
+
+graph_app = typer.Typer(help="Neo4j graph commands (consolidate, backfill from Qdrant).")
+app.add_typer(graph_app, name="graph")
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +101,18 @@ def _run(coro: Any) -> Any:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
     return asyncio.run(coro)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True if exc is a Qdrant/HTTP connection failure (e.g. Docker down)."""
+    if isinstance(exc, httpx.ConnectError):
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and isinstance(cause, httpx.ConnectError):
+        return True
+    if type(exc).__name__ == "ResponseHandlingException" and cause is not None:
+        return "connection" in str(cause).lower() or isinstance(cause, OSError)
+    return False
 
 
 def _configure_logging(verbose: bool = False) -> None:
@@ -158,6 +177,56 @@ def _render_progress_event(event: dict[str, Any]) -> tuple[str, str | None]:
     return f"{fallback}...", None
 
 
+def _progress_event_to_step_line(event: dict[str, Any]) -> str:
+    """Format a pipeline progress event as a single line for the steps array (--json)."""
+    etype = str(event.get("type", "")).strip()
+    agent = str(event.get("agent", "")).strip()
+    role = str(event.get("role", "")).strip()
+    tool = str(event.get("tool", "")).strip()
+    iteration = event.get("iteration")
+    preview = (event.get("preview") or "")[:80]
+
+    if etype == "perceiving":
+        return "• Perceiving input"
+    if etype == "remembering":
+        return "• Recalling memory and conversation context"
+    if etype == "fast_path":
+        cat = event.get("category") or "general"
+        return f"• Fast path matched ({cat})"
+    if etype == "sphinx_checking":
+        return "• Sphinx: checking query clarity"
+    if etype == "sphinx_clarifying":
+        return "• Sphinx: clarification needed"
+    if etype == "routing":
+        return "• Routing (Athena)"
+    if etype == "enriching":
+        return "• Enriching context"
+    if etype == "agent_started":
+        role_suffix = f" — {role}" if role else ""
+        return f"▶ {agent}{role_suffix}"
+    if etype == "agent_thinking":
+        it = iteration if iteration is not None else "?"
+        return f"  … {agent} thinking (iter {it})"
+    if etype == "tool_called":
+        return f"  ↳ {agent} → {tool}" if tool else f"  ↳ {agent} → tool"
+    if etype == "agent_done":
+        return f"✓ {agent} done" + (f" — {preview}…" if preview else "")
+    if etype == "synthesizing":
+        return "• Athena synthesizing"
+    if etype == "gap_resolving":
+        n = event.get("gaps")
+        return f"• Gapper resolving {n} gap(s)" if isinstance(n, int) else "• Gapper resolving gaps"
+    if etype == "faithfulness_check":
+        return "• Faithfulness check"
+    if etype == "assessing":
+        return "• Assessing confidence"
+    if etype == "reflecting":
+        return "• Reflecting (Sophia)"
+    if etype == "shaping":
+        return "• Shaping response"
+    return f"• {etype.replace('_', ' ')}"
+
+
 async def _process_request_with_live_progress(
     pipeline: Any,
     *,
@@ -198,6 +267,37 @@ async def _process_request_with_live_progress(
         )
         progress.update(task_id, description="[bold green]Done[/bold green]")
         return response, agents_used
+
+
+_MAX_STEPS_IN_JSON = 80  # Cap so Cursor/UI doesn't get a huge block; tail is preserved
+
+
+async def _process_request_collect_steps(
+    pipeline: Any,
+    *,
+    raw_input: str,
+    sender_id: str,
+    channel: str = "cli",
+) -> tuple[str, list[str], list[str]]:
+    """Run pipeline and collect progress events as a list of step lines (for --json)."""
+    steps: list[str] = []
+
+    async def on_progress(event: dict[str, Any]) -> None:
+        line = _progress_event_to_step_line(event)
+        if line and (not steps or steps[-1] != line):
+            steps.append(line)
+
+    response, agents_used = await pipeline.process_request(
+        raw_input=raw_input,
+        channel=channel,
+        sender_id=sender_id,
+        on_progress=on_progress,
+    )
+    # Cap steps for Cursor/UI; keep head + tail so start and end of pipeline are visible
+    if len(steps) > _MAX_STEPS_IN_JSON:
+        keep_tail = _MAX_STEPS_IN_JSON // 3
+        steps = steps[: _MAX_STEPS_IN_JSON - keep_tail] + [f"… ({len(steps) - _MAX_STEPS_IN_JSON} more steps)"] + steps[-keep_tail:]
+    return response, agents_used or [], steps
 
 
 def _build_pantheon() -> tuple[Any, dict[str, Any]]:
@@ -599,15 +699,27 @@ def ask(
         async with pantheon:
             pipeline, _feedback, _redis, _voice = await _build_pipeline(pantheon, shared_services)
 
-            response, agents_used = await _process_request_with_live_progress(
-                pipeline,
-                raw_input=query,
-                sender_id=user_id,
-                channel="cli",
-            )
+            if json_output:
+                response, agents_used, steps = await _process_request_collect_steps(
+                    pipeline,
+                    raw_input=query,
+                    sender_id=user_id,
+                    channel="cli",
+                )
+            else:
+                response, agents_used = await _process_request_with_live_progress(
+                    pipeline,
+                    raw_input=query,
+                    sender_id=user_id,
+                    channel="cli",
+                )
+                steps = []
 
         if json_output:
-            print(json.dumps({"response": response, "agents_consulted": agents_used or []}))
+            out = {"response": response, "agents_consulted": agents_used or []}
+            if steps:
+                out["steps"] = steps
+            print(json.dumps(out))
         else:
             console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
@@ -1521,6 +1633,7 @@ def takeout_ingest(
     report_data: dict[str, Any] = {}
 
     async def _run_ingest() -> None:
+        await _qdrant.ensure_collection()
         # Per-run counters (reset each run)
         stats = {
             "mbox_files": len(mbox_files),
@@ -1825,10 +1938,24 @@ def takeout_ingest(
         async def _verify() -> None:
             _dig, _ing, qdrant = _build_digestive()
             try:
+                await qdrant.ensure_collection()
                 count = await qdrant.count_by_source_category("takeout_email_protein")
                 report_data["qdrant_count"] = count
                 console.print(f"[green]Qdrant:[/green] {count} points with source_category=takeout_email_protein")
                 console.print("[dim]Mem0: facts stored via LongTermMemory.store_fact (no per-source count API).[/dim]")
+            except Exception as e:  # noqa: BLE001
+                if _is_connection_error(e):
+                    logger.warning(
+                        "Qdrant unreachable during verify (is Docker running?): %s",
+                        e,
+                        exc_info=True,
+                    )
+                    console.print(
+                        "[yellow]Qdrant:[/yellow] skipped (connection failed — start Docker with "
+                        "docker compose -f docker-compose.local.yml up -d to verify counts)"
+                    )
+                else:
+                    raise
             finally:
                 await qdrant.close()
         _run(_verify())
@@ -1894,8 +2021,86 @@ def takeout_verify() -> None:
     async def _do() -> None:
         digestive, _ingestor, qdrant = _build_digestive()
         try:
+            await qdrant.ensure_collection()
             count = await qdrant.count_by_source_category("takeout_email_protein")
             console.print(f"Qdrant points (takeout_email_protein): {count}")
+        finally:
+            await qdrant.close()
+    _run(_do())
+
+
+@takeout_app.command("optimise")
+def takeout_optimise(
+    backfill_doc_type: bool = typer.Option(
+        True,
+        "--backfill-doc-type/--no-backfill-doc-type",
+        help="Set doc_type=takeout_email_protein where missing (retriever compatibility).",
+    ),
+    max_points: int = typer.Option(50_000, "--max-points", help="Max points to scan (safety cap)."),
+) -> None:
+    """Audit and optimise takeout ingestion: verify storage, payload shape, backfill doc_type.
+
+    Ensures takeout data is in the right place (ira_knowledge_v3) and stored the right way
+    (content, source, source_category, metadata). Optionally backfills doc_type so filters
+    that match on doc_type also find takeout chunks.
+    """
+    from ira.config import get_settings
+
+    async def _do() -> None:
+        digestive, _ingestor, qdrant = _build_digestive()
+        try:
+            await qdrant.ensure_collection()
+            collection = get_settings().qdrant.collection
+            points = await qdrant.scroll_by_source_category(
+                "takeout_email_protein",
+                limit=max_points,
+            )
+            total = len(points)
+            by_source: dict[str, int] = {}
+            missing_doc_type = 0
+            backfilled = 0
+            malformed: list[str] = []
+
+            for point_id, payload in points:
+                source = (payload.get("source") or "").strip()
+                if source:
+                    by_source[source] = by_source.get(source, 0) + 1
+                if not payload.get("doc_type"):
+                    missing_doc_type += 1
+                # Required for "right way": content, source, source_category, metadata
+                if not payload.get("content") and not payload.get("text"):
+                    malformed.append(f"{point_id}: missing content/text")
+                if not payload.get("source"):
+                    malformed.append(f"{point_id}: missing source")
+                if not payload.get("source_category") and not payload.get("doc_type"):
+                    malformed.append(f"{point_id}: missing source_category and doc_type")
+
+            if backfill_doc_type and missing_doc_type > 0:
+                for point_id, payload in points:
+                    if payload.get("doc_type"):
+                        continue
+                    try:
+                        await qdrant.set_payload(point_id, {"doc_type": "takeout_email_protein"})
+                        backfilled += 1
+                    except Exception as e:
+                        logger.warning("Backfill doc_type failed for %s: %s", point_id, e)
+
+            console.print("[bold]Takeout optimisation report[/bold]")
+            console.print(f"  [cyan]Collection:[/cyan] {collection}")
+            console.print(f"  [cyan]Total points (takeout_email_protein):[/cyan] {total}")
+            console.print(f"  [cyan]Unique sources:[/cyan] {len(by_source)}")
+            if missing_doc_type and not backfill_doc_type:
+                console.print(f"  [yellow]Points missing doc_type:[/yellow] {missing_doc_type} (run with --backfill-doc-type to fix)")
+            if backfilled:
+                console.print(f"  [green]Backfilled doc_type:[/green] {backfilled}")
+            if malformed:
+                console.print(f"  [yellow]Malformed payloads:[/yellow] {len(malformed)}")
+                for m in malformed[:10]:
+                    console.print(f"    [dim]{m}[/dim]")
+                if len(malformed) > 10:
+                    console.print(f"    [dim]... and {len(malformed) - 10} more[/dim]")
+            if not malformed and (backfilled == missing_doc_type or missing_doc_type == 0):
+                console.print("[green]Storage OK: takeout data in right place and shape.[/green]")
         finally:
             await qdrant.close()
     _run(_do())
@@ -2455,6 +2660,98 @@ def journal(
     _run(_journal())
 
 
+# ── Graph (Neo4j) ──────────────────────────────────────────────────────────
+
+
+@app.command("graph-consolidate")
+def graph_consolidate(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Run Neo4j graph consolidation only: add CO_RELEVANT edges from retrieval log, decay stale nodes.
+
+    Uses data/brain/retrieval_log.jsonl (filled when you run queries). Pairs of entities
+    that appear together in retrieval >= 3 times get a CO_RELEVANT relationship. Run after
+    some query traffic to densify the graph. For full dream (memory + graph + gaps), use
+    ira dream.
+    """
+    _configure_logging(verbose)
+
+    async def _run_consolidation() -> None:
+        from ira.brain.graph_consolidation import GraphConsolidation
+        from ira.brain.knowledge_graph import KnowledgeGraph
+
+        graph = KnowledgeGraph()
+        gc = GraphConsolidation(knowledge_graph=graph)
+        try:
+            stats = await gc.run_consolidation()
+            await graph.close()
+            console.print("[green]Graph consolidation complete.[/green]")
+            for k, v in stats.items():
+                if k != "status":
+                    console.print(f"  [cyan]{k}:[/cyan] {v}")
+        except Exception as e:
+            await graph.close()
+            raise
+
+    _run(_run_consolidation())
+
+
+@graph_app.command("backfill-from-qdrant")
+def graph_backfill_from_qdrant(
+    max_chunks: int | None = typer.Option(
+        None,
+        "--max-chunks",
+        "-n",
+        help="Max chunks to process (default: all). Use e.g. 1000 for a trial run.",
+    ),
+    batch_size: int = typer.Option(200, "--batch-size", help="Chunks per scroll batch."),
+    source_category: str | None = typer.Option(
+        None,
+        "--source-category",
+        "-s",
+        help="Only process chunks with this source_category (e.g. takeout_email_protein).",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Sync Qdrant → Neo4j: scroll existing chunks, extract entities/relationships, write to graph.
+
+    Uses the same extraction as ingest (MERGE so duplicates are safe). Run after restoring
+    Qdrant or to re-run extraction over all chunk content. Can take a long time on large
+    collections; use --max-chunks for a trial run.
+    """
+    _configure_logging(verbose)
+    # Show backfill progress at INFO even when not --verbose (so it doesn't look stuck)
+    logging.getLogger("ira.brain.qdrant_to_neo4j_backfill").setLevel(logging.INFO)
+
+    async def _run_backfill() -> None:
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.knowledge_graph import KnowledgeGraph
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.brain.qdrant_to_neo4j_backfill import run_backfill_from_qdrant
+
+        limit_str = f" (max {max_chunks} chunks)" if max_chunks else ""
+        console.print(f"[cyan]Starting Qdrant → Neo4j backfill{limit_str}…[/cyan] Scroll + entity extraction; progress every batch.")
+        embedding = EmbeddingService()
+        qdrant = QdrantManager(embedding_service=embedding)
+        graph = KnowledgeGraph()
+        try:
+            stats = await run_backfill_from_qdrant(
+                qdrant,
+                graph,
+                max_chunks=max_chunks,
+                batch_size=batch_size,
+                source_category=source_category,
+            )
+            console.print("[green]Backfill complete.[/green]")
+            for k, v in stats.items():
+                console.print(f"  [cyan]{k}:[/cyan] {v}")
+        finally:
+            await qdrant.close()
+            await graph.close()
+
+    _run(_run_backfill())
+
+
 # ── Dream ─────────────────────────────────────────────────────────────────
 
 
@@ -2466,6 +2763,11 @@ def dream(
         "--last-24h",
         help="Journal agent actions from the last 24 hours instead of only today (so agents know recent work).",
     ),
+    journal_first: bool = typer.Option(
+        False,
+        "--journal-first",
+        help="Run journal only (save point) first, then enter dream mode.",
+    ),
 ) -> None:
     """Trigger a dream cycle and print the consolidation report."""
     _configure_logging(verbose)
@@ -2475,6 +2777,26 @@ def dream(
 
         dream_mode = await build_dream_mode()
         try:
+            if journal_first:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold cyan]Journaling..."),
+                    console=err_console,
+                    transient=True,
+                ) as progress:
+                    progress.add_task("journal", total=None)
+                    result = await dream_mode.run_journal_only(
+                        since_last_journal=not last_24h,
+                        lookback_hours=24.0 if last_24h else 168.0,
+                    )
+                console.print(Panel(
+                    f"[bold]Entries saved:[/bold]  {result.get('entries_saved', 0)}\n"
+                    f"[bold]Agents:[/bold]       {', '.join(result.get('agents', []) or ['none'])}\n"
+                    f"[bold]Window:[/bold]       {'last 24h' if last_24h else 'since last journal'}",
+                    title="Journal (before dream)",
+                    border_style="cyan",
+                ))
+
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[bold magenta]Dreaming..."),
@@ -3618,6 +3940,57 @@ def health(
         console.print(table)
 
     _run(_health())
+
+
+@qdrant_app.command("sync-to-cloud")
+def qdrant_sync_to_cloud(
+    batch_size: int = typer.Option(100, "--batch-size", help="Points per scroll/upsert batch."),
+    max_points: int | None = typer.Option(None, "--max-points", help="Cap total points to sync (default: all)."),
+) -> None:
+    """Copy local Qdrant collection to cloud (one-time migration).
+
+    Reads from QDRANT_URL and writes to QDRANT_CLOUD_URL. Set QDRANT_CLOUD_URL
+    and QDRANT_CLOUD_API_KEY in .env. Collection name from QDRANT_COLLECTION.
+    """
+    _configure_logging(False)
+
+    from pathlib import Path
+    from ira.config import get_settings
+    settings = get_settings()
+    if not (settings.qdrant.cloud_url and settings.qdrant.cloud_url.strip()):
+        env_path = Path.cwd() / ".env"
+        console.print("[red]Qdrant cloud not configured.[/red]")
+        console.print(f"Add these two lines to [cyan]{env_path}[/cyan] (create the file if it doesn't exist):")
+        console.print("  [dim]QDRANT_CLOUD_URL=https://YOUR-CLUSTER-ID.region.aws.cloud.qdrant.io:6333[/dim]")
+        console.print("  [dim]QDRANT_CLOUD_API_KEY=your_api_key_here[/dim]")
+        console.print("Then run this command again.")
+        raise typer.Exit(1)
+
+    async def _sync() -> None:
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.exceptions import IraError
+
+        console.print("[dim]Connecting to local Qdrant and cloud… (first step can take 10–30s)[/dim]")
+        embedding = EmbeddingService()
+        qdrant = QdrantManager(embedding_service=embedding)
+        try:
+            def on_batch(n: int, total: int) -> None:
+                console.print(f"  [dim]Synced {total} points so far…[/dim]")
+
+            total = await qdrant.sync_collection_to_cloud(
+                batch_size=batch_size,
+                max_points=max_points,
+                progress_callback=on_batch,
+            )
+            console.print(f"[green]Synced {total} points to Qdrant Cloud.[/green]")
+        except IraError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        finally:
+            await qdrant.close()
+
+    _run(_sync())
 
 
 # ── Agents ────────────────────────────────────────────────────────────────

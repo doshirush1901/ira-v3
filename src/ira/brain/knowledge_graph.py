@@ -90,6 +90,7 @@ class KnowledgeGraph:
             "CREATE CONSTRAINT IF NOT EXISTS FOR (p:Person) REQUIRE p.email IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (m:Machine) REQUIRE m.model IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (q:Quote) REQUIRE q.quote_id IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (ch:Chunk) REQUIRE ch.qdrant_point_id IS UNIQUE",
         ]
         async with self._driver.session() as session:
             for stmt in constraints:
@@ -307,6 +308,94 @@ class KnowledgeGraph:
                 from_type, from_key, rel_type, to_type, to_key,
             )
             return False
+
+    # ── Chunk ↔ entity linking (Qdrant ↔ Neo4j) ───────────────────────────
+
+    async def add_chunk_and_describes(
+        self,
+        qdrant_point_id: str,
+        source: str,
+        source_category: str,
+        content_preview: str,
+        entity_refs: list[tuple[str, str]],
+    ) -> int:
+        """Create a Chunk node linked to Qdrant and DESCRIBES edges to entities.
+
+        *entity_refs* is a list of (node_label, key_value), e.g.
+        [("Company", "Acme Corp"), ("Person", "john@acme.com"), ("Machine", "PF1-A-1234")].
+        Only Company, Person, Machine, Quote are allowed. Returns the number of
+        DESCRIBES edges created.
+        """
+        if not qdrant_point_id or not qdrant_point_id.strip():
+            return 0
+        preview = (content_preview or "")[:500]
+        created = 0
+        async with self._driver.session() as session:
+            await session.execute_write(
+                self._merge_chunk, qdrant_point_id, source, source_category, preview
+            )
+            for label, key in entity_refs:
+                if not key or label not in self._KEY_FIELDS:
+                    continue
+                try:
+                    n = await session.execute_write(
+                        self._merge_describes_tx, qdrant_point_id, label, key
+                    )
+                    created += n
+                except (DatabaseError, Exception):
+                    logger.debug("DESCRIBES merge failed for %s:%s", label, key, exc_info=True)
+        return created
+
+    @staticmethod
+    async def _merge_chunk(
+        tx: Any, point_id: str, source: str, source_category: str, preview: str
+    ) -> None:
+        await tx.run(
+            """
+            MERGE (ch:Chunk {qdrant_point_id: $point_id})
+            SET ch.source = $source, ch.source_category = $source_category,
+                ch.content_preview = $preview
+            """,
+            point_id=point_id, source=source or "", source_category=source_category or "", preview=preview,
+        )
+
+    @staticmethod
+    async def _merge_describes_tx(tx: Any, point_id: str, label: str, key: str) -> int:
+        field = KnowledgeGraph._KEY_FIELDS.get(label)
+        if not field:
+            return 0
+        result = await tx.run(
+            f"""
+            MATCH (ch:Chunk {{qdrant_point_id: $point_id}})
+            MERGE (n:{label} {{{field}: $key}})
+            MERGE (ch)-[:DESCRIBES]->(n)
+            RETURN count(*) AS c
+            """,
+            point_id=point_id, key=key,
+        )
+        record = await result.single()
+        return int(record["c"]) if record else 0
+
+    async def get_chunk_point_ids_for_entity(
+        self, entity_label: str, entity_key: str, limit: int = 20
+    ) -> list[str]:
+        """Return Qdrant point IDs of Chunk nodes that DESCRIBE the given entity.
+
+        Used by retrieval to fetch vector chunks for graph entities (denser stitch).
+        """
+        if entity_label not in self._KEY_FIELDS or not entity_key:
+            return []
+        field = self._KEY_FIELDS[entity_label]
+        records = await self._read(
+            f"""
+            MATCH (ch:Chunk)-[:DESCRIBES]->(n:{entity_label} {{{field}: $key}})
+            RETURN ch.qdrant_point_id AS point_id
+            LIMIT {min(limit, 100)}
+            """,
+            key=entity_key,
+        )
+        out = [r["point_id"] for r in records if r.get("point_id")]
+        return out
 
     # ── relationship helpers ─────────────────────────────────────────────
 

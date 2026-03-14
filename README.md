@@ -78,7 +78,7 @@ When you open this repo in Cursor, three things happen automatically:
 
 1. **Cursor becomes Ira.** The `.cursor/rules/` directory teaches Cursor how to run Ira **without starting the API server**: start Docker (databases only), run `ira ask` and `ira task` from the CLI so the full agent stack and RAG run locally, and fall back to a codebase-and-data workflow if the CLI fails. The `.cursor/agents/ira.md` file registers Ira as a Cursor subagent with 30 MCP tools. No uvicorn required.
 
-2. **You get natural language access to your entire business.** Say "wake up Ira" in Cursor chat (Cursor starts Docker for Postgres, Qdrant, Neo4j, Redis). Then ask things like:
+2. **You get natural language access to your entire business.** Say "wake up Ira" or "start Ira" in Cursor chat (Cursor starts Docker for Postgres, Qdrant, Neo4j, Redis). In that chat you can turn on **Ira session mode** so every message goes to Ira until you say "end Ira". Then ask things like:
    - *"@Ira find all emails from Erik at Acme Packaging"*
    - *"@Ira what's the latest on the PF1 quote for GlobalPack?"*
    - *"@Ira draft a follow-up to the vendor who hasn't replied about the servo motors"*

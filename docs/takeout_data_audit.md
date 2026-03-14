@@ -171,8 +171,11 @@ These reduce circuit-breaker and max_tokens issues during takeout ingest.
 ### 7.1 Commands
 
 - **Verify Qdrant:** `poetry run ira takeout verify` → prints count of points with `source_category=takeout_email_protein`. Requires Qdrant (e.g. Docker) up; can timeout on large collections.  
+- **Optimise (audit + backfill):** `poetry run ira takeout optimise` → ensures takeout data is in the **right place** (collection `ira_knowledge_v3`) and **right way** (payload has `content`, `source`, `source_category`, `metadata`). Optionally backfills `doc_type=takeout_email_protein` so retriever filters that match on `doc_type` also find takeout chunks. Use `--no-backfill-doc-type` for audit-only.  
 - **Cleanup source:** `poetry run ira takeout cleanup [--source-dir ...]` → deletes contents of takeout folder (e.g. after ingest to free space).  
 - **Notification when done:** `scripts/takeout_notify_when_done.py [--pid PID] [--to EMAIL]` — waits for process and/or sends report from checkpoint + `ira takeout verify`.
+
+**Where takeout data lives:** Same Qdrant collection as the rest of the KB (`QDRANT_COLLECTION`, default `ira_knowledge_v3`). Points are distinguished by `source_category=takeout_email_protein` (and optionally `doc_type` after optimise). Neo4j holds extracted entities; Mem0 holds facts. No separate “takeout collection”.
 
 ### 7.2 Resume and re-run
 
@@ -198,7 +201,7 @@ These reduce circuit-breaker and max_tokens issues during takeout ingest.
 
 ## 9. Reference: Key Code and Config
 
-- **CLI takeout commands:** `src/ira/interfaces/cli.py` (`takeout_app`, `takeout_ingest`, `takeout_verify`, `takeout_cleanup`).  
+- **CLI takeout commands:** `src/ira/interfaces/cli.py` (`takeout_app`, `takeout_ingest`, `takeout_verify`, `takeout_optimise`, `takeout_cleanup`).  
 - **Helpers:** `_extract_message_body`, `_is_noise_message`, `_has_machinecraft_protein_signal`, `_prepare_body_for_classification` in same file.  
 - **Digestive:** `src/ira/systems/digestive.py` (nutrient extraction, summarization, absorb); `src/ira/brain/document_ingestor.py` (chunking, Qdrant).  
 - **Checkpoint path:** `data/brain/takeout_ingest_{batch_name_slug}.json`.

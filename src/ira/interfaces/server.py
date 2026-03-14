@@ -276,6 +276,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if redis_cache.available:
         embedding.set_redis_cache(redis_cache)
     qdrant = QdrantManager(embedding_service=embedding)
+    await qdrant.ensure_collection()
     graph = KnowledgeGraph()
 
     mem0_client = None

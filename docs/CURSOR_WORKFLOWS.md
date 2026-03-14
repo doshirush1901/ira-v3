@@ -6,8 +6,9 @@ All workflows that Cursor follows when you use Ira are defined in `.cursor/rules
 
 | Workflow | Trigger | What Cursor does |
 |:---------|:--------|:-----------------|
-| **Start Ira** | "wake up Ira", "start Ira", "activate Ira" | Start Docker (Postgres, Qdrant, Neo4j, Redis) only; no API server. See §1. |
-| **Query Ira** | "@Ira", "ask Ira", "tell Ira" | Run `ira ask "<question>" --json` from project root; on failure use Cursor-as-Ira fallback. See §2. |
+| **Start Ira** | "wake up Ira", "start Ira", "activate Ira" | Start Docker (Postgres, Qdrant, Neo4j, Redis) only; no API server. See §1. In a **chat tab**, "start Ira" also turns on **Ira session mode** for that chat: all messages go to Ira until the user says "end Ira". See [ira-session-mode.mdc](../.cursor/rules/ira-session-mode.mdc). |
+| **End Ira (session)** | "end Ira", "stop Ira", "exit Ira" (in a chat where session is on) | Turns off Ira session mode for that chat. Messages no longer go to Ira unless user says @Ira / ask Ira. |
+| **Query Ira** | "@Ira", "ask Ira", "tell Ira" | Run `ira ask "<question>" --json` from project root; on failure use Cursor-as-Ira fallback. See §2. When Ira session mode is **on** in that chat, every message is sent to Ira automatically. **Manus-style steps:** Cursor shows what Ira did (which agent, which tool, pipeline steps). With API server up, use `/api/query/stream` for live steps; otherwise CLI `--json` includes a `steps` array — always display it before the response. See [ira-session-mode.mdc](../.cursor/rules/ira-session-mode.mdc). |
 | **Complex task** | "@Ira do a full analysis...", "prepare a report..." | Run `ira task "<goal>" --json` (or API task stream if server up). See §2b + [ira-task-loop.mdc](../.cursor/rules/ira-task-loop.mdc). |
 | **Feedback / correction** | "that's wrong", "actually it's..." | POST to `/api/feedback` with correction text and context. See §3. |
 | **Email search** | "find emails from...", "pull up emails about..." | POST to `/api/email/search`; read thread via `/api/email/thread/<id>`. See §4. |

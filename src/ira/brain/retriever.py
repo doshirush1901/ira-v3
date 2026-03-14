@@ -154,10 +154,9 @@ class UnifiedRetriever:
         chunk the LLM is left to guess — causing hallucinated prices and
         specs.
 
-        This method scans the merged results for graph nodes, extracts
-        their identifiers, runs targeted Qdrant searches for each one
-        concurrently, deduplicates against content already present, and
-        appends the new chunks tagged ``qdrant_stitched``.
+        Uses (1) hybrid search by identifier and (2) Chunk–DESCRIBES links:
+        for each graph entity, fetch Chunk point IDs from Neo4j and
+        get_points() from Qdrant for denser network retrieval.
         """
         graph_items = [
             r for r in merged_results
@@ -180,13 +179,35 @@ class UnifiedRetriever:
                 if val:
                     identifiers.add(val)
 
-        if not identifiers:
-            return merged_results
-
         stitch_tasks = [
             self._qdrant.hybrid_search(eid, limit=3)
             for eid in list(identifiers)[:10]
         ]
+
+        # Denser stitch: (entity_label, entity_key) → Chunk point IDs → get_points
+        entity_refs: list[tuple[str, str]] = []
+        for r in graph_items:
+            meta = r.get("metadata", {}) or {}
+            if meta.get("quote_id"):
+                entity_refs.append(("Quote", str(meta["quote_id"])))
+            if meta.get("model"):
+                entity_refs.append(("Machine", str(meta["model"])))
+            if meta.get("email"):
+                entity_refs.append(("Person", str(meta["email"])))
+            if meta.get("name") and not meta.get("email"):
+                entity_refs.append(("Company", str(meta["name"])))
+        seen_ref = set()
+        unique_refs = [x for x in entity_refs if (x not in seen_ref and not seen_ref.add(x))]
+        point_ids: set[str] = set()
+        for label, key in unique_refs[:15]:
+            try:
+                ids = await self._graph.get_chunk_point_ids_for_entity(label, key, limit=5)
+                point_ids.update(ids)
+            except Exception:
+                logger.debug("get_chunk_point_ids_for_entity failed for %s:%s", label, key)
+        if point_ids:
+            stitch_tasks.append(self._qdrant.get_points(list(point_ids)))
+
         all_results = await asyncio.gather(*stitch_tasks, return_exceptions=True)
 
         new_chunks: list[dict[str, Any]] = []
@@ -203,8 +224,8 @@ class UnifiedRetriever:
 
         if new_chunks:
             logger.info(
-                "Graph-vector stitch added %d Qdrant chunks for identifiers: %s",
-                len(new_chunks), list(identifiers)[:5],
+                "Graph-vector stitch added %d Qdrant chunks (identifiers + Chunk links)",
+                len(new_chunks),
             )
             merged_results.extend(new_chunks)
 

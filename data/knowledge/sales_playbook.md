@@ -181,9 +181,9 @@ When asked about support/service:
 |-------|--------------|-----------|------------|
 | PF1-C-1015 | 1000 x 1500mm (1×1.5 m) | 500mm | ₹55 Lakhs (pneumatic); sheet 2–6 mm |
 | PF1-1515 | 1500 x 1500mm | 650mm | €120,000 (pneumatic) |
-| PF1-C-1520 | 1500 x 2000mm | 650mm | $65,000 |
-| PF1-C-2020 | 2000 x 2000mm | 500mm | €70,000 |
-| PF1-C-3020 | 3000 x 2000mm (2×3 m class) | 800mm | ₹85L |
+| PF1-C-1520 | 1500 x 2000mm | 650mm | $65,000 (India: ₹65 Lakhs EXW indicative; sheet 2–6 mm) |
+| PF1-C-2020 | 2000 x 2000mm | 500mm | €70,000 (UAE/Middle East: $76,000 EXW indicative) |
+| PF1-C-3020 | 3000 x 2000mm (2×3 m class) | 800mm | ₹85L (non-India: $100,000 EXW indicative) |
 
 **Critical: PF1-C max forming area = 2×3 m.** For larger sizes we offer **PF1-X** (servo). Do not quote PF1-C above 2×3 m.
 

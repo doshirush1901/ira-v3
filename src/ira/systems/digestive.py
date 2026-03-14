@@ -274,45 +274,57 @@ class DigestiveSystem:
         source: str,
         source_category: str,
         source_id: str = "",
-    ) -> int:
-        """Chunk protein + carbs and upsert into Qdrant."""
+        entity_refs: list[tuple[str, str]] | None = None,
+    ) -> tuple[int, list[KnowledgeItem]]:
+        """Chunk protein + carbs and upsert into Qdrant. Returns (count, upserted items).
+
+        If entity_refs is provided, each item's metadata gets graph_entity_ids for
+        Qdrant–Neo4j linking (denser retrieval).
+        """
         protein_text = "\n".join(nutrients.get("protein", []))
         carbs_text = "\n".join(nutrients.get("carbs", []))
 
         items: list[KnowledgeItem] = []
+        graph_entity_ids = [f"{label}:{key}" for label, key in (entity_refs or [])]
 
         if protein_text.strip():
             for i, chunk in enumerate(chunk_text(protein_text)):
+                meta: dict[str, Any] = {
+                    "nutrient": "protein",
+                    "chunk_index": i,
+                    "source_id": source_id,
+                }
+                if graph_entity_ids:
+                    meta["graph_entity_ids"] = graph_entity_ids
                 items.append(
                     KnowledgeItem(
                         source=source,
                         source_category=source_category,
                         content=chunk,
-                        metadata={
-                            "nutrient": "protein",
-                            "chunk_index": i,
-                            "source_id": source_id,
-                        },
+                        metadata=meta,
                     )
                 )
 
         if carbs_text.strip():
             for i, chunk in enumerate(chunk_text(carbs_text)):
+                meta = {
+                    "nutrient": "carbs",
+                    "chunk_index": i,
+                    "source_id": source_id,
+                }
+                if graph_entity_ids:
+                    meta["graph_entity_ids"] = graph_entity_ids
                 items.append(
                     KnowledgeItem(
                         source=source,
                         source_category=source_category,
                         content=chunk,
-                        metadata={
-                            "nutrient": "carbs",
-                            "chunk_index": i,
-                            "source_id": source_id,
-                        },
+                        metadata=meta,
                     )
                 )
 
         if not items:
-            return 0
+            return (0, [])
 
         filtered = []
         for item in items:
@@ -325,20 +337,23 @@ class DigestiveSystem:
         items = filtered
 
         if not items:
-            return 0
+            return (0, [])
 
-        return await self._qdrant.upsert_items(items)
+        count = await self._qdrant.upsert_items(items)
+        return (count, items)
 
     # ── LIVER: entity extraction ──────────────────────────────────────────
 
-    async def _extract_entities(self, protein_text: str) -> dict[str, int]:
-        """Extract entities from protein content and add to the knowledge graph."""
+    async def _extract_entities(self, protein_text: str) -> tuple[dict[str, int], list[tuple[str, str]]]:
+        """Extract entities from protein content, add to the knowledge graph, return (counts, entity_refs)."""
+        empty_counts = {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
         if not protein_text.strip():
-            return {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
+            return (empty_counts, [])
 
         extracted = await self._graph.extract_entities_from_text(protein_text)
 
-        counts: dict[str, int] = {"companies": 0, "people": 0, "machines": 0}
+        counts: dict[str, int] = {"companies": 0, "people": 0, "machines": 0, "relationships": 0}
+        entity_refs: list[tuple[str, str]] = []
 
         for company in extracted.get("companies", []):
             if company.get("name"):
@@ -349,6 +364,7 @@ class DigestiveSystem:
                     website=company.get("website", ""),
                 )
                 counts["companies"] += 1
+                entity_refs.append(("Company", company["name"]))
 
         for person in extracted.get("people", []):
             if person.get("name"):
@@ -359,6 +375,8 @@ class DigestiveSystem:
                     role=person.get("role", ""),
                 )
                 counts["people"] += 1
+                if person.get("email"):
+                    entity_refs.append(("Person", person["email"]))
 
         for machine in extracted.get("machines", []):
             if machine.get("model"):
@@ -368,6 +386,7 @@ class DigestiveSystem:
                     description=machine.get("description", ""),
                 )
                 counts["machines"] += 1
+                entity_refs.append(("Machine", machine["model"]))
 
         rel_count = 0
         for rel in extracted.get("relationships", []):
@@ -387,7 +406,7 @@ class DigestiveSystem:
                 logger.debug("Failed to add relationship: %s", rel, exc_info=True)
         counts["relationships"] = rel_count
 
-        return counts
+        return (counts, entity_refs)
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -421,17 +440,32 @@ class DigestiveSystem:
             # DUODENUM — rewrite raw facts as searchable statements
             nutrients = await self._summarize_nutrients(nutrients)
 
-            # SMALL INTESTINE
-            chunks_created = await self._absorb(
+            # LIVER (before absorb so we can link chunks to entities)
+            protein_text = "\n".join(nutrients.get("protein", []))
+            entities_found, entity_refs = await self._extract_entities(protein_text)
+
+            # SMALL INTESTINE — absorb with graph_entity_ids for denser Qdrant–Neo4j linking
+            chunks_created, upserted_items = await self._absorb(
                 nutrients,
                 source,
                 source_category,
                 source_id=source_id,
+                entity_refs=entity_refs,
             )
 
-            # LIVER
-            protein_text = "\n".join(nutrients.get("protein", []))
-            entities_found = await self._extract_entities(protein_text)
+            # Link each Qdrant chunk to Neo4j (Chunk node + DESCRIBES edges)
+            for item in upserted_items:
+                if entity_refs:
+                    try:
+                        await self._graph.add_chunk_and_describes(
+                            qdrant_point_id=item.id.hex,
+                            source=item.source,
+                            source_category=item.source_category,
+                            content_preview=item.content[:500],
+                            entity_refs=entity_refs,
+                        )
+                    except Exception:
+                        logger.debug("Chunk–graph link failed for %s", item.id.hex, exc_info=True)
 
             elapsed = time.monotonic() - start
             logger.info(
@@ -453,13 +487,26 @@ class DigestiveSystem:
                 exc_info=True,
             )
             fallback_nutrients: dict[str, list[str]] = {"protein": [raw_data.strip()], "carbs": [], "waste": []}
-            chunks_created = await self._absorb(
+            entities_found, entity_refs = await self._extract_entities(raw_data.strip())
+            chunks_created, upserted_items = await self._absorb(
                 fallback_nutrients,
                 source,
                 source_category,
                 source_id=source_id,
+                entity_refs=entity_refs,
             )
-            entities_found = await self._extract_entities(raw_data.strip())
+            for item in upserted_items:
+                if entity_refs:
+                    try:
+                        await self._graph.add_chunk_and_describes(
+                            qdrant_point_id=item.id.hex,
+                            source=item.source,
+                            source_category=item.source_category,
+                            content_preview=item.content[:500],
+                            entity_refs=entity_refs,
+                        )
+                    except Exception:
+                        logger.debug("Chunk–graph link failed for %s", item.id.hex, exc_info=True)
             elapsed = time.monotonic() - start
             return {
                 "nutrients_extracted": {"protein": 1, "carbs": 0, "waste": 0},

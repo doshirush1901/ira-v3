@@ -40,9 +40,27 @@ except Exception:
 BASE = "http://localhost:8000"
 LEADS_DIR = PROJECT_ROOT / "data/imports/24_WebSite_Leads"
 ENRICHED_LEADS_PATH = LEADS_DIR / "ira-drip-campaign/data/enriched_leads.json"
+BLACKLIST_PATH = LEADS_DIR / "lead_blacklist.json"
 
 # Lead IDs already sent (from lead_email_workflow_scores.md)
 SENT_LEAD_IDS = {38, 39, 40, 41, 42, 43, 45, 46, 48, 49}
+
+
+def load_blacklist() -> tuple[set[int], set[str]]:
+    """Return (blacklisted_lead_ids, blacklisted_emails) from lead_blacklist.json."""
+    ids, emails = set(), set()
+    if not BLACKLIST_PATH.exists():
+        return (ids, emails)
+    try:
+        data = json.loads(BLACKLIST_PATH.read_text(encoding="utf-8"))
+        for e in data.get("entries", []):
+            if e.get("lead_id") is not None:
+                ids.add(int(e["lead_id"]))
+            if e.get("email"):
+                emails.add((e.get("email") or "").strip().lower())
+        return (ids, emails)
+    except Exception:
+        return (ids, emails)
 
 # Scoring rubric (10 points) — matches lead_email_workflow_scores.md
 SCORING_RUBRIC = """
@@ -69,9 +87,20 @@ def load_leads() -> list[dict]:
 
 
 def get_next_lead_ids(leads: list[dict], after: int, count: int) -> list[int]:
-    """Return the next `count` lead IDs after `after` that are not in SENT_LEAD_IDS."""
-    ids = sorted(L["id"] for L in leads if L.get("id") is not None and L["id"] not in SENT_LEAD_IDS and L["id"] > after)
-    return ids[:count]
+    """Return the next `count` lead IDs after `after` that are not sent and not blacklisted."""
+    blacklisted_ids, blacklisted_emails = load_blacklist()
+    ids = []
+    for L in leads:
+        lid = L.get("id")
+        if lid is None or lid <= after or lid in SENT_LEAD_IDS:
+            continue
+        if lid in blacklisted_ids:
+            continue
+        if (L.get("email") or "").strip().lower() in blacklisted_emails:
+            continue
+        ids.append(lid)
+    ids = sorted(ids)[:count]
+    return ids
 
 
 def get_lead(leads: list[dict], lead_id: int) -> dict | None:

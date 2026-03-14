@@ -18,6 +18,7 @@ Neo4j-*.txt
 data/imports/
 data/brain/
 data/qdrant/
+data/qdrant.before_restore.*/
 data/neo4j/
 data/postgres/
 data/redis/
@@ -107,6 +108,11 @@ docs/*.txt
 # TypeScript build info
 # ──────────────────────────────────────────────
 tsconfig.tsbuildinfo
+
+# ──────────────────────────────────────────────
+# Runtime state (session, task state)
+# ──────────────────────────────────────────────
+memory/state/
 
 # ──────────────────────────────────────────────
 # Scratch / upgrade workspaces

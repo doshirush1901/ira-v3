@@ -22,9 +22,11 @@ from typing import Any
 from neo4j import AsyncGraphDatabase
 from qdrant_client import AsyncQdrantClient, models
 
+from ira.brain.embeddings import EmbeddingService
 from ira.brain.imports_metadata_index import IMPORTS_DIR, load_index
 from ira.brain.ingestion_gatekeeper import scan_for_undigested
 from ira.brain.ingestion_log import load_log
+from ira.brain.qdrant_manager import QdrantManager
 from ira.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -78,7 +80,11 @@ def _normalise_qdrant_source(source: str) -> str:
 async def _fetch_qdrant_sources(collection: str) -> tuple[set[str], dict[str, Any]]:
     """Return all distinct source payloads currently present in Qdrant collection."""
     cfg = get_settings().qdrant
-    client = AsyncQdrantClient(url=cfg.url, api_key=(cfg.api_key.get_secret_value() or None))
+    client = AsyncQdrantClient(
+        url=cfg.url,
+        api_key=(cfg.api_key.get_secret_value() or None),
+        check_compatibility=False,
+    )
     raw_sources: set[str] = set()
     scanned_points = 0
     offset: models.PointId | None = None
@@ -187,6 +193,12 @@ async def run_ingestion_audit() -> dict[str, Any]:
         by_reason[reason] = by_reason.get(reason, 0) + 1
 
     qdrant_collection = get_settings().qdrant.collection
+    embedding = EmbeddingService()
+    qdrant = QdrantManager(embedding_service=embedding)
+    try:
+        await qdrant.ensure_collection()
+    finally:
+        await qdrant.close()
     qdrant_sources, qdrant_info = await _fetch_qdrant_sources(qdrant_collection)
     qdrant_matched = imports_abs & qdrant_sources
 

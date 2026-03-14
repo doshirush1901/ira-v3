@@ -41,7 +41,11 @@ Or one command: `./scripts/start-local.sh` (from repo root). Verify all 4 contai
 docker compose -f docker-compose.local.yml ps --format "table {{.Name}}\t{{.Status}}"
 ```
 
+**If local Qdrant keeps failing:** Use Qdrant Cloud instead. In `.env` set `QDRANT_URL` to your cloud cluster URL (e.g. `https://xxx.qdrant.io`) and `QDRANT_API_KEY` to your cloud API key. Ira will use cloud Qdrant and the local qdrant container is not required. To keep **local and cloud in sync** (dual-write), set `QDRANT_CLOUD_URL` and `QDRANT_CLOUD_API_KEY` as well; see `docs/QDRANT_LOCAL_AND_CLOUD_SYNC.md`.
+
 Ira runs via the **CLI**; no API server is started. For queries, Cursor runs `ira ask` (see section 2).
+
+**In a Cursor chat:** When the user says "start Ira" in that chat tab, after starting Docker/containers also apply **Ira session mode** (`.cursor/rules/ira-session-mode.mdc`): from then on in *that chat*, every user message goes to Ira until they say "end Ira".
 
 ## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
 

@@ -331,6 +331,7 @@ class ImmuneSystem:
                 self._qdrant._client = AsyncQdrantClient(
                     url=self._qdrant_url,
                     api_key=api_key or None,
+                    check_compatibility=False,
                 )
                 await self._qdrant.ensure_collection()
                 check = await self._check_qdrant()

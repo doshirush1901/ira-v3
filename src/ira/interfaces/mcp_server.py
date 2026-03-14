@@ -309,6 +309,7 @@ async def ingest_document(file_path: str) -> str:
 
             embedding = EmbeddingService()
             qdrant = QdrantManager(embedding_service=embedding)
+            await qdrant.ensure_collection()
             graph = KnowledgeGraph()
             ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
 

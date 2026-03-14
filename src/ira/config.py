@@ -41,6 +41,10 @@ class QdrantConfig(BaseSettings):
     url: str = "http://localhost:6333"
     api_key: SecretStr = SecretStr("")
     collection: str = "ira_knowledge_v3"
+    # Optional: when set, every upsert and ensure_collection is mirrored to this
+    # cluster so local and cloud stay in sync (dual-write).
+    cloud_url: str = ""
+    cloud_api_key: SecretStr = SecretStr("")
 
 
 class Neo4jConfig(BaseSettings):

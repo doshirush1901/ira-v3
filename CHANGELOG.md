@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-(Nothing yet.)
+### Added
+- **Ira session mode** — In a Cursor chat, "start Ira" turns on session mode so every message is sent to Ira until "end Ira"; Manus-style steps (which agent, which tool) shown when using stream or CLI `--json` with `steps`. Rule: `.cursor/rules/ira-session-mode.mdc`.
+- **Qdrant local + cloud** — Optional dual-write to local and Qdrant Cloud; config via `QDRANT_URL` / `QDRANT_API_KEY` (primary) and `QDRANT_CLOUD_*` for sync. Restore-from-backup script and docs in `docs/QDRANT_LOCAL_AND_CLOUD_SYNC.md`.
+- **Qdrant manager** — Backup/restore, collection info, health checks; CLI commands and config for cloud URL/API key.
+- **Qdrant → Neo4j backfill** — `src/ira/brain/qdrant_to_neo4j_backfill.py` to sync document metadata from Qdrant into the knowledge graph.
+- **Docs** — `docs/NEO4J_GRAPH_DENSITY.md`, `docs/DATA_STORES_AUDIT.md`, `docs/AUDIT_CURSOR_AS_FRONT_END.md`; scripts: `data_audit.py`, `restore_qdrant_from_backup.sh`, `send_hot_leads_summary_email.py`.
+
+### Changed
+- **CLI** — Extended with Qdrant backup/restore/info, journal/dream options, and step output in `--json` for session-mode display.
+- **Retriever** — Resilient to Qdrant unavailability; optional cloud sync path.
+- **Digestive system** — Ingestion and nutrient flow improvements.
+- **Knowledge graph** — Additional helpers and backfill integration.
+- **.gitignore** — Ignore `data/qdrant.before_restore.*/` and `memory/state/`.
 
 ## [3.4.0] - 2026-03-11
 

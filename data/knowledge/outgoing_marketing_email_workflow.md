@@ -109,6 +109,8 @@ poetry run python scripts/lead_email_workflow_loop.py --next 5 --after 49 --send
 ```
 Requires: Ira API running; OpenAI/Anthropic for scoring. See **`scripts/lead_email_workflow_loop.py`**.
 
+**Blacklist:** Contacts we do not contact (time-wasters, requested do-not-contact) are listed in **`data/imports/24_WebSite_Leads/lead_blacklist.json`**. The workflow loop skips blacklisted lead IDs and emails when selecting the next leads. Add entries there (email, lead_id, name, company, reason, added_date) to stop outreach.
+
 ### Flow diagram (Mermaid)
 
 ```mermaid
