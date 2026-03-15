@@ -208,16 +208,23 @@ async def run_backfill_from_qdrant(
 
             for rel in extracted.get("relationships", []):
                 try:
+                    _skip = {"from_type", "from_key", "rel", "to_type", "to_key", "properties"}
+                    props = {
+                        k: v for k, v in rel.items()
+                        if k not in _skip and isinstance(v, (str, int, float, bool))
+                    }
+                    nested = rel.get("properties")
+                    if isinstance(nested, dict):
+                        for pk, pv in nested.items():
+                            if isinstance(pv, (str, int, float, bool)):
+                                props[pk] = pv
                     ok = await graph.add_relationship(
                         from_type=rel.get("from_type", ""),
                         from_key=rel.get("from_key", ""),
                         rel_type=rel.get("rel", ""),
                         to_type=rel.get("to_type", ""),
                         to_key=rel.get("to_key", ""),
-                        properties={
-                            k: v for k, v in rel.items()
-                            if k not in ("from_type", "from_key", "rel", "to_type", "to_key")
-                        },
+                        properties=props if props else None,
                     )
                     if ok:
                         stats["relationships"] += 1

@@ -682,6 +682,7 @@ def chat(
                     sender_id=user_id,
                     channel="cli",
                 )
+                await pipeline.wait_for_background_tasks(timeout=10.0)
 
                 last_exchange = {
                     "query": text,
@@ -734,6 +735,8 @@ def ask(
                     channel="cli",
                 )
                 steps = []
+
+            await pipeline.wait_for_background_tasks(timeout=15.0)
 
         if json_output:
             out = {"response": response, "agents_consulted": agents_used or []}

@@ -327,7 +327,12 @@ class CRMDatabase:
         if self._initialized:
             return
         url = database_url or get_settings().database.url
-        self._engine = create_async_engine(url, echo=False)
+        self._engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
         self._session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self._engine, expire_on_commit=False
         )

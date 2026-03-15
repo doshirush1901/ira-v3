@@ -108,11 +108,34 @@ class RequestPipeline:
         self._state_lock = asyncio.Lock()
         self._request_semaphore = asyncio.Semaphore(5)
         self._stage_timings: deque[dict[str, Any]] = deque(maxlen=100)
+        self._last_learn_task: asyncio.Task[None] | None = None
 
         self._load_pending_clarifications()
 
     _REQUEST_TIMEOUT = 360
     _CLARIFICATION_REDIS_KEY = "ira:pending_clarifications"
+
+    async def wait_for_background_tasks(self, timeout: float = 30.0) -> None:
+        """Wait for the background learn task to finish (with timeout).
+
+        Call this before shutting down the event loop (e.g. in CLI mode)
+        to avoid asyncio.CancelledError on in-flight DB transactions.
+        """
+        if self._last_learn_task is not None and not self._last_learn_task.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._last_learn_task),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Background learn task did not finish in %.0fs — cancelling", timeout)
+                self._last_learn_task.cancel()
+                try:
+                    await self._last_learn_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            except Exception:
+                logger.debug("Background learn task raised", exc_info=True)
 
     def _load_pending_clarifications(self) -> None:
         """Restore pending clarifications from Redis on startup."""
@@ -1018,6 +1041,7 @@ class RequestPipeline:
         _learn_task.add_done_callback(
             lambda t: t.exception() and logger.warning("LEARN background task failed: %s", t.exception())
         )
+        self._last_learn_task = _learn_task
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
@@ -1249,14 +1273,12 @@ class RequestPipeline:
             from ira.brain.realtime_observer import RealTimeObserver
             observer = RealTimeObserver()
             await observer._load()
-            _task = asyncio.create_task(
-                observer.observe_turn(raw_input, raw_response, contact_email)
+            await asyncio.wait_for(
+                observer.observe_turn(raw_input, raw_response, contact_email),
+                timeout=10.0,
             )
-            _task.add_done_callback(
-                lambda t: t.exception() and logger.warning(
-                    "RealTimeObserver task failed: %s", t.exception()
-                )
-            )
+        except asyncio.TimeoutError:
+            logger.debug("RealTimeObserver timed out (10s) — skipping")
         except (IraError, Exception):
             logger.warning("RealTimeObserver not available", exc_info=True)
 

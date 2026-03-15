@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ira"
-version = "3.5.0"
+version = "3.5.1"
 description = "Ira – Machinecraft AI Pantheon: a multi-agent AI system that runs a manufacturing company"
 authors = ["Machinecraft <rushabh@machinecraft.org>"]
 license = "Proprietary"

@@ -1,29 +1,6 @@
 services:
-  qdrant:
-    # v1.12 fails to load backup: "unknown variant `mmap`, expected `in_memory` or `on_disk`". Use 1.13+.
-    image: qdrant/qdrant:v1.13.0
-    ports:
-      - "6333:6333"
-    volumes:
-      - ./data/qdrant:/qdrant/storage
-    mem_limit: 1g
-    networks:
-      - ira-network
-
-  neo4j:
-    image: neo4j:5.15.0-community
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    environment:
-      NEO4J_AUTH: neo4j/ira_knowledge_graph
-      NEO4J_PLUGINS: '["apoc"]'
-      NEO4J_dbms_security_procedures_unrestricted: apoc.*
-    volumes:
-      - ./data/neo4j:/data
-    mem_limit: 2g
-    networks:
-      - ira-network
+  # Qdrant: using Qdrant Cloud (QDRANT_URL in .env)
+  # Neo4j: using Neo4j Aura (NEO4J_URI in .env)
 
   postgres:
     image: postgres:16-alpine

@@ -12,10 +12,11 @@ use to programmatically check LLM outputs for common issues:
 These complement the LLM-based reasoning in the ReAct loop with
 deterministic, fast validation checks.
 
-Faithfulness checking uses a three-tier strategy:
-1. **HHEM** (Vectara) — local NLI model, fast, no API call (~600MB)
-2. **LLM entailment** — structured OpenAI/Anthropic call
-3. **Keyword heuristic** — word-overlap fallback
+Faithfulness checking uses a four-tier strategy:
+0. **Google Check Grounding** — Discovery Engine API, <700ms, per-claim citations
+1. **Dual-model LLM** — OpenAI + Anthropic in parallel, averaged (~$0.006/check)
+2. **Single-model LLM** — OpenAI only fallback (~$0.003/check)
+3. **Keyword heuristic** — word-overlap fallback when all else fails
 """
 
 from __future__ import annotations
@@ -23,12 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import warnings
 from typing import Any
-
-# Suppress HHEM/transformers warnings before any model load (they can fire during import)
-warnings.filterwarnings("ignore", message=".*HHEMv2.*")
-warnings.filterwarnings("ignore", message=".*maximum sequence length.*")
 
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import ConfidentialityResult, FaithfulnessResult
@@ -36,101 +32,9 @@ from ira.schemas.llm_outputs import ConfidentialityResult, FaithfulnessResult
 logger = logging.getLogger(__name__)
 
 _guard_instance = None
-_hhem_model = None
-_hhem_load_attempted = False
 
 _FAITHFULNESS_SYSTEM_PROMPT = load_prompt("faithfulness_check")
 
-
-# ── HHEM (Vectara Hallucination Evaluation Model) ────────────────────────
-
-
-def _get_hhem():
-    """Lazy-load the Vectara HHEM model for local faithfulness scoring.
-
-    Returns the model or None if unavailable.  Only attempts loading
-    once — subsequent calls return the cached result immediately.
-    """
-    global _hhem_model, _hhem_load_attempted
-    if _hhem_load_attempted:
-        return _hhem_model
-    _hhem_load_attempted = True
-
-    try:
-        from transformers import AutoModelForSequenceClassification
-
-        # Suppress HHEMv2Config/HHEMv2 and tokenizer length warnings from vectara model; model still works.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            warnings.simplefilter("ignore", DeprecationWarning)
-            # transformers may emit FutureWarning or message containing "HHEMv2"
-            warnings.filterwarnings("ignore", message=".*HHEMv2.*")
-            warnings.filterwarnings("ignore", message=".*maximum sequence length.*")
-            _hhem_model = AutoModelForSequenceClassification.from_pretrained(
-                "vectara/hallucination_evaluation_model",
-                trust_remote_code=True,
-            )
-        logger.info("HHEM model loaded for local faithfulness scoring")
-        return _hhem_model
-    except Exception:
-        logger.info("HHEM model not available — will use LLM/heuristic fallback")
-        return None
-
-
-async def _hhem_faithfulness(
-    response: str,
-    context_docs: list[str],
-) -> dict[str, Any] | None:
-    """Score faithfulness using the local HHEM model.
-
-    Returns a faithfulness dict or None if HHEM is unavailable.
-    The model scores each (premise, hypothesis) pair where:
-    - premise = concatenated context documents
-    - hypothesis = each sentence of the response
-    Score 0 = hallucinated, 1 = fully consistent.
-    """
-    model = _get_hhem()
-    if model is None:
-        return None
-
-    sentences = [s.strip() for s in response.split(".") if len(s.strip()) > 15]
-    if not sentences:
-        return {"faithful": True, "unsupported_claims": [], "score": 1.0}
-
-    # HHEM max sequence length is 512 tokens (~1500 chars). Truncate premise so (premise, hypothesis) fits.
-    _max_premise_chars = 1200
-    _max_sent_chars = 200
-    context_text = " ".join(context_docs)[:_max_premise_chars]
-    sentences_trunc = [s[:_max_sent_chars] for s in sentences[:20]]
-    pairs = [(context_text, sent) for sent in sentences_trunc]
-
-    try:
-        scores = await asyncio.to_thread(model.predict, pairs)
-    except Exception:
-        logger.debug("HHEM predict() failed", exc_info=True)
-        return None
-
-    unsupported: list[dict[str, str]] = []
-    supported_count = 0
-    _THRESHOLD = 0.5
-
-    for sent, score in zip(sentences[:20], scores):
-        if score >= _THRESHOLD:
-            supported_count += 1
-        else:
-            unsupported.append({
-                "claim": sent,
-                "reason": f"HHEM consistency score {score:.2f} < {_THRESHOLD}",
-            })
-
-    total = len(sentences[:20])
-    avg_score = sum(float(s) for s in scores) / total if total else 1.0
-
-    return {
-        "faithful": avg_score >= 0.5 and supported_count / total >= 0.7,
-        "unsupported_claims": unsupported[:5],
-        "score": round(avg_score, 2),
-    }
 
 KNOWN_COMPETITORS: list[str] = [
     "ILLIG", "Kiefel", "GN Thermoforming", "WM Thermoforming",
@@ -220,16 +124,107 @@ async def validate_output(text: str) -> dict[str, Any]:
         return {"valid": True, "issues": [], "sanitized": text}
 
 
+async def _google_check_grounding(
+    response: str,
+    context_docs: list[str],
+) -> dict[str, Any] | None:
+    """Tier 0: Google Discovery Engine Check Grounding API.
+
+    Returns a faithfulness dict or None if unavailable.  Sub-700ms,
+    per-claim citations, purpose-built for RAG grounding.
+    """
+    from ira.config import get_settings
+    project_id = get_settings().document_ai.project_id
+    if not project_id:
+        return None
+
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from pathlib import Path
+        import httpx
+
+        token_path = Path("token_dlp.json")
+        if not token_path.exists():
+            return None
+
+        creds = Credentials.from_authorized_user_file(
+            str(token_path), ["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        if creds.expired and creds.refresh_token:
+            await asyncio.to_thread(creds.refresh, Request())
+        if not creds.valid:
+            return None
+
+        url = (
+            f"https://discoveryengine.googleapis.com/v1/projects/{project_id}"
+            "/locations/global/groundingConfigs/default_grounding_config:check"
+        )
+        facts = [{"factText": doc[:10000]} for doc in context_docs[:200]]
+        payload = {
+            "answerCandidate": response[:16000],
+            "facts": facts,
+            "groundingSpec": {
+                "citationThreshold": 0.5,
+                "enableClaimLevelScore": True,
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {creds.token}",
+                    "Content-Type": "application/json",
+                    "X-Goog-User-Project": project_id,
+                },
+            )
+
+        if resp.status_code != 200:
+            logger.debug("Google Check Grounding returned %d: %s", resp.status_code, resp.text[:200])
+            return None
+
+        data = resp.json()
+        support_score = float(data.get("supportScore", 0))
+        claims = data.get("claims", [])
+
+        unsupported: list[dict[str, str]] = []
+        for claim in claims:
+            claim_score = float(claim.get("score", 0))
+            if claim.get("groundingCheckRequired", True) and claim_score < 0.5:
+                unsupported.append({
+                    "claim": claim.get("claimText", ""),
+                    "reason": f"Google grounding score {claim_score:.2f} < 0.5",
+                })
+
+        faithful = support_score >= 0.5 and len(unsupported) == 0
+        logger.debug(
+            "Google Check Grounding: score=%.2f claims=%d unsupported=%d",
+            support_score, len(claims), len(unsupported),
+        )
+        return {
+            "faithful": faithful,
+            "unsupported_claims": unsupported[:5],
+            "score": round(support_score, 2),
+        }
+
+    except Exception:
+        logger.debug("Google Check Grounding failed", exc_info=True)
+        return None
+
+
 async def check_faithfulness(
     response: str,
     context_docs: list[str],
 ) -> dict[str, Any]:
     """Check whether a response is faithful to the provided context documents.
 
-    Three-tier strategy:
-    1. **HHEM** — local Vectara model, fast, no API call
-    2. **LLM entailment** — structured OpenAI/Anthropic call
-    3. **Keyword heuristic** — word-overlap fallback
+    Four-tier strategy:
+    0. **Google Check Grounding** — Discovery Engine API, <700ms, per-claim citations
+    1. **Dual-model LLM** — OpenAI + Anthropic in parallel, averaged (~$0.006/check)
+    2. **Single-model LLM** — OpenAI only fallback (~$0.003/check)
+    3. **Keyword heuristic** — word-overlap fallback when all else fails
 
     Returns:
     - ``faithful``: bool
@@ -239,35 +234,88 @@ async def check_faithfulness(
     if not context_docs or not response.strip():
         return {"faithful": True, "unsupported_claims": [], "score": 1.0}
 
-    # Tier 1: HHEM (local model, ~50ms per check)
-    hhem_result = await _hhem_faithfulness(response, context_docs)
-    if hhem_result is not None:
-        logger.debug("Faithfulness scored by HHEM: %.2f", hhem_result["score"])
-        return hhem_result
+    # Tier 0: Google Check Grounding (fastest, purpose-built)
+    google_result = await _google_check_grounding(response, context_docs)
+    if google_result is not None:
+        logger.debug("Faithfulness scored by Google Check Grounding: %.2f", google_result["score"])
+        return google_result
 
-    # Tier 2: LLM-based entailment
+    context_text = "\n---\n".join(context_docs)
+    user_msg = f"Response:\n{response}\n\nSource Context:\n{context_text}"
+
+    # Tier 1: Dual-model verification (OpenAI + Anthropic in parallel)
     try:
         from ira.services.llm_client import get_llm_client
 
         llm = get_llm_client()
-        context_text = "\n---\n".join(context_docs)
-        user_msg = f"Response:\n{response}\n\nSource Context:\n{context_text}"
 
-        result = await llm.generate_structured(
-            _FAITHFULNESS_SYSTEM_PROMPT,
-            user_msg,
-            FaithfulnessResult,
-            name="guardrails.faithfulness",
+        openai_task = llm.generate_structured(
+            _FAITHFULNESS_SYSTEM_PROMPT, user_msg, FaithfulnessResult,
+            name="guardrails.faithfulness.openai", provider="openai",
         )
+        anthropic_task = llm.generate_structured(
+            _FAITHFULNESS_SYSTEM_PROMPT, user_msg, FaithfulnessResult,
+            name="guardrails.faithfulness.anthropic", provider="anthropic",
+        )
+
+        results = await asyncio.gather(openai_task, anthropic_task, return_exceptions=True)
+
+        valid_results: list[FaithfulnessResult] = [
+            r for r in results if isinstance(r, FaithfulnessResult)
+        ]
+
+        if len(valid_results) == 2:
+            avg_score = round((valid_results[0].score + valid_results[1].score) / 2, 2)
+            all_unsupported = valid_results[0].unsupported_claims + valid_results[1].unsupported_claims
+            seen_claims: set[str] = set()
+            deduped: list[dict[str, str]] = []
+            for c in all_unsupported:
+                if c.claim not in seen_claims:
+                    seen_claims.add(c.claim)
+                    deduped.append(c.model_dump())
+            faithful = avg_score >= 0.7 and all(r.faithful for r in valid_results)
+            logger.debug(
+                "Faithfulness dual-model: openai=%.2f anthropic=%.2f avg=%.2f",
+                valid_results[0].score, valid_results[1].score, avg_score,
+            )
+            return {"faithful": faithful, "unsupported_claims": deduped[:5], "score": avg_score}
+
+        if valid_results:
+            r = valid_results[0]
+            logger.debug("Faithfulness single-model fallback: %.2f", r.score)
+            return {
+                "faithful": r.faithful,
+                "unsupported_claims": [c.model_dump() for c in r.unsupported_claims],
+                "score": round(r.score, 2),
+            }
+
+        for r in results:
+            if isinstance(r, Exception):
+                logger.debug("Faithfulness model failed: %s", r)
+
+    except Exception:
+        logger.debug("Dual-model faithfulness check failed, trying single", exc_info=True)
+
+    # Tier 2: Single-model LLM fallback (OpenAI only)
+    try:
+        from ira.services.llm_client import get_llm_client
+
+        llm = get_llm_client()
+        result = await llm.generate_structured(
+            _FAITHFULNESS_SYSTEM_PROMPT, user_msg, FaithfulnessResult,
+            name="guardrails.faithfulness", provider="openai",
+        )
+        score = round(result.score, 2)
+        logger.debug("Faithfulness scored by single LLM: %.2f", score)
         return {
             "faithful": result.faithful,
             "unsupported_claims": [c.model_dump() for c in result.unsupported_claims],
-            "score": round(result.score, 2),
+            "score": score,
         }
     except Exception:
-        logger.debug("LLM faithfulness check failed, using heuristic", exc_info=True)
+        logger.debug("Single-model faithfulness also failed, using heuristic", exc_info=True)
 
-    # Tier 3: keyword-overlap heuristic
+    # Tier 3: keyword-overlap heuristic (last resort)
     return _heuristic_faithfulness(response, context_docs)
 
 
