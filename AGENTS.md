@@ -7,8 +7,11 @@ Ira v3 codebase. For Ira's identity and behavioral principles, see
 ## Repository Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes requests
-through an 11-stage pipeline, delegates to 31 specialist agents, and maintains
-persistent memory across conversations.
+through a 17-step pipeline, delegates to 31 specialist agents, and maintains
+persistent memory across conversations. Inside Cursor, Ira runs as a
+**Cursor-native agentic experience** using an Explore → Think → Act → Loop
+→ Result flow with bounded execution, parallel sub-agents, and progressive
+disclosure of reasoning.
 
 ```
 src/ira/
@@ -23,7 +26,7 @@ src/ira/
   skills/       # Shared skill handlers
   schemas/      # Pydantic models for structured LLM outputs
   services/     # LLMClient (OpenAI + Anthropic SDK wrapper with Langfuse tracing)
-  pipeline.py   # 11-stage request pipeline
+  pipeline.py   # 17-step request pipeline
   pantheon.py   # Agent orchestrator + routing
   config.py     # Pydantic settings (all config from .env)
   message_bus.py # Inter-agent pub/sub messaging
@@ -211,6 +214,112 @@ alembic upgrade head
 
 Local dev: `docker-compose.local.yml`. All config comes from `.env`.
 
+## Request Pipeline (17 steps)
+
+Every request flows through `RequestPipeline.process_request()`:
+
+```
+ 1. PERCEIVE        — SensorySystem resolves identity, emotional state
+ 2. REMEMBER        — ConversationMemory, coreference resolution, goals
+ 2.5 FAST PATH      — Regex classifier for greetings/identity/thanks
+ 2.7 SPHINX GATE    — Sphinx evaluates query clarity; vague → clarify
+ 3. ROUTE (Fast)    — DeterministicRouter keyword-matched intents
+ 3.5 TRUTH HINTS    — Canned answers for known factual questions
+ 4. ROUTE (Proc)    — ProceduralMemory for learned response patterns
+ 5. ROUTE (LLM)     — Athena for open-ended LLM-based routing
+ 5.1 EMAIL SCOPE    — Classify query as live_email/imported_email/both/no_email
+ 5.5 ENRICH         — AdaptiveStyle, RealTimeObserver, Endocrine, episodes
+ 6. EXECUTE         — Routed agents run (up to 5 in parallel, per-agent timeout)
+ 6.1a COMPLIANCE    — Aletheia traces claims to sources (provenance)
+ 6.1b DLP           — Aegis scans for PII and confidential terms
+ 6.2 CORRECTIONS    — Mnemon applies correction ledger
+ 6.3 GAP RESOLVE    — Gapper fills missing data
+ 6.4 FAITHFULNESS   — 4-tier grounding check (see below)
+ 6.4b GUARDRAILS    — Competitor mentions, confidentiality (LLM-routed only)
+ 7. ASSESS          — Metacognition confidence scoring
+ 8. REFLECT         — InnerVoice reflection
+ 8.5 SOURCE NOTES   — Auto-append limitation notes on timeout/failure
+ 9. SHAPE           — VoiceSystem formats for channel and recipient
+ 9.5 LOG SESSION    — Graphe records Cursor session for dream learning
+ 9.6 STABILITY      — Metis scores response quality (0-100)
+10. LEARN           — ConversationMemory, CRM, facts, Sophia, goals
+11. RETURN          — Final shaped response
+```
+
+## Faithfulness Engine (4-tier)
+
+Faithfulness checking verifies that every claim in the response is
+grounded in source evidence. Uses a tiered strategy with automatic
+fallback:
+
+| Tier | Engine | Speed | Cost | Notes |
+|:-----|:-------|:------|:-----|:------|
+| 0 | **Google Check Grounding** (Discovery Engine API) | <700ms | Free tier | Per-claim citations; requires `GOOGLE_CLOUD_PROJECT_ID` |
+| 1 | **Dual-model LLM** (gpt-4.1 + Claude Sonnet in parallel) | ~3s | ~$0.006 | Averaged scores; catches model-specific blind spots |
+| 2 | **Single-model LLM** (gpt-4.1 only) | ~1s | ~$0.003 | Fallback when Anthropic is unavailable |
+| 3 | **Keyword heuristic** (word overlap) | <50ms | Free | Last resort when all APIs are down |
+
+The pipeline will not hard-block a response when agents did real work;
+instead it appends a verification caveat. On exception, it logs and
+continues rather than replacing the response.
+
+Config: `src/ira/brain/guardrails.py`. Prompt: `prompts/faithfulness_check.txt`.
+
+## Timeout Model
+
+Bounded execution ensures Ira returns the best possible answer within
+a time budget. See `docs/TIMEOUT_MODEL.md` for full details.
+
+| Level | Config | Default | Meaning |
+|:------|:-------|:--------|:--------|
+| **Total** | `APP__PIPELINE_TIMEOUT` | 600s | Full request; presets: 30s / 2m / 5m / 10m / 20m |
+| **Sub-agent slot** | `APP__AGENT_TIMEOUT` | 90s | Per parallel sub-agent; best answer within this |
+| **Parallel cap** | `APP__MAX_PARALLEL_AGENTS` | 5 | Up to this many sub-agents at once (semaphore) |
+| **Athena synthesis** | `APP__ATHENA_SYNTHESIS_TIMEOUT` | 90s | Time to package final answer for Cursor/API |
+| **ReAct rounds** | `APP__REACT_MAX_ITERATIONS` | 8 | Max think-act-observe cycles per agent |
+
+Metis (stability monitor) tracks response quality and can auto-adjust
+`react_max_iterations` when quality is below threshold.
+
+## Cursor-Native Experience
+
+Inside Cursor, Ira runs using the **agentic flow** by default:
+
+1. **Explore** — Search codebase, data, docs (SemanticSearch, Grep, Read)
+2. **Think** — Reason in plain language; decide next step
+3. **Act** — Run commands, call Ira CLI/stream, read more files
+4. **Loop** — If incomplete, think again → explore or act again
+5. **Result** — Final answer with confidence/freshness/sources
+
+All output is formatted for the Cursor chat tab. No external UI required.
+CLI (`ira ask`) is the backend; the experience is Cursor-native.
+
+Rules: `.cursor/rules/ira-cursor-native.mdc`, `ira-cursor-agentic-mode.mdc`.
+Docs: `docs/CURSOR_AGENTIC_LOOP.md`, `docs/CURSOR_EMAIL_SCOPE.md`.
+
+## Email in Cursor
+
+| Path | Speed | When to use |
+|:-----|:------|:------------|
+| **Qdrant (highway)** | Sub-second | Historical context, "what do we know about X" |
+| **Live Gmail** | 1-5s | "Latest email from X", real-time inbox state |
+
+The pipeline classifies each query's email scope (`live_email`,
+`imported_email`, `both`, `no_email`) and agents respect it.
+Send is only allowed on explicit user instruction ("send" / "send it").
+
+Playbooks: `docs/stable_modes.md` (6 documented flows).
+
+## Qdrant Resilience
+
+- **Filter fallback**: If a filtered search fails (missing payload index),
+  retries without the filter so the user still gets results.
+- **Auto-indexes**: `ensure_collection()` creates payload indexes for
+  commonly filtered fields (`source_category`, `doc_type`, `source`, etc.)
+  — required by Qdrant Cloud.
+- **Graceful counts**: `count_by_source_category` returns 0 instead of
+  crashing when the index is missing.
+
 ## API Endpoints
 
 Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used when the server is explicitly started (e.g. for the web UI or MCP).
@@ -257,7 +366,7 @@ use in Cursor, Claude Desktop, or any MCP-compatible client:
 | **CRM** | `get_deal`, `list_deals`, `create_contact`, `update_deal`, `get_stale_leads` |
 | **Knowledge Graph** | `find_related_entities`, `find_company_contacts`, `find_company_quotes` |
 | **Corrections** | `submit_correction` — log factual corrections for Nemesis to process during Dream Mode |
-| **Dream Mode** | `trigger_dream_mode` — run the 11-stage memory consolidation cycle on demand |
+| **Dream Mode** | `trigger_dream_mode` — run the 12-stage memory consolidation cycle on demand (includes cursor session learning) |
 | **Board Meeting** | `convene_board_meeting` — multi-agent strategic debate with Athena synthesis |
 | **Metacognition** | `get_knowledge_gaps` — see what Ira doesn't know so you can upload the right documents |
 | **System Health** | `get_system_status` — service health (Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage) + agent power levels |
