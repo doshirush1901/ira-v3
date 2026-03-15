@@ -1,0 +1,103 @@
+---
+description: Default way Ira runs in Cursor — explore, think, act, loop, then show result in chat. Used whenever Ira session is ON or when user asks Ira in Cursor.
+globs: 
+alwaysApply: false
+---
+
+# Ira — Cursor Agentic Mode (Explore → Think → Act → Loop → Result)
+
+**This is how Ira runs inside Cursor.** Do exactly what Cursor does in each phase. Full definitions and examples: `docs/CURSOR_AGENTIC_LOOP.md`. Whenever Ira session is ON (or the user asks Ira via @Ira / ask Ira in Cursor), structure the reply so they **see each phase** in the chat: explore, think, act, and optionally loop until you have a complete answer, then show the result.
+
+## When This Applies
+
+- **Ira session is ON** — every user message gets this flow by default (see ira-session-mode.mdc).
+- **User explicitly asks Ira** (@Ira, "ask Ira", etc.) in Cursor — use this flow and show Explore → Think → Act → Result.
+- **User says** "agentic mode", "cursor mode", "explore then think then run" — same flow (already the default in Ira session).
+
+## The Loop (visible in Cursor chat)
+
+Do exactly what Cursor does in each phase; see **What each phase means** below and **`docs/CURSOR_AGENTIC_LOOP.md`** for full definitions and examples.
+
+1. **Explore**  
+   - Post a short heading, e.g. **🔍 Exploring**  
+   - Run `SemanticSearch`, `Grep`, `Read`, `Glob` as needed.  
+   - In the chat, list what you’re looking at: search queries, file paths, or a one-line summary of findings.  
+   - Keep it scannable (bullets or a few lines).
+
+2. **Think**  
+   - Post **💭 Thinking**  
+   - Write 2–5 sentences: what the evidence suggests, what’s missing, what you’ll do next (e.g. “Need to check X; then I’ll run Y”).  
+   - No code here — plain-language reasoning.
+
+3. **Act**  
+   - Post **▶ Acting**  
+   - Run commands (`Shell`), read files (`Read`), or do more searches.  
+   - Show the user what you ran and, briefly, what you got (e.g. “Ran `ira pipeline`; pipeline has 12 deals.”).
+
+4. **Loop (if needed)**  
+   - If the answer isn’t complete: go back to **Think** (plan next steps), then **Explore** or **Act** again.  
+   - Repeat until you have enough to give a final answer.  
+   - Each cycle can be short (e.g. “Think: need pricing → Act: read `data/...`”).
+
+5. **Result**  
+   - Post **✅ Result**  
+   - Give the final answer: clear, structured, with confidence/freshness/sources if it’s factual (per ira-response-contracts).  
+   - If this chat is an Ira session, use Ira’s voice (SOUL.md); otherwise normal assistant tone.
+
+## What each phase means (do exactly what Cursor does)
+
+Full definitions and examples: **`docs/CURSOR_AGENTIC_LOOP.md`**.
+
+| Phase | Meaning | What you can do | Show in chat |
+|-------|---------|------------------|---------------|
+| **Explore** | Gather context (codebase, data, docs). Inside Explore you also *think* (e.g. "about pricing → look at Plutus"); keep it short. | SemanticSearch, Grep, Read, Glob. No commands yet. | 🔍 Exploring + bullets |
+| **Think** | Reason in plain language; interpret evidence, say what's missing, decide next step. | 2–5 sentences only; no code, no running commands. | 💭 Thinking + reasoning |
+| **Act** | Execute: run command, read more, or call Ira. | Shell (ira ask, curl, pytest), Read, or search again. Show what you ran + gist of result. | ▶ Acting + command + outcome |
+| **Loop** | Answer not complete → Think again, then Explore or Act again. | Another 💭 then 🔍 or ▶. Loop 2–4 times only when needed. | 💭 then 🔍 or ▶ |
+| **Result** | Deliver final answer; add confidence/freshness/sources if factual; Ira's voice in Ira session. | State answer first; cite sources if needed. | ✅ Result + answer |
+
+## Rules
+
+- **Show, don't hide:** Each phase (Explore / Think / Act) should appear in the chat so the user sees the process.
+- **Loop only when useful:** For simple questions, one Explore → Think → Act → Result is enough. For deep research, loop 2–4 times as needed.
+- **Ira session:** If “start Ira” was said in this chat, keep using Ira’s voice and delegation (Plutus for pricing, Atlas for timeline, etc.); the *process* is Cursor-native (explore/think/act), the *content* stays Ira’s.
+- **No fabrication:** Only state facts you found in the codebase, `data/`, or command output. If something is unknown, say so.
+- **Never send email from Act.** Email sending is only allowed when the user explicitly says "send" or "send it" — never autonomously from the Act phase. Drafts are fine; sending is not.
+- **State source limitations in Result.** If any data source was unavailable or partial (e.g. email search timed out, Gmail auth expired, an agent timed out), say so explicitly in the Result (e.g. "Based on CRM and docs; email search timed out." or "Email unavailable; answering from knowledge base only."). Never let the user assume full data access when it was partial.
+- **Corrections in Cursor.** When the user says "that's wrong" or corrects a fact, route the correction to `ira feedback "<correction>"` (CLI) or the feedback API so it hits Mnemon/Nemesis. Do not just acknowledge — persist it.
+
+## Example flow (in chat)
+
+```
+🔍 Exploring
+• Searched for "lead time PF1" → src/ira/agents/hephaestus.py, data/...
+• Reading docs/... and pipeline schema.
+
+💭 Thinking
+The codebase points to Hephaestus for production/lead times. No explicit PF1 lead time in the first two files. I'll check the pipeline and any quote data next.
+
+▶ Acting
+• Running `ira ask "PF1 lead time" --json` to get Ira's answer from the full stack.
+• Got response (summary): ...
+
+✅ Result
+PF1 lead time is X weeks (source: ...). Confidence: high. Freshness: current.
+```
+
+## Backend: agent selection and timeouts (Ira's first task)
+
+- **Which agents to pick:** Ira's first skill is choosing the right agents. This is in place:
+  - **Deterministic router** (fast path): intent → `ROUTING_TABLE` in `brain/deterministic_router.py` maps to `required_agents` (e.g. SALES_PIPELINE → prometheus, atlas, clio, chiron).
+  - **If no match:** Sphinx, truth hints, procedural memory; then **Athena** decides. In the LLM path Athena returns which agents to consult; Pantheon runs them and Athena synthesizes. So **Athena decides which agents to pick** when the deterministic router does not match.
+- **Timeout model (total → sub-agents → Athena synthesis):** See **`docs/TIMEOUT_MODEL.md`**. In short:
+  - **Total:** `APP__PIPELINE_TIMEOUT` — 30s / 2min / 5min / 10min / 20min (future: Ira/Athena can choose by request type).
+  - **Sub-agents:** Up to `APP__MAX_PARALLEL_AGENTS` (default 5) run in parallel; each has a **slot** `APP__AGENT_TIMEOUT` (default 90s) to give Athena the best answer.
+  - **Athena synthesis:** `APP__ATHENA_SYNTHESIS_TIMEOUT` (default 90s) to package the final answer for the Cursor tab; on timeout, concatenated agent responses are returned.
+
+## Cursor-native
+
+Ira is **100% Cursor-native** inside Cursor. See `ira-cursor-native.mdc`. All output goes to the Cursor chat tab; never redirect to dashboard, web UI, or external tools.
+
+## Summary
+
+**Cursor agentic mode** = explore (and show it) → think (and show it) → act (and show it) → loop if needed → result in chat. The user sees the full process; the final answer is still grounded and, in an Ira session, in Ira’s voice.

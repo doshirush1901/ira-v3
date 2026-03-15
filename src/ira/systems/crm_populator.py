@@ -28,6 +28,9 @@ from ira.agents.delphi import Delphi
 from ira.config import get_settings
 from ira.data.crm import CRMDatabase
 from ira.data.models import ContactType, DealStage
+from ira.prompt_loader import load_prompt
+from ira.schemas.llm_outputs import ExtractedContacts
+from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +38,12 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _IMPORTS_LEADS_DIR = _REPO_ROOT / "data" / "imports" / "24_WebSite_Leads"
 _IMPORTS_07_DIR = _REPO_ROOT / "data" / "imports" / "07_Leads_and_Contacts"
+_IMPORTS_08_DIR = _REPO_ROOT / "data" / "imports" / "08_Sales_and_CRM"
 _IMPORTS_ROOT = _REPO_ROOT / "data" / "imports"
 _TAKEOUT_INGEST_DIR = _REPO_ROOT / "data" / "takeout_ingest"
 _MAX_TAKEOUT_SENT_CONTACTS = 2000
+_EXTRACT_CONTACTS_PROMPT = load_prompt("digestive_extract_contacts")
+_MAX_PDF_TEXT_FOR_EXTRACT = 15_000
 
 _VALID_CRM_TYPES = {
     "LIVE_CUSTOMER": ContactType.LIVE_CUSTOMER,
@@ -45,6 +51,26 @@ _VALID_CRM_TYPES = {
     "LEAD_WITH_INTERACTIONS": ContactType.LEAD_WITH_INTERACTIONS,
     "LEAD_NO_INTERACTIONS": ContactType.LEAD_NO_INTERACTIONS,
 }
+
+
+def _stage_from_import(stage: str | None) -> DealStage:
+    """Map spreadsheet stage/status string to DealStage. Default CONTACTED."""
+    if not stage:
+        return DealStage.CONTACTED
+    s = stage.strip().lower()
+    if s in ("won", "delivered", "closed won", "closed", "delivery", "sold"):
+        return DealStage.WON
+    if s in ("lost", "closed lost"):
+        return DealStage.LOST
+    if s in ("new", "lead"):
+        return DealStage.NEW
+    if s in ("contacted", "reached out"):
+        return DealStage.CONTACTED
+    if s in ("engaged", "qualified", "proposal", "negotiation"):
+        for enum_val in DealStage:
+            if enum_val.value.lower() == s:
+                return enum_val
+    return DealStage.CONTACTED
 
 _OWN_DOMAINS = frozenset({"machinecraft.org", "machinecraft.in"})
 
@@ -123,7 +149,10 @@ class CRMPopulator:
             "total_extracted": 0,
             "classified": 0,
             "inserted": 0,
+            "deals_updated": 0,
             "skipped_duplicate": 0,
+            "duplicates_with_deals": 0,
+            "duplicates_with_import_data": 0,
             "skipped_rejected": 0,
             "skipped_no_email": 0,
             "errors": 0,
@@ -155,7 +184,7 @@ class CRMPopulator:
         after, before : str
             Date range for Gmail extraction in ``YYYY/MM/DD`` format.
         """
-        use = set(sources) if sources else {"gmail", "kb", "neo4j", "imports", "imports_07", "takeout_sent"}
+        use = set(sources) if sources else {"gmail", "kb", "neo4j", "imports", "imports_07", "imports_08", "takeout_sent"}
 
         contacts: list[dict[str, Any]] = []
 
@@ -169,6 +198,9 @@ class CRMPopulator:
             contacts.extend(await self._extract_from_imports())
         if "imports_07" in use:
             contacts.extend(await self._extract_from_imports_07())
+        if "imports_08" in use:
+            contacts.extend(await self._extract_from_imports_08())
+            contacts.extend(await self._extract_from_imports_08_pdfs())
         if "takeout_sent" in use:
             contacts.extend(await self._extract_from_takeout_sent())
 
@@ -230,22 +262,58 @@ class CRMPopulator:
         existing = await self._crm.get_contact_by_email(email)
         if existing is not None:
             self._stats["skipped_duplicate"] += 1
-            # Backfill deal if we have machine_model from imports and contact has no deal
-            machine_model = contact.get("machine_model")
-            if machine_model and not self._dry_run:
+            if not self._dry_run:
                 try:
                     deals = await self._crm.list_deals(filters={"contact_id": str(existing.id)})
-                    if not deals:
+                    machine_model = contact.get("machine_model")
+                    quote_val = contact.get("quote_value")
+                    stage_raw = contact.get("stage")
+                    has_value = quote_val is not None
+                    has_stage = bool(stage_raw and str(stage_raw).strip())
+                    if deals:
+                        self._stats["duplicates_with_deals"] += 1
+                    has_application = bool(contact.get("application") and str(contact.get("application", "")).strip())
+                    if has_value or has_stage or machine_model or has_application:
+                        self._stats["duplicates_with_import_data"] += 1
+
+                    if not deals and machine_model:
+                        # Backfill: create first deal for this contact
+                        value = float(quote_val) if quote_val is not None else 0
+                        if value < 0:
+                            value = 0
+                        stage = _stage_from_import(stage_raw)
                         await self._crm.create_deal(
                             contact_id=str(existing.id),
                             title=contact.get("company") or f"Import {email}",
-                            value=0,
-                            stage=DealStage.CONTACTED,
+                            value=value,
+                            stage=stage,
                             machine_model=machine_model,
+                            application=contact.get("application") or None,
                         )
                         logger.info("Backfilled deal for %s (%s)", email, machine_model)
+                    elif deals and (has_value or has_stage or machine_model or has_application):
+                        # Update existing deal with import value/stage/machine_model when we have data
+                        deal = deals[0]
+                        updates: dict[str, Any] = {}
+                        if has_value:
+                            v = float(quote_val) if quote_val is not None else 0
+                            if v >= 0:
+                                updates["value"] = v
+                        if has_stage:
+                            updates["stage"] = _stage_from_import(stage_raw)
+                        if machine_model and (not deal.machine_model or str(deal.machine_model) != str(machine_model)):
+                            updates["machine_model"] = machine_model
+                        app_val = contact.get("application")
+                        if app_val and str(app_val).strip():
+                            updates["application"] = str(app_val).strip()[:255]
+                        if updates:
+                            await self._crm.update_deal(deal.id, force=True, **updates)
+                            self._stats["deals_updated"] += 1
+                            # One-line summary: email and what changed (for -v or log review)
+                            change_str = ", ".join(f"{k}={updates[k]}" for k in sorted(updates.keys()))
+                            logger.info("Deal updated: %s — %s", email, change_str)
                 except Exception:
-                    logger.debug("Failed to backfill deal for %s", email, exc_info=True)
+                    logger.debug("Failed to backfill/update deal for %s", email, exc_info=True)
             return
 
         contact_type_hint = contact.get("contact_type_hint")
@@ -332,12 +400,18 @@ class CRMPopulator:
         machine_model = contact.get("machine_model")
         if machine_model and not self._dry_run:
             try:
+                quote_val = contact.get("quote_value")
+                value = float(quote_val) if quote_val is not None else 0
+                if value < 0:
+                    value = 0
+                stage = _stage_from_import(contact.get("stage"))
                 await self._crm.create_deal(
                     contact_id=str(created_contact.id),
                     title=company_name or f"Import {email}",
-                    value=0,
-                    stage=DealStage.CONTACTED,
+                    value=value,
+                    stage=stage,
                     machine_model=machine_model,
+                    application=contact.get("application") or None,
                 )
             except Exception:
                 logger.debug("Failed to create deal for %s", email, exc_info=True)
@@ -826,13 +900,56 @@ class CRMPopulator:
             region = str(region)
         if region and len(region) > 100:
             region = region[:100]
-        return {
+        machine_model = (row.get("machine_model") or row.get("model") or row.get("machine") or "").strip()
+        if isinstance(machine_model, (int, float)):
+            machine_model = str(machine_model).strip()
+        # Drop purely numeric values (e.g. Machines_Mentioned count 9.0, 13) — not a model name
+        if machine_model and _re_module.match(r"^\d+\.?\d*$", machine_model):
+            machine_model = ""
+        if machine_model and len(machine_model) > 255:
+            machine_model = machine_model[:255]
+        quote_value_raw = (
+            row.get("quote_value") or row.get("amount") or row.get("value")
+            or row.get("quote_value_usd") or row.get("order_value")
+        )
+        quote_value: float | None = None
+        if quote_value_raw is not None and quote_value_raw != "":
+            try:
+                if isinstance(quote_value_raw, (int, float)):
+                    quote_value = float(quote_value_raw)
+                else:
+                    s = str(quote_value_raw).strip().replace(",", "").replace("€", "").replace("$", "").replace("USD", "").strip()
+                    if s:
+                        quote_value = float(s)
+            except (ValueError, TypeError):
+                quote_value = None
+        stage_raw = (row.get("stage") or row.get("status") or row.get("deal_stage") or "").strip()
+        if isinstance(stage_raw, (int, float)):
+            stage_raw = str(stage_raw).strip()
+        stage = stage_raw.lower() if stage_raw else None
+        application = (
+            (row.get("application") or row.get("target_applications") or row.get("segment") or "")
+        ).strip()
+        if isinstance(application, (int, float)):
+            application = str(application).strip()
+        if application and len(application) > 255:
+            application = application[:255]
+        out: dict[str, Any] = {
             "email": email,
             "name": name,
             "company": company,
             "region": region or None,
             "source": source,
         }
+        if machine_model:
+            out["machine_model"] = machine_model
+        if quote_value is not None and quote_value >= 0:
+            out["quote_value"] = quote_value
+        if stage:
+            out["stage"] = stage
+        if application:
+            out["application"] = application
+        return out
 
     def _read_xlsx_contacts(self, path: Path, source_label: str) -> list[dict[str, Any]]:
         """Read first sheet of an XLSX; first row = headers. Return list of contact dicts."""
@@ -859,6 +976,14 @@ class CRMPopulator:
                     col_to_norm[i] = "company"
                 elif n in ("region", "country", "location"):
                     col_to_norm[i] = "region"
+                elif n in ("machine_model", "model", "machine", "machine_type", "machines_mentioned"):
+                    col_to_norm[i] = "machine_model"
+                elif n in ("quote_value", "amount", "value", "quote_value_usd", "deal_value", "order_value"):
+                    col_to_norm[i] = "quote_value"
+                elif n in ("stage", "status", "deal_stage", "deal_status"):
+                    col_to_norm[i] = "stage"
+                elif n in ("application", "target_applications", "segment"):
+                    col_to_norm[i] = "application"
             if "email" not in col_to_norm.values():
                 return contacts
             for row in rows[1:]:
@@ -866,8 +991,17 @@ class CRMPopulator:
                     continue
                 rdict: dict[str, Any] = {}
                 for i, val in enumerate(row):
-                    if i in col_to_norm and val is not None and str(val).strip():
-                        rdict[col_to_norm[i]] = str(val).strip()
+                    if i not in col_to_norm:
+                        continue
+                    key = col_to_norm[i]
+                    if val is None:
+                        continue
+                    if key == "quote_value" and isinstance(val, (int, float)):
+                        rdict[key] = val
+                    elif isinstance(val, str) and val.strip():
+                        rdict[key] = val.strip()
+                    elif isinstance(val, (int, float)) and key != "quote_value":
+                        rdict[key] = str(val).strip()
                 if "email" not in rdict or "@" not in str(rdict.get("email", "")):
                     continue
                 contact = self._map_row_to_contact(rdict, {}, source_label)
@@ -890,16 +1024,24 @@ class CRMPopulator:
                     norm_row: dict[str, Any] = {}
                     for k, v in row.items():
                         n = self._normalize_header(k)
-                        if v is None or (isinstance(v, str) and not v.strip()):
+                        if v is None or (isinstance(v, str) and not v.strip()) and n not in ("quote_value", "amount", "value"):
                             continue
                         if "email" in n or n == "e_mail":
-                            norm_row["email"] = v.strip()
+                            norm_row["email"] = v.strip() if isinstance(v, str) else str(v).strip()
                         elif "name" in n or n in ("contact", "contact_name", "full_name"):
-                            norm_row["name"] = v.strip()
+                            norm_row["name"] = v.strip() if isinstance(v, str) else str(v).strip()
                         elif "company" in n or "organisation" in n:
-                            norm_row["company"] = v.strip()
+                            norm_row["company"] = v.strip() if isinstance(v, str) else str(v).strip()
                         elif n in ("region", "country", "location"):
-                            norm_row["region"] = v.strip()
+                            norm_row["region"] = v.strip() if isinstance(v, str) else str(v).strip()
+                        elif n in ("machine_model", "model", "machine", "machine_type", "machines_mentioned"):
+                            norm_row["machine_model"] = v.strip() if isinstance(v, str) else str(v).strip()
+                        elif n in ("quote_value", "amount", "value", "quote_value_usd", "deal_value", "order_value"):
+                            norm_row["quote_value"] = v
+                        elif n in ("stage", "status", "deal_stage", "deal_status"):
+                            norm_row["stage"] = v.strip() if isinstance(v, str) else str(v).strip()
+                        elif n in ("application", "target_applications", "segment"):
+                            norm_row["application"] = v.strip() if isinstance(v, str) else str(v).strip()
                     if norm_row.get("email") and "@" in str(norm_row["email"]):
                         contact = self._map_row_to_contact(norm_row, {}, source_label)
                         if contact:
@@ -922,6 +1064,81 @@ class CRMPopulator:
         if single_xlsx.exists():
             contacts.extend(self._read_xlsx_contacts(single_xlsx, "imports_07"))
         logger.info("Extracted %d contacts from imports_07 (07_Leads + Single Station)", len(contacts))
+        return contacts
+
+    async def _extract_from_imports_08(self) -> list[dict[str, Any]]:
+        """Extract contacts from data/imports/08_Sales_and_CRM (XLSX/CSV)."""
+        contacts: list[dict[str, Any]] = []
+        if not _IMPORTS_08_DIR.is_dir():
+            logger.warning("Imports 08 dir not found: %s", _IMPORTS_08_DIR)
+            return contacts
+        for path in sorted(_IMPORTS_08_DIR.glob("*.xlsx")) + sorted(_IMPORTS_08_DIR.glob("*.xls")):
+            contacts.extend(self._read_xlsx_contacts(path, "imports_08"))
+        for path in sorted(_IMPORTS_08_DIR.glob("*.csv")):
+            contacts.extend(self._read_csv_contacts(path, "imports_08"))
+        logger.info("Extracted %d contacts from imports_08 (08_Sales_and_CRM)", len(contacts))
+        return contacts
+
+    async def _extract_contacts_from_text_llm(self, text: str) -> list[dict[str, Any]]:
+        """Use LLM to extract name, email, company, machine_model from unstructured text.
+        Used for PDFs in 08_Sales_and_CRM when table parsing is not possible.
+        """
+        if not text or len(text.strip()) < 20:
+            return []
+        llm = get_llm_client()
+        if llm._openai is None:
+            logger.debug("No OpenAI client — skipping LLM contact extraction")
+            return []
+        prepared = text[:_MAX_PDF_TEXT_FOR_EXTRACT].strip()
+        try:
+            result = await llm.generate_structured(
+                _EXTRACT_CONTACTS_PROMPT,
+                prepared,
+                ExtractedContacts,
+                name="crm_populator.extract_contacts",
+                max_tokens=4096,
+            )
+        except Exception:
+            logger.debug("LLM contact extraction failed", exc_info=True)
+            return []
+        out: list[dict[str, Any]] = []
+        for c in result.contacts:
+            email = (c.email or "").strip().lower()
+            if not email or "@" not in email:
+                continue
+            row: dict[str, Any] = {
+                "name": (c.name or "").strip() or email.split("@")[0],
+                "email": email,
+                "company": (c.company or "").strip() or email.split("@")[1].split(".")[0].title(),
+                "source": "imports_08",
+            }
+            machine = (c.machine_model or "").strip()
+            if machine:
+                row["machine_model"] = machine
+            out.append(row)
+        return out
+
+    async def _extract_from_imports_08_pdfs(self) -> list[dict[str, Any]]:
+        """Extract contacts from PDFs in 08_Sales_and_CRM via LLM (unstructured text)."""
+        contacts: list[dict[str, Any]] = []
+        if not _IMPORTS_08_DIR.is_dir():
+            return contacts
+        try:
+            from ira.brain.document_ingestor import read_pdf
+        except ImportError:
+            logger.debug("document_ingestor not available — skipping 08 PDF extraction")
+            return contacts
+        for path in sorted(_IMPORTS_08_DIR.glob("*.pdf")):
+            try:
+                text = await asyncio.to_thread(read_pdf, path)
+                if not text or len(text.strip()) < 50:
+                    continue
+                extracted = await self._extract_contacts_from_text_llm(text)
+                contacts.extend(extracted)
+            except Exception:
+                logger.debug("Failed to extract contacts from PDF %s", path.name, exc_info=True)
+        if contacts:
+            logger.info("Extracted %d contacts from imports_08 PDFs", len(contacts))
         return contacts
 
     # ── Data extraction: Takeout sent mail ───────────────────────────────
@@ -992,6 +1209,10 @@ class CRMPopulator:
                 for key in ("machine_model", "application", "contact_type_hint", "source"):
                     if c.get(key) and not existing.get(key):
                         existing[key] = c[key]
+                if c.get("quote_value") is not None and (existing.get("quote_value") is None or (c.get("quote_value") or 0) > (existing.get("quote_value") or 0)):
+                    existing["quote_value"] = c["quote_value"]
+                if c.get("stage") and c.get("stage", "").lower() in ("won", "delivered") and (existing.get("stage") or "").lower() not in ("won", "delivered"):
+                    existing["stage"] = c["stage"]
                 for key in ("has_interactions", "has_order", "has_quote"):
                     if c.get(key):
                         existing[key] = True

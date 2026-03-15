@@ -41,6 +41,8 @@ class QdrantConfig(BaseSettings):
     url: str = "http://localhost:6333"
     api_key: SecretStr = SecretStr("")
     collection: str = "ira_knowledge_v3"
+    # Request timeout in seconds (avoids indefinite hang when Qdrant is slow or unreachable)
+    timeout: float = 30.0
     # Optional: when set, every upsert and ensure_collection is mirrored to this
     # cluster so local and cloud stay in sync (dual-write).
     cloud_url: str = ""
@@ -185,7 +187,15 @@ class AppConfig(BaseSettings):
     api_secret_key: SecretStr = SecretStr("")
     cors_origins: str = "http://localhost:3000"
     react_max_iterations: int = 8
+    # Total request timeout (seconds). Typical presets: 30s, 2min=120, 5min=300, 10min=600, 20min=1200.
+    # Future: Ira/Athena can choose by request type (e.g. learning model for time-to-complete).
+    pipeline_timeout: int = 600
+    # Per-sub-agent "slot": each parallel agent has this long to return best answer.
     agent_timeout: int = 90
+    # Max sub-agents running in parallel (e.g. 5); Athena gets responses from up to this many at once.
+    max_parallel_agents: int = 5
+    # Athena's timeout to package the final answer (LLM synthesis) for Cursor/API.
+    athena_synthesis_timeout: int = 90
     mem0_timeout: float = 15.0
     neo4j_max_pool_size: int = 50
 
@@ -198,12 +208,16 @@ class AppConfig(BaseSettings):
     mnemon_semantic_check: bool = False
     legacy_quarantine_strict: bool = False
 
+    # Optional override for Hugging Face hub cache (e.g. when default cache disk is full)
+    hf_cache_dir: str = ""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_nested_delimiter="__",  # so APP__FAITHFULNESS_HARD_THRESHOLD loads app.faithfulness_hard_threshold
     )
 
     llm: LLMConfig = LLMConfig()

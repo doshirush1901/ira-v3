@@ -41,6 +41,7 @@ import typer
 from rich.console import Console
 from ira.exceptions import ConfigurationError, IraError
 from ira.service_keys import ServiceKey as SK
+from ira.systems.data_dir_lock import data_dir_lock
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
@@ -281,11 +282,16 @@ async def _process_request_collect_steps(
 ) -> tuple[str, list[str], list[str]]:
     """Run pipeline and collect progress events as a list of step lines (for --json)."""
     steps: list[str] = []
+    # Manus-style: show that Ira is working as soon as we start
+    err_console.print("[bold green]Ira is thinking…[/bold green]")
+    err_console.print("[dim]  Running full pipeline (routing, agents, retrieval).[/dim]")
 
     async def on_progress(event: dict[str, Any]) -> None:
         line = _progress_event_to_step_line(event)
         if line and (not steps or steps[-1] != line):
             steps.append(line)
+            # Show what Ira is doing (Manus-style) when using --json so Cursor/scripts see live progress
+            err_console.print(f"[dim]  {line}[/dim]")
 
     response, agents_used = await pipeline.process_request(
         raw_input=raw_input,
@@ -329,7 +335,7 @@ def _build_pantheon() -> tuple[Any, dict[str, Any]]:
     mem0_key = settings.memory.api_key.get_secret_value()
     if mem0_key:
         try:
-            from mem0 import MemoryClient
+            from mem0 import MemoryClient  # type: ignore[import-untyped]
             mem0_client = MemoryClient(api_key=mem0_key)
         except (ConfigurationError, Exception):
             logger.warning("Mem0 init failed — continuing without conversational memory")
@@ -476,6 +482,15 @@ async def _build_pipeline(
         SK.DATA_EVENT_BUS: shared_services.get(SK.DATA_EVENT_BUS),
         SK.AGENT_JOURNAL: agent_journal,
     })
+
+    # Inject email processor when running from CLI so agents can use search_emails/read_email_thread
+    try:
+        digestive, _, _ = _build_digestive()
+        email_processor = _build_email_processor(pantheon, digestive, shared_services)
+        pantheon.inject_services({SK.EMAIL_PROCESSOR: email_processor})
+        logger.debug("CLI: email processor injected — mailbox access enabled")
+    except Exception as e:
+        logger.debug("CLI: email processor not available (mailbox access disabled): %s", e)
 
     nemesis = pantheon.get_agent("nemesis")
     if nemesis is not None and hasattr(nemesis, "configure"):
@@ -678,7 +693,12 @@ def chat(
                 console.print(Panel(Markdown(response), title="Ira", border_style="green"))
                 console.print()
 
-    _run(_session())
+    try:
+        with data_dir_lock():
+            _run(_session())
+    except RuntimeError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
     console.print("\n[dim]Session ended.[/dim]")
 
 
@@ -719,11 +739,16 @@ def ask(
             out = {"response": response, "agents_consulted": agents_used or []}
             if steps:
                 out["steps"] = steps
-            print(json.dumps(out))
+            print(json.dumps(out), flush=True)
         else:
             console.print(Panel(Markdown(response), title="Ira", border_style="green"))
 
-    _run(_ask())
+    try:
+        with data_dir_lock():
+            _run(_ask())
+    except RuntimeError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -796,7 +821,12 @@ def task(
             available = False
         return _Dummy()
 
-    _run(_task())
+    try:
+        with data_dir_lock():
+            _run(_task())
+    except RuntimeError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -2711,13 +2741,19 @@ def graph_backfill_from_qdrant(
         "-s",
         help="Only process chunks with this source_category (e.g. takeout_email_protein).",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        "-r",
+        help="Continue from last saved offset (data/.graph_backfill_state.json). Use after interrupt or reboot.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Sync Qdrant → Neo4j: scroll existing chunks, extract entities/relationships, write to graph.
 
     Uses the same extraction as ingest (MERGE so duplicates are safe). Run after restoring
     Qdrant or to re-run extraction over all chunk content. Can take a long time on large
-    collections; use --max-chunks for a trial run.
+    collections; use --max-chunks for a trial run. Use --resume to continue after an interrupt.
     """
     _configure_logging(verbose)
     # Show backfill progress at INFO even when not --verbose (so it doesn't look stuck)
@@ -2741,6 +2777,7 @@ def graph_backfill_from_qdrant(
                 max_chunks=max_chunks,
                 batch_size=batch_size,
                 source_category=source_category,
+                resume=resume,
             )
             console.print("[green]Backfill complete.[/green]")
             for k, v in stats.items():
@@ -3064,14 +3101,15 @@ def graduate(
 @app.command("populate-crm")
 def populate_crm(
     dry_run: bool = typer.Option(False, "--dry-run", help="Classify contacts but don't insert into CRM."),
-    source: str = typer.Option("all", "--source", "-s", help="Data source: all, gmail, kb, neo4j, imports, imports_07, takeout_sent."),
+    source: str = typer.Option("all", "--source", "-s", help="Data source: all, gmail, kb, neo4j, imports, imports_07, imports_08, takeout_sent."),
     no_classify: bool = typer.Option(False, "--no-classify", help="Skip Delphi/KB classification; insert all as LEAD_NO_INTERACTIONS (use when Qdrant is down)."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Classify contacts and populate the CRM with eligible entries.
 
     Extracts contacts from Gmail, Qdrant KB, Neo4j, data/imports/24_WebSite_Leads (imports),
-    data/imports/07_Leads_and_Contacts and Single Station xlsx (imports_07), and/or
+    data/imports/07_Leads_and_Contacts and Single Station xlsx (imports_07),
+    data/imports/08_Sales_and_CRM (imports_08), and/or
     data/takeout_ingest/*.mbox sent mail (takeout_sent). For imports, contact type is
     taken from lead context files; otherwise Delphi classifies.
     Only live customers, past customers, and sales leads are inserted.
@@ -3137,7 +3175,13 @@ def populate_crm(
         table.add_row("Total extracted", str(stats["total_extracted"]))
         table.add_row("Classified", str(stats["classified"]))
         table.add_row("Inserted into CRM", str(stats["inserted"]))
+        table.add_row("Deals updated", str(stats.get("deals_updated", 0)))
         table.add_row("Skipped (duplicate)", str(stats["skipped_duplicate"]))
+        dup_deals = stats.get("duplicates_with_deals", 0) or 0
+        dup_data = stats.get("duplicates_with_import_data", 0) or 0
+        if dup_deals > 0 or dup_data > 0:
+            table.add_row("  ↳ duplicates w/ deals", str(dup_deals))
+            table.add_row("  ↳ duplicates w/ import data", str(dup_data))
         table.add_row("Skipped (rejected)", str(stats["skipped_rejected"]))
         table.add_row("Skipped (no email)", str(stats["skipped_no_email"]))
         table.add_row("Errors", str(stats["errors"]))
@@ -3944,7 +3988,7 @@ def health(
 
 @qdrant_app.command("sync-to-cloud")
 def qdrant_sync_to_cloud(
-    batch_size: int = typer.Option(100, "--batch-size", help="Points per scroll/upsert batch."),
+    batch_size: int = typer.Option(100, "--batch-size", help="Points per scroll batch (use 50 if Cloud returns payload/request size errors)."),
     max_points: int | None = typer.Option(None, "--max-points", help="Cap total points to sync (default: all)."),
 ) -> None:
     """Copy local Qdrant collection to cloud (one-time migration).

@@ -26,7 +26,12 @@ from ira.brain.quality_filter import QualityFilter
 from ira.brain.qdrant_manager import QdrantManager
 from ira.data.models import Email, KnowledgeItem
 from ira.prompt_loader import load_prompt
-from ira.schemas.llm_outputs import DigestiveSummary, EmailMetadata, NutrientClassification
+from ira.schemas.llm_outputs import (
+    DigestiveSummary,
+    EmailMetadata,
+    ExtractedContacts,
+    NutrientClassification,
+)
 from ira.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,7 @@ logger = logging.getLogger(__name__)
 _NUTRIENT_SYSTEM_PROMPT = load_prompt("digestive_nutrient")
 _SUMMARIZE_SYSTEM_PROMPT = load_prompt("digestive_summarize")
 _EMAIL_META_SYSTEM_PROMPT = load_prompt("digestive_email_meta")
+_EXTRACT_CONTACTS_SYSTEM_PROMPT = load_prompt("digestive_extract_contacts")
 
 
 class DigestiveSystem:
@@ -541,6 +547,44 @@ class DigestiveSystem:
             max_tokens=8192,
         )
         return result.model_dump()
+
+    @observe()
+    async def extract_contacts_from_text(self, text: str) -> list[dict[str, Any]]:
+        """Use the LLM to find names, emails, companies, and machine models in raw text.
+
+        For use with unstructured documents (e.g. PDFs, memos in 08_Sales_and_CRM)
+        where regex/table parsing fails. Returns a list of contact dicts suitable
+        for the CRM populator (keys: name, email, company, machine_model).
+        """
+        if not text or len(text.strip()) < 20:
+            return []
+        if self._llm._openai is None:
+            logger.warning("No OpenAI client — skipping contact extraction")
+            return []
+        # Cap input size to avoid token overflow
+        prepared = text[:15_000].strip()
+        result = await self._llm.generate_structured(
+            _EXTRACT_CONTACTS_SYSTEM_PROMPT,
+            prepared,
+            ExtractedContacts,
+            name="digestive.extract_contacts",
+            max_tokens=4096,
+        )
+        out: list[dict[str, Any]] = []
+        for c in result.contacts:
+            email = (c.email or "").strip().lower()
+            if not email or "@" not in email:
+                continue
+            row: dict[str, Any] = {
+                "name": (c.name or "").strip() or email.split("@")[0],
+                "email": email,
+                "company": (c.company or "").strip() or email.split("@")[1].split(".")[0].title(),
+            }
+            machine = (c.machine_model or "").strip()
+            if machine:
+                row["machine_model"] = machine
+            out.append(row)
+        return out
 
     async def batch_ingest(self, items: list[dict[str, str]]) -> dict[str, Any]:
         """Process multiple items, logging progress and handling errors."""

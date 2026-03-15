@@ -476,6 +476,11 @@ class BaseAgent(ABC):
         before: str = "",
         max_results: str = "10",
     ) -> str:
+        _email_scope = self._context.get("email_scope", "both") if self._context else "both"
+        if _email_scope == "no_email":
+            return "Email search skipped (query does not require email data). Use search_knowledge for KB results."
+        if _email_scope == "imported_email":
+            return "Live email search skipped (using imported/indexed email via KB). Use search_knowledge for faster results from Qdrant."
         ep = self._services[SK.EMAIL_PROCESSOR]
         try:
             emails = await ep.search_emails(
@@ -608,8 +613,10 @@ class BaseAgent(ABC):
 
     _RETRIEVAL_TOOLS: frozenset[str] = frozenset({
         "search_knowledge", "recall_memory", "recall_episodes",
-        "search_emails", "ask_agent", "web_search",
+        "search_emails", "read_email_thread", "ask_agent", "web_search", "scrape_url",
     })
+    # Agents that may answer without retrieval: gatekeeper (clarify only), gap resolver (synthesis).
+    _GROUNDING_EXEMPT_AGENTS: frozenset[str] = frozenset({"sphinx", "gapper"})
 
     @staticmethod
     def _compute_grounding_score(scratchpad: list[dict[str, str]]) -> float:
@@ -778,6 +785,7 @@ class BaseAgent(ABC):
         """
         _progress = on_progress or (context or {}).get("_on_progress")
 
+        self._context = context or {}
         self.state = AgentState.THINKING
         self._last_grounding_score = 0.0
         self._services.pop("_delegation_depth", None)
@@ -808,7 +816,11 @@ class BaseAgent(ABC):
             if "final_answer" in decision:
                 self.state = AgentState.RESPONDING
                 self._last_grounding_score = self._compute_grounding_score(scratchpad)
-                if self._last_grounding_score == 0.0 and len(decision["final_answer"]) > 100:
+                if (
+                    self._last_grounding_score == 0.0
+                    and len(decision["final_answer"]) > 100
+                    and self.name not in BaseAgent._GROUNDING_EXEMPT_AGENTS
+                ):
                     logger.warning(
                         "GROUNDING | %s answered without retrieval tools — hallucination risk",
                         self.name,
@@ -978,9 +990,8 @@ class BaseAgent(ABC):
     async def scrape_url(self, url: str, *, max_chars: int = 8000) -> str:
         """Fetch a URL and return its content as clean markdown.
 
-        Uses Firecrawl API when configured (JS rendering, anti-bot, clean
-        markdown output).  Falls back to Crawl4AI when the key is absent
-        or the Firecrawl call fails.
+        Order: Firecrawl (if FIRECRAWL_API_KEY) → Jina Reader (no key) →
+        Crawl4AI (Playwright) → web_search fallback.
         """
         firecrawl_key = get_settings().firecrawl.api_key.get_secret_value()
         if firecrawl_key:
@@ -1001,11 +1012,28 @@ class BaseAgent(ABC):
                         return text[:max_chars]
             except Exception as exc:
                 logger.warning(
-                    "Firecrawl failed for %s in %s, falling back to Crawl4AI: %s",
+                    "Firecrawl failed for %s in %s, trying next scraper: %s",
                     url, self.name, exc,
                 )
 
+        # Jina Reader: no API key for basic use (https://jina.ai/reader/)
+        text = await self._scrape_url_jina(url, max_chars=max_chars)
+        if text:
+            return text
         return await self._scrape_url_crawl4ai(url, max_chars=max_chars)
+
+    async def _scrape_url_jina(self, url: str, *, max_chars: int = 8000) -> str:
+        """Jina Reader: GET r.jina.ai/<url> returns markdown. No API key for basic use."""
+        try:
+            async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+                resp = await client.get(f"https://r.jina.ai/{url}")
+                resp.raise_for_status()
+                text = (resp.text or "").strip()
+                if text and len(text) > 100:
+                    return text[:max_chars]
+        except Exception as exc:
+            logger.debug("Jina Reader failed for %s: %s", url, exc)
+        return ""
 
     async def _scrape_url_crawl4ai(self, url: str, *, max_chars: int = 8000) -> str:
         """Crawl4AI fallback for scrape_url."""
@@ -1019,18 +1047,48 @@ class BaseAgent(ABC):
             )
             async with AsyncWebCrawler() as crawler:
                 result = await crawler.arun(url=url, config=config)
-                if result.success and result.markdown_v2:
-                    text = result.markdown_v2.raw_markdown or result.markdown or ""
-                elif result.success and result.markdown:
-                    text = result.markdown
-                else:
+                if not result.success:
                     return f"Failed to scrape {url}: {result.error_message or 'unknown error'}"
+                # Crawl4AI 0.8+: markdown is MarkdownGenerationResult with .raw_markdown; markdown_v2 removed
+                md = getattr(result, "markdown", None)
+                if md is not None and hasattr(md, "raw_markdown") and getattr(md, "raw_markdown", None):
+                    text = md.raw_markdown
+                elif isinstance(md, str):
+                    text = md
+                else:
+                    text = ""
+                if not text:
+                    return f"Failed to scrape {url}: no markdown content"
                 return text[:max_chars]
         except ImportError:
-            return "Crawl4AI not installed and Firecrawl not configured."
+            return await self._scrape_url_web_search_fallback(url, max_chars)
         except Exception as exc:
             logger.warning("scrape_url (Crawl4AI) failed for %s in %s: %s", url, self.name, exc)
-            return f"Scrape error: {exc}"
+            return await self._scrape_url_web_search_fallback(url, max_chars)
+
+    async def _scrape_url_web_search_fallback(self, url: str, max_chars: int = 8000) -> str:
+        """When Firecrawl and Crawl4AI fail, use web_search to get snippets about the URL."""
+        try:
+            # Search for the URL or the domain so we return something useful
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc or url
+            query = f"site:{domain}" if domain else url
+            results = await self.web_search(query, max_results=5)
+            if not results:
+                return f"Scrape and search fallback had no results for {url}. Install Playwright (playwright install) or set FIRECRAWL_API_KEY for better scraping."
+            parts = []
+            for r in results:
+                title = r.get("title") or ""
+                snippet = r.get("snippet") or ""
+                link = r.get("url") or ""
+                if snippet or title:
+                    parts.append(f"**{title}**\n{snippet}\nSource: {link}")
+            out = "\n\n".join(parts)[:max_chars]
+            return out or f"No content from search for {url}."
+        except Exception as exc:
+            logger.warning("scrape_url web_search fallback failed for %s: %s", url, exc)
+            return f"Scrape error and fallback failed: {exc}. Install Playwright (playwright install) or set FIRECRAWL_API_KEY for URL scraping."
 
     # ── web search ────────────────────────────────────────────────────────
 
@@ -1155,13 +1213,35 @@ class BaseAgent(ABC):
         return "\n".join(lines)
 
     def _parse_json_response(self, raw: str) -> dict[str, Any] | list[Any]:
-        """Attempt to parse an LLM response as JSON, stripping markdown fences."""
+        """Attempt to parse an LLM response as JSON, stripping markdown fences. Returns {} on failure."""
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
             cleaned = "\n".join(lines)
-        return json.loads(cleaned)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+        # Try to extract first complete {...} or [...]
+        for open_b, close_b in (("{", "}"), ("[", "]")):
+            i = cleaned.find(open_b)
+            if i < 0:
+                continue
+            depth = 0
+            for j in range(i, len(cleaned)):
+                if cleaned[j] == open_b:
+                    depth += 1
+                elif cleaned[j] == close_b:
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(cleaned[i : j + 1])
+                        except json.JSONDecodeError:
+                            break
+                        break
+        logger.debug("_parse_json_response could not parse JSON in %s", self.name)
+        return {}
 
     # ── skill execution ──────────────────────────────────────────────────
 

@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any, Callable, Awaitable
 
+from ira.agents.aegis import Aegis
+from ira.agents.aletheia import Aletheia
 from ira.agents.alexandros import Alexandros
 from ira.agents.arachne import Arachne
 from ira.agents.artemis import Artemis
@@ -24,22 +26,24 @@ from ira.agents.calliope import Calliope
 from ira.agents.chiron import Chiron
 from ira.agents.clio import Clio
 from ira.agents.delphi import Delphi
+from ira.agents.gapper import Gapper
+from ira.agents.graphe import Graphe
 from ira.agents.hephaestus import Hephaestus
 from ira.agents.hera import Hera
 from ira.agents.hermes import Hermes
 from ira.agents.iris import Iris
+from ira.agents.metis import Metis
+from ira.agents.mnemon import Mnemon
 from ira.agents.mnemosyne import Mnemosyne
 from ira.agents.nemesis import Nemesis
 from ira.agents.plutus import Plutus
+from ira.agents.populator import Populator
 from ira.agents.prometheus import Prometheus
 from ira.agents.quotebuilder import Quotebuilder
 from ira.agents.sophia import Sophia
 from ira.agents.sphinx import Sphinx
 from ira.agents.themis import Themis
 from ira.agents.tyche import Tyche
-from ira.agents.gapper import Gapper
-from ira.agents.mnemon import Mnemon
-from ira.agents.populator import Populator
 from ira.agents.vera import Vera
 from ira.agents.base_agent import BaseAgent
 from ira.brain.deterministic_router import DeterministicRouter
@@ -58,6 +62,7 @@ _AGENT_CLASSES: list[type[BaseAgent]] = [
     Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
     Nemesis, Arachne, Alexandros, Hera, Atlas, Asclepius, Chiron,
     Cadmus, Quotebuilder, Artemis, Populator, Gapper, Mnemon,
+    Aegis, Aletheia, Graphe, Metis,
 ]
 
 
@@ -178,13 +183,14 @@ class Pantheon:
 
         if on_progress:
             await on_progress({"type": "synthesizing", "agent": "athena"})
+        synthesis_timeout = get_settings().app.athena_synthesis_timeout
         try:
             return await asyncio.wait_for(
                 self._athena.handle(query, {"agent_responses": responses}),
-                timeout=self._SYNTHESIS_TIMEOUT,
+                timeout=synthesis_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", self._SYNTHESIS_TIMEOUT)
+            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", synthesis_timeout)
             return "\n\n---\n\n".join(
                 f"**{name}:** {resp}" for name, resp in responses.items()
             )
@@ -216,13 +222,14 @@ class Pantheon:
 
         if on_progress:
             await on_progress({"type": "synthesizing", "agent": "athena"})
+        synthesis_timeout = get_settings().app.athena_synthesis_timeout
         try:
             return await asyncio.wait_for(
                 self._athena.handle(query, {"agent_responses": responses}),
-                timeout=self._SYNTHESIS_TIMEOUT,
+                timeout=synthesis_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", self._SYNTHESIS_TIMEOUT)
+            logger.warning("Athena synthesis timed out after %ds, returning concatenated responses", synthesis_timeout)
             return "\n\n---\n\n".join(
                 f"**{name}:** {resp}" for name, resp in responses.items()
             )
@@ -257,9 +264,6 @@ class Pantheon:
 
     # ── helpers ──────────────────────────────────────────────────────────
 
-    _AGENT_TIMEOUT = get_settings().app.agent_timeout
-    _SYNTHESIS_TIMEOUT = 90
-
     async def _gather_responses(
         self,
         agent_names: list[str],
@@ -267,14 +271,16 @@ class Pantheon:
         context: dict[str, Any],
         on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, str]:
-        """Run agents concurrently and collect their responses.
+        """Run agents concurrently (up to max_parallel_agents at a time) and collect their responses.
 
-        Each agent gets a per-agent timeout to prevent runaway execution.
-        An optional *on_progress* callback receives ``agent_started`` and
-        ``agent_done`` events for live streaming.  The callback is also
-        threaded into agent context as ``_on_progress`` so the ReAct loop
-        can emit ``tool_called`` and ``agent_thinking`` events.
+        Each agent gets a per-agent "slot" timeout (agent_timeout) to return the best possible answer.
+        Athena receives all responses then has her own synthesis timeout to package the answer for Cursor/API.
         """
+        settings = get_settings()
+        agent_timeout = settings.app.agent_timeout
+        max_parallel = max(1, settings.app.max_parallel_agents)
+        semaphore = asyncio.Semaphore(max_parallel)
+
         ctx = {**context}
         if on_progress and "_on_progress" not in ctx:
             ctx["_on_progress"] = on_progress
@@ -282,47 +288,48 @@ class Pantheon:
         responses: dict[str, str] = {}
 
         async def _run_agent(name: str) -> tuple[str, str]:
-            agent = self._agents.get(name)
-            if not agent:
-                return name, f"(Agent '{name}' not found)"
-            if on_progress:
-                await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
-            _timeout = getattr(agent, "timeout", None) or self._AGENT_TIMEOUT
-            try:
-                response = await asyncio.wait_for(
-                    agent.handle(query, {**ctx}),
-                    timeout=_timeout,
-                )
-                result = name, response
-            except asyncio.TimeoutError:
-                logger.warning("Agent '%s' timed out after %ds", name, _timeout)
-                _journal = ctx.get("_agent_journal")
-                if _journal is not None:
-                    try:
-                        await _journal.log_action(
-                            agent_name=name,
-                            action_text=f"Handled query: {query[:100]}",
-                            outcome="timeout",
-                        )
-                    except Exception:
-                        logger.debug("AgentJournal.log_action (timeout) failed for %s", name)
-                result = name, f"(Agent '{name}' timed out after {_timeout}s)"
-            except (ToolExecutionError, Exception):
-                logger.exception("Agent '%s' failed", name)
-                _journal = ctx.get("_agent_journal")
-                if _journal is not None:
-                    try:
-                        await _journal.log_action(
-                            agent_name=name,
-                            action_text=f"Handled query: {query[:100]}",
-                            outcome="error",
-                        )
-                    except Exception:
-                        logger.debug("AgentJournal.log_action (error) failed for %s", name)
-                result = name, f"(Agent '{name}' encountered an error)"
-            if on_progress:
-                await on_progress({"type": "agent_done", "agent": result[0], "preview": result[1][:200]})
-            return result
+            async with semaphore:  # Cap parallel sub-agents (e.g. up to 5 at a time)
+                agent = self._agents.get(name)
+                if not agent:
+                    return name, f"(Agent '{name}' not found)"
+                if on_progress:
+                    await on_progress({"type": "agent_started", "agent": name, "role": getattr(agent, "role", "")})
+                _timeout = getattr(agent, "timeout", None) or agent_timeout
+                try:
+                    response = await asyncio.wait_for(
+                        agent.handle(query, {**ctx}),
+                        timeout=_timeout,
+                    )
+                    result = name, response
+                except asyncio.TimeoutError:
+                    logger.warning("Agent '%s' timed out after %ds", name, _timeout)
+                    _journal = ctx.get("_agent_journal")
+                    if _journal is not None:
+                        try:
+                            await _journal.log_action(
+                                agent_name=name,
+                                action_text=f"Handled query: {query[:100]}",
+                                outcome="timeout",
+                            )
+                        except Exception:
+                            logger.debug("AgentJournal.log_action (timeout) failed for %s", name)
+                    result = name, f"(Agent '{name}' timed out after {_timeout}s)"
+                except (ToolExecutionError, Exception):
+                    logger.exception("Agent '%s' failed", name)
+                    _journal = ctx.get("_agent_journal")
+                    if _journal is not None:
+                        try:
+                            await _journal.log_action(
+                                agent_name=name,
+                                action_text=f"Handled query: {query[:100]}",
+                                outcome="error",
+                            )
+                        except Exception:
+                            logger.debug("AgentJournal.log_action (error) failed for %s", name)
+                    result = name, f"(Agent '{name}' encountered an error)"
+                if on_progress:
+                    await on_progress({"type": "agent_done", "agent": result[0], "preview": result[1][:200]})
+                return result
 
         results = await asyncio.gather(
             *[_run_agent(name) for name in agent_names],
@@ -337,18 +344,29 @@ class Pantheon:
         return responses
 
     def _parse_agent_list(self, routing_response: str) -> list[str]:
-        """Try to extract agent names from Athena's routing JSON."""
+        """Try to extract agent names from Athena's routing JSON or from plain text."""
+        text = (routing_response or "").strip()
         try:
-            data = json.loads(routing_response)
+            data = json.loads(text)
             if isinstance(data, dict) and "agents" in data:
                 names = data["agents"]
-                return [
+                out = [
                     n.lower() for n in names
                     if isinstance(n, str) and n.lower() in self._agents
                 ]
+                if out:
+                    return out
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Failed to parse Athena routing response as JSON", exc_info=True)
-        return []
+            logger.debug(
+                "Athena routing response was not JSON; using fallback (agent names from text or athena).",
+            )
+        # Fallback: find known agent names mentioned in the response
+        lower = text.lower()
+        found = [name for name in self._agents if name in lower]
+        if found:
+            return found
+        # Last resort: let Athena handle the query alone so we still return an answer
+        return ["athena"]
 
     # ── skill execution ──────────────────────────────────────────────────
 

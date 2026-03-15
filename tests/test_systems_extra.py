@@ -489,7 +489,7 @@ class TestCRMPopulator:
             from ira.systems.crm_populator import CRMPopulator
             pop = CRMPopulator(delphi=delphi, crm=crm, dry_run=True)
             pop._extract_from_gmail = AsyncMock(return_value=[])
-            pop._extract_from_qdrant = AsyncMock(return_value=[])
+            pop._extract_from_kb = AsyncMock(return_value=[])
             pop._extract_from_neo4j = AsyncMock(return_value=[])
 
             await pop.populate(sources=["gmail"])
@@ -505,11 +505,26 @@ class TestCRMPopulator:
             from ira.systems.crm_populator import CRMPopulator
             pop = CRMPopulator(delphi=delphi, crm=crm, dry_run=True)
             pop._extract_from_gmail = AsyncMock(return_value=[])
-            pop._extract_from_qdrant = AsyncMock(return_value=[])
+            pop._extract_from_kb = AsyncMock(return_value=[])
             pop._extract_from_neo4j = AsyncMock(return_value=[])
 
             await pop.populate(sources=["gmail"])
             pop._extract_from_gmail.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_populate_imports_08_calls_both_xlsx_and_pdfs(self, mock_settings):
+        with patch("ira.systems.crm_populator.get_settings", return_value=mock_settings), \
+             patch("ira.config.get_settings", return_value=mock_settings):
+            delphi = AsyncMock()
+            crm = AsyncMock()
+            from ira.systems.crm_populator import CRMPopulator
+            pop = CRMPopulator(delphi=delphi, crm=crm, dry_run=True)
+            pop._extract_from_imports_08 = AsyncMock(return_value=[])
+            pop._extract_from_imports_08_pdfs = AsyncMock(return_value=[])
+
+            await pop.populate(sources=["imports_08"])
+            pop._extract_from_imports_08.assert_awaited_once()
+            pop._extract_from_imports_08_pdfs.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_event_bus_wiring(self, mock_settings):
@@ -522,3 +537,66 @@ class TestCRMPopulator:
             from ira.systems.crm_populator import CRMPopulator
             pop = CRMPopulator(delphi=delphi, crm=crm, event_bus=event_bus)
             assert pop._event_bus is event_bus
+
+    def test_stage_from_import_won_delivered(self):
+        from ira.systems.crm_populator import _stage_from_import
+        from ira.data.models import DealStage
+
+        assert _stage_from_import("won") == DealStage.WON
+        assert _stage_from_import("delivered") == DealStage.WON
+        assert _stage_from_import("closed won") == DealStage.WON
+        assert _stage_from_import("WON") == DealStage.WON
+
+    def test_stage_from_import_lost_new_contacted(self):
+        from ira.systems.crm_populator import _stage_from_import
+        from ira.data.models import DealStage
+
+        assert _stage_from_import("lost") == DealStage.LOST
+        assert _stage_from_import("new") == DealStage.NEW
+        assert _stage_from_import("contacted") == DealStage.CONTACTED
+        assert _stage_from_import(None) == DealStage.CONTACTED
+        assert _stage_from_import("") == DealStage.CONTACTED
+
+    def test_map_row_to_contact_includes_quote_value_and_stage(self):
+        from ira.systems.crm_populator import CRMPopulator
+
+        row = {
+            "email": "test@acme.com",
+            "name": "Test User",
+            "company": "Acme",
+            "quote_value": "125000.50",
+            "stage": "won",
+        }
+        out = CRMPopulator._map_row_to_contact(row, {}, "imports_08")
+        assert out is not None
+        assert out["email"] == "test@acme.com"
+        assert out["quote_value"] == 125000.50
+        assert out["stage"] == "won"
+
+    def test_map_row_to_contact_order_value_and_machine_model(self):
+        from ira.systems.crm_populator import CRMPopulator
+
+        row = {
+            "email": "sales@example.co",
+            "company": "Example Co",
+            "machine_model": "PF1-C-3030",
+            "order_value": 50000,
+        }
+        out = CRMPopulator._map_row_to_contact(row, {}, "imports_08")
+        assert out is not None
+        assert out["email"] == "sales@example.co"
+        assert out["quote_value"] == 50000.0
+        assert out["machine_model"] == "PF1-C-3030"
+
+    def test_map_row_to_contact_application_target_applications(self):
+        from ira.systems.crm_populator import CRMPopulator
+
+        row = {
+            "email": "app@industry.com",
+            "company": "Industry Co",
+            "target_applications": "packaging, automotive",
+        }
+        out = CRMPopulator._map_row_to_contact(row, {}, "imports_08")
+        assert out is not None
+        assert out["email"] == "app@industry.com"
+        assert out["application"] == "packaging, automotive"

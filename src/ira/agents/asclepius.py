@@ -180,8 +180,9 @@ class Asclepius(BaseAgent):
         if self._db is not None:
             return self._db
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(_DB_PATH))
+        self._db = await aiosqlite.connect(str(_DB_PATH), timeout=30.0)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=30000")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS punch_items (

@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import deque
 from typing import Any
@@ -178,19 +179,23 @@ class RequestPipeline:
         """Run the full 11-step pipeline with concurrency and timeout guards."""
         async with self._request_semaphore:
             try:
+                from ira.config import get_settings
+                _timeout = get_settings().app.pipeline_timeout
                 return await asyncio.wait_for(
                     self._process_request_inner(
                         raw_input, channel, sender_id, metadata, on_progress,
                     ),
-                    timeout=self._REQUEST_TIMEOUT,
+                    timeout=_timeout,
                 )
             except asyncio.TimeoutError:
+                from ira.config import get_settings
+                _timeout = get_settings().app.pipeline_timeout
                 logger.error(
                     "Pipeline timed out after %ds for sender=%s",
-                    self._REQUEST_TIMEOUT, sender_id,
+                    _timeout, sender_id,
                 )
                 return (
-                    f"I'm sorry, the request timed out after {self._REQUEST_TIMEOUT} seconds. "
+                    f"I'm sorry, the request timed out after {_timeout} seconds. "
                     "Please try a simpler question or ask about one topic at a time.",
                     ["timeout"],
                 )
@@ -473,6 +478,10 @@ class RequestPipeline:
             logger.info("ROUTE LLM | delegating to Athena")
         _record_stage("route")
 
+        # ── 5.1 RESOLVE EMAIL SCOPE ───────────────────────────────
+        email_scope = self._resolve_email_scope(resolved_input)
+        logger.info("EMAIL SCOPE | %s", email_scope)
+
         # ── 5.5 ENRICH CONTEXT ─────────────────────────────────────
         if on_progress:
             await on_progress({"type": "enriching"})
@@ -581,6 +590,7 @@ class RequestPipeline:
             enrichment="\n\n".join(enrichment_parts) if enrichment_parts else "",
         )
         context: dict[str, Any] = ctx.model_dump()
+        context["email_scope"] = email_scope
         if self._agent_journal is not None:
             context["_agent_journal"] = self._agent_journal
 
@@ -604,6 +614,51 @@ class RequestPipeline:
         trace["route"] = route_method
         trace["agents"] = agents_used
         logger.info("EXECUTE | route=%s agents=%s", route_method, agents_used)
+
+        # ── 6.1a COMPLIANCE CHECK (Aletheia) ─────────────────────────
+        aletheia = self._pantheon.get_agent("aletheia")
+        if aletheia is not None:
+            try:
+                provenance = await aletheia.check_provenance(raw_response)
+                if provenance.get("unverifiable"):
+                    _unverified = provenance["unverifiable"]
+                    _note = (
+                        "\n\n> **Provenance note:** "
+                        + f"{len(_unverified)} claim(s) could not be traced to a source: "
+                        + ", ".join(_unverified[:3])
+                        + ("..." if len(_unverified) > 3 else "")
+                        + "."
+                    )
+                    raw_response += _note
+                    if "aletheia" not in agents_used:
+                        agents_used.append("aletheia")
+                    logger.info("ALETHEIA | verdict=%s unverifiable=%d", provenance["verdict"], len(_unverified))
+            except Exception:
+                logger.exception("Aletheia compliance check failed")
+        _record_stage("compliance")
+
+        # ── 6.1b DLP CHECK (Aegis) ───────────────────────────────────
+        aegis = self._pantheon.get_agent("aegis")
+        if aegis is not None:
+            try:
+                dlp_result = await aegis.check_content(raw_response)
+                if dlp_result["verdict"] == "BLOCK":
+                    raw_response = (
+                        "I can't share this response as it contains confidential "
+                        "business data. Please rephrase your request."
+                    )
+                    logger.warning("AEGIS | BLOCK — response replaced")
+                elif dlp_result["verdict"] == "REVIEW_NEEDED":
+                    raw_response += (
+                        "\n\n> **Content note:** This response may contain "
+                        "sensitive data. Review before sharing externally."
+                    )
+                    logger.info("AEGIS | REVIEW_NEEDED — caveat appended")
+                if "aegis" not in agents_used:
+                    agents_used.append("aegis")
+            except Exception:
+                logger.exception("Aegis DLP check failed")
+        _record_stage("dlp")
 
         # ── 6.2 CORRECTION CHECK (Mnemon) ────────────────────────────
         mnemon = self._pantheon.get_agent("mnemon")
@@ -851,6 +906,24 @@ class RequestPipeline:
             except (LLMError, Exception):
                 logger.exception("InnerVoice reflection failed")
 
+        # ── 8.5 SOURCE LIMITATION NOTE ────────────────────────────────
+        _source_limitations: list[str] = []
+        for _au in agents_used:
+            _agent_resp = raw_response
+            if f"Agent '{_au}' timed out" in _agent_resp:
+                _source_limitations.append(f"{_au} timed out")
+            if f"Agent '{_au}' encountered an error" in _agent_resp:
+                _source_limitations.append(f"{_au} failed")
+        if "timeout" in agents_used:
+            _source_limitations.append("pipeline timed out")
+        if _source_limitations:
+            _limitation_note = (
+                "\n\n> **Note:** " + "; ".join(_source_limitations) + ". "
+                "This answer may be based on partial data."
+            )
+            raw_response += _limitation_note
+            logger.info("SOURCE LIMITATION | %s", _source_limitations)
+
         # ── 9. SHAPE ─────────────────────────────────────────────────
         if on_progress:
             await on_progress({"type": "shaping"})
@@ -882,19 +955,62 @@ class RequestPipeline:
         _record_stage("shape")
         logger.info("SHAPE | channel=%s len=%d", channel, len(shaped))
 
-        # ── 10. LEARN ────────────────────────────────────────────────
-        await self._learn(
-            contact_email=contact_email,
-            channel=channel,
-            raw_input=raw_input,
-            raw_response=raw_response,
-            route_method=route_method,
-            agents_used=agents_used,
-            active_goal=active_goal,
-            resolved_input=resolved_input,
+        # ── 9.5 LOG SESSION (Graphe) ─────────────────────────────────
+        graphe = self._pantheon.get_agent("graphe")
+        if graphe is not None:
+            try:
+                await graphe.log_turn(
+                    query=raw_input,
+                    agents_used=agents_used,
+                    response_summary=raw_response[:300],
+                )
+            except Exception:
+                logger.debug("Graphe session logging failed", exc_info=True)
+
+        # ── 9.6 STABILITY SCORING (Metis) ────────────────────────────
+        metis = self._pantheon.get_agent("metis")
+        _metis_note = ""
+        if metis is not None:
+            try:
+                metis_result = await metis.score_and_track(agents_used, raw_response)
+                if metis_result.get("should_announce_stable"):
+                    _metis_note = (
+                        f"\n\n---\n**Metis (Stability Monitor):** I think we are stable now "
+                        f"at max_rounds={metis_result['max_rounds']} "
+                        f"(rolling avg: {metis_result['rolling_avg']}/100). Confirm?"
+                    )
+                elif metis_result.get("should_report"):
+                    _metis_note = (
+                        f"\n\n---\n*Stability score: {metis_result['score']}/100 "
+                        f"(avg: {metis_result['rolling_avg']}/100, "
+                        f"max_rounds: {metis_result['max_rounds']})*"
+                    )
+            except Exception:
+                logger.debug("Metis scoring failed", exc_info=True)
+        if _metis_note:
+            shaped += _metis_note
+
+        # ── 10. LEARN (background) ───────────────────────────────────
+        # Run learning (Sophia, RealTimeObserver, etc.) in background so we return
+        # the response immediately; avoids timeout when using CLI/Cursor.
+        async def _learn_then_record() -> None:
+            await self._learn(
+                contact_email=contact_email,
+                channel=channel,
+                raw_input=raw_input,
+                raw_response=raw_response,
+                route_method=route_method,
+                agents_used=agents_used,
+                active_goal=active_goal,
+                resolved_input=resolved_input,
+            )
+            _record_stage("learn")
+            _push_timings()
+
+        _learn_task = asyncio.create_task(_learn_then_record())
+        _learn_task.add_done_callback(
+            lambda t: t.exception() and logger.warning("LEARN background task failed: %s", t.exception())
         )
-        _record_stage("learn")
-        _push_timings()
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
@@ -910,6 +1026,32 @@ class RequestPipeline:
         if self._redis is not None and self._redis.available:
             await self._redis.dedup_store(_redis_dedup_key, shaped, ttl_seconds=300)
         return shaped, agents_used
+
+    # ── Email scope resolver ─────────────────────────────────────────────
+
+    _LIVE_EMAIL_PATTERNS = re.compile(
+        r"(latest|recent|today|yesterday|new|unread|inbox|just sent|this morning|"
+        r"last\s+(hour|day|week)|what did .+ (say|send|write|reply))",
+        re.IGNORECASE,
+    )
+    _EMAIL_PATTERNS = re.compile(
+        r"(email|mail|thread|inbox|gmail|message from|correspondence|"
+        r"draft|reply|follow.?up email|send .+ email)",
+        re.IGNORECASE,
+    )
+
+    def _resolve_email_scope(self, query: str) -> str:
+        """Classify the query's email data scope: live_email, imported_email, both, or no_email."""
+        has_email_mention = bool(self._EMAIL_PATTERNS.search(query))
+        needs_live = bool(self._LIVE_EMAIL_PATTERNS.search(query))
+
+        if not has_email_mention:
+            return "no_email"
+        if needs_live and has_email_mention:
+            return "both"
+        if needs_live:
+            return "live_email"
+        return "imported_email"
 
     # ── Execution helpers ─────────────────────────────────────────────────
 

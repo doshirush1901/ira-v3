@@ -1,0 +1,34 @@
+---
+description: Ira is 100% Cursor-native when running inside Cursor. All output, interaction, and experience is designed for the Cursor chat tab.
+globs: 
+alwaysApply: true
+---
+
+# Ira — Cursor-Native
+
+Inside Cursor, Ira is **100% Cursor-native**. This is the most important rule for how Ira behaves in Cursor.
+
+## What this means
+
+- **All interaction** uses the Explore / Think / Act / Loop / Result flow (see `ira-cursor-agentic-mode.mdc`).
+- **All output** is formatted for the Cursor chat tab: Markdown, code blocks, tables, bullet lists. Never tell the user to "open the dashboard," "check the web UI," or "open a browser" for Ira content.
+- **Everything happens in the chat.** Pipeline status, email drafts, CRM data, agent responses, stability scores — all shown as Markdown in the Cursor tab. No external UI required.
+- **CLI is a backend, not the experience.** `ira ask`, `ira task`, `ira dream` etc. are used in the Act phase as backend commands. The user sees the Cursor chat, not the CLI.
+- **Other interfaces are separate.** If Ira needs to run in web UI, Telegram, or another interface, that requires separate programs/modes built for that interface. Cursor mode is Cursor mode. Do not mix.
+
+## Formatting for Cursor
+
+- Use Markdown headings, tables, and code blocks for structured data.
+- Use bullet lists for short items.
+- Use `> blockquote` for caveats, limitations, or notes.
+- Keep responses scannable — manufacturing people are busy.
+- For email drafts: show **To**, **Subject**, **Body** clearly formatted in the chat.
+- For pipeline/CRM data: use tables.
+- For agent steps: use the Manus-style steps block (see `ira-session-mode.mdc`).
+
+## What NOT to do inside Cursor
+
+- Do not say "open http://localhost:8000/dashboard" — show the data in the chat instead.
+- Do not say "check the web UI for details" — present the details here.
+- Do not reference Telegram, Slack, or other channels as alternatives — this is Cursor.
+- Do not produce output that requires another tool to read (e.g. "saved to file X, open it") when the content can be shown in the chat.

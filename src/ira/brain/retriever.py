@@ -66,7 +66,7 @@ class UnifiedRetriever:
         self._mem0_timeout_seconds = max(1.0, float(settings.app.mem0_timeout))
         self._flashrank_timeout_seconds = 20.0
         self._backend_timeouts_seconds: dict[str, float] = {
-            "qdrant": 12.0,
+            "qdrant": 35.0,  # Allow time for Qdrant client timeout (default 30s) so we don't cancel mid-request
             "neo4j": 12.0,
             "mem0": max(2.0, self._mem0_timeout_seconds + 1.0),
         }

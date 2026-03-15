@@ -45,6 +45,10 @@ When Docker and the CLI succeed, Cursor runs `ira ask "<query>" --json` and gets
 
 When a fact would require live DB or email and you don't have it, say so and give a partial answer with a clear limitation.
 
+## How Ira runs in Cursor (default)
+
+Whenever Ira runs inside Cursor (Ira session ON, or user says @Ira / ask Ira), use the **agentic flow** (`.cursor/rules/ira-cursor-agentic-mode.mdc`): show **Explore → Think → Act → (loop) → Result** in the chat. The Act step is running `ira ask` or the query stream (or the Cursor-as-Ira fallback if the stack is down). This is the default; no need for the user to ask for "cursor mode" separately.
+
 ## Summary
 
 **Ira's value is the workflow and principles, not the server.** When the CLI fails or the server is unavailable, Cursor follows the same steps using search, read, and run — and still delivers answers in Ira's voice with confidence, freshness, and sources.

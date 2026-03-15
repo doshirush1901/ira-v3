@@ -103,6 +103,43 @@ class RedisCache:
             logger.warning("Redis DELETE failed for %s", key, exc_info=True)
             return False
 
+    # ── hash (for pipeline clarification store) ───────────────────────────
+
+    async def hget(self, name: str, key: str) -> str | None:
+        """Get a field from a hash. Used by pipeline for pending_clarifications."""
+        if self._client is None:
+            return None
+        try:
+            raw = await self._client.hget(name, key)
+            if raw is None:
+                return None
+            return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        except aioredis.RedisError:
+            logger.warning("Redis HGET failed for %s %s", name, key, exc_info=True)
+            return None
+
+    async def hset(self, name: str, key: str, value: str) -> bool:
+        """Set a field in a hash."""
+        if self._client is None:
+            return False
+        try:
+            await self._client.hset(name, key, value)
+            return True
+        except aioredis.RedisError:
+            logger.warning("Redis HSET failed for %s %s", name, key, exc_info=True)
+            return False
+
+    async def hdel(self, name: str, key: str) -> bool:
+        """Remove a field from a hash."""
+        if self._client is None:
+            return False
+        try:
+            await self._client.hdel(name, key)
+            return True
+        except aioredis.RedisError:
+            logger.warning("Redis HDEL failed for %s %s", name, key, exc_info=True)
+            return False
+
     # ── JSON helpers ──────────────────────────────────────────────────────
 
     async def get_json(self, key: str) -> Any | None:

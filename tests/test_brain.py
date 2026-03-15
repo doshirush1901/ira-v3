@@ -321,9 +321,13 @@ class TestChunking:
     def test_overlap_produces_shared_tokens(self):
         import tiktoken
 
+        from ira.brain.document_ingestor import _chunk_text_tiktoken
+
         enc = tiktoken.get_encoding("cl100k_base")
         text = " ".join(f"w{i}" for i in range(300))
-        chunks = chunk_text(text, chunk_size=50, overlap=10)
+        # Test the tiktoken path directly: chunk_text() may use SemanticChunker
+        # (no token-overlap guarantee). Overlap semantics are in the tiktoken fallback.
+        chunks = _chunk_text_tiktoken(text, chunk_size=50, overlap=10)
 
         assert len(chunks) >= 2
         tokens_0 = enc.encode(chunks[0])

@@ -7,12 +7,12 @@ Ira v3 codebase. For Ira's identity and behavioral principles, see
 ## Repository Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes requests
-through an 11-stage pipeline, delegates to 27 specialist agents, and maintains
+through an 11-stage pipeline, delegates to 31 specialist agents, and maintains
 persistent memory across conversations.
 
 ```
 src/ira/
-  agents/       # 27 specialist agents + BaseAgent
+  agents/       # 31 specialist agents + BaseAgent
   brain/        # Retrieval, embeddings, graph, routing, pricing,
                 #   entity extraction (GLiNER), guardrails (32 modules)
   memory/       # 10 memory subsystems + dream mode + goal sweep
@@ -67,6 +67,10 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 | **Themis** | HR | Employees, headcount, policies, salary data |
 | **Tyche** | Forecasting | Pipeline forecasts, win/loss predictions, deal velocity |
 | **Vera** | Fact Checker | Verifies claims against KB, detects hallucinations |
+| **Aegis** | Content Safety / DLP | Scans outbound content for PII, confidential terms, data leakage; runs in pipeline before shaping |
+| **Aletheia** | Compliance / Provenance | Traces claims to sources (Qdrant, Neo4j, CRM); flags unverifiable assertions; runs in pipeline before shaping |
+| **Graphe** | Logger / Scribe | Records Cursor chat sessions to SQLite for dream/sleep learning; runs at end of pipeline |
+| **Metis** | Stability Monitor | Scores response quality (0-100), tracks rolling average, announces when system is stable; auto-adjusts max_rounds |
 
 ## Development Commands
 
@@ -111,6 +115,7 @@ poetry run ira email rescan --after 2023/01/01      # deep historical scan
 poetry run ira email rescan --dry-run --resume      # resume a previous scan
 
 # Optional: Run the API server (for web UI or HTTP integrations)
+# Only one Ira process (CLI or server) should use the same data dir at a time; see docs/TROUBLESHOOTING.md.
 poetry run uvicorn ira.interfaces.server:app --host 0.0.0.0 --port 8000 --limit-concurrency 5 --timeout-keep-alive 30
 
 # Web UI (Next.js) — requires API server

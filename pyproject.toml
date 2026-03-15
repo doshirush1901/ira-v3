@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ira"
-version = "3.4.0"
+version = "3.5.0"
 description = "Ira – Machinecraft AI Pantheon: a multi-agent AI system that runs a manufacturing company"
 authors = ["Machinecraft <rushabh@machinecraft.org>"]
 license = "Proprietary"
@@ -66,6 +66,7 @@ sentry-sdk = {version = ">=2.0", extras = ["fastapi"]}
 xlrd = "^2.0.2"
 aiofiles = ">=24.0"
 voyageai = "^0.3.0"
+filelock = ">=3.10"
 
 [tool.poetry.scripts]
 ira = "ira.interfaces.cli:app"

@@ -125,8 +125,8 @@ Use this when you want to keep writing to local Qdrant and have the same data in
 - **Sync fails with connection / auth errors**  
   Check URL (including `https://` and port `:6333`) and API key in Qdrant Cloud. Ensure the cluster is running and the key has write access.
 
-- **Cloud upsert fails during dual-write**  
-  Primary (local) write still succeeds. Check logs for the cloud error; cloud is retried once per batch. Fix cloud URL/key or network and continue; no automatic re-sync of failed batches (you can run `ira qdrant sync-to-cloud` again to re-copy from local if needed).
+- **Cloud upsert fails during dual-write or sync (payload/request size)**  
+  Primary (local) write still succeeds. Cloud writes use smaller batches (50 points) to reduce payload size. If you still see request-size or 400 errors, run sync with a smaller batch: `ira qdrant sync-to-cloud --batch-size 50` (or 25). Fix cloud URL/key or network and continue; no automatic re-sync of failed batches (you can run `ira qdrant sync-to-cloud` again to re-copy from local if needed).
 
 - **Local Qdrant not running**  
   Start it with `docker compose -f docker-compose.local.yml up -d` from the project root, or switch to cloud-only by setting `QDRANT_URL` and `QDRANT_API_KEY` to your cloud cluster.

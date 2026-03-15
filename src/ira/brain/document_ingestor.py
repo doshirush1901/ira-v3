@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import errno
 import hashlib
 import io
 import logging
+import os
 import re
 import sqlite3
 import warnings
@@ -51,7 +53,9 @@ _CATEGORY_PATTERN = re.compile(r"^\d{2}_(.+)$")
 
 def _init_ledger(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ingested_files (
@@ -260,6 +264,12 @@ def _read_with_docling(path: Path) -> str:
     than the legacy per-format readers.  Falls back to legacy readers on error.
     """
     try:
+        from ira.config import get_settings
+
+        hf_cache = get_settings().app.hf_cache_dir.strip()
+        if hf_cache:
+            os.makedirs(hf_cache, exist_ok=True)
+            os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
         from docling.document_converter import DocumentConverter
 
         converter = DocumentConverter()
@@ -267,6 +277,14 @@ def _read_with_docling(path: Path) -> str:
         md = result.document.export_to_markdown()
         if md and len(md.strip()) >= _MIN_USEFUL_CHARS:
             return md
+    except OSError as e:
+        if e.errno == errno.ENOSPC:
+            logger.warning(
+                "No space left on device (Docling/HF cache). Free disk space or set APP__HF_CACHE_DIR to a path with space. Path: %s",
+                path,
+            )
+        else:
+            logger.debug("Docling failed for %s — falling back to legacy reader", path, exc_info=True)
     except Exception:
         logger.debug("Docling failed for %s — falling back to legacy reader", path, exc_info=True)
     return ""

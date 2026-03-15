@@ -305,7 +305,9 @@ class LearningHub:
         self._init_db_sync()
 
     def _init_db_sync(self) -> None:
-        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH), timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,7 +329,8 @@ class LearningHub:
             logger.warning("Failed to load feedback from disk", exc_info=True)
 
     def _load_feedback_sync(self) -> None:
-        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000")
         rows = conn.execute(
             "SELECT interaction_id, feedback_score, correction, "
             "correction_analysis, gap_analysis, created_at "
@@ -347,7 +350,8 @@ class LearningHub:
             logger.info("Loaded %d feedback records from disk", len(self._recent_feedback))
 
     def _save_feedback_sync(self, record: FeedbackRecord) -> None:
-        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH))
+        conn = sqlite3.connect(str(_FEEDBACK_DB_PATH), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute(
             "INSERT INTO feedback "
             "(interaction_id, feedback_score, correction, correction_analysis, gap_analysis, created_at) "

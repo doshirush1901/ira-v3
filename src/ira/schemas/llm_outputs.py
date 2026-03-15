@@ -147,6 +147,21 @@ class EmailMetadata(BaseModel):
     dates_deadlines: list[str] = Field(default_factory=list)
 
 
+class ExtractedContact(BaseModel):
+    """Single contact extracted from unstructured text (e.g. PDF, email body)."""
+
+    name: str = ""
+    email: str = ""
+    company: str = ""
+    machine_model: str = ""
+
+
+class ExtractedContacts(BaseModel):
+    """List of contacts extracted from text for CRM populator."""
+
+    contacts: list[ExtractedContact] = Field(default_factory=list)
+
+
 # ── Emotional intelligence ───────────────────────────────────────────────
 
 

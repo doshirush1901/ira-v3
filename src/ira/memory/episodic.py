@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,8 +36,9 @@ class EpisodicMemory:
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self._db_path)
+        self._db = await aiosqlite.connect(self._db_path, timeout=30.0)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=30000")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS episodes (
@@ -89,29 +91,45 @@ class EpisodicMemory:
             episode = fallback
 
         now = datetime.now(timezone.utc).isoformat()
+        row = (
+            user_id,
+            episode["narrative"],
+            json.dumps(episode["key_topics"]),
+            json.dumps(episode["decisions_made"]),
+            json.dumps(episode["commitments"]),
+            episode["emotional_tone"],
+            episode["relationship_impact"],
+            now,
+        )
 
         async def _write_sqlite() -> int:
             assert self._db is not None
-            cursor = await self._db.execute(
-                """
+            sql = """
                 INSERT INTO episodes (
                     user_id, narrative, key_topics, decisions, commitments,
                     emotional_tone, relationship_impact, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    episode["narrative"],
-                    json.dumps(episode["key_topics"]),
-                    json.dumps(episode["decisions_made"]),
-                    json.dumps(episode["commitments"]),
-                    episode["emotional_tone"],
-                    episode["relationship_impact"],
-                    now,
-                ),
-            )
-            await self._db.commit()
-            return cursor.lastrowid or 0
+                """
+            last_error: BaseException | None = None
+            for attempt in range(5):
+                try:
+                    cursor = await self._db.execute(sql, row)
+                    await self._db.commit()
+                    return cursor.lastrowid or 0
+                except sqlite3.OperationalError as e:
+                    last_error = e
+                    if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                        raise
+                    delay = 1.0 * (attempt + 1)
+                    logger.warning(
+                        "Episodic write failed (database locked), retry %d/5 in %.1fs: %s",
+                        attempt + 1,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+            logger.error("Episodic write failed after 5 retries: %s", last_error)
+            raise last_error  # type: ignore[misc]
 
         if episode != fallback:
             mem0_task = self._long_term.store(

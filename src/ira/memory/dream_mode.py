@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -126,8 +127,9 @@ class DreamMode:
             self._curiosity_runner = kwargs["curiosity_runner"]
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self._db_path)
+        self._db = await aiosqlite.connect(self._db_path, timeout=30.0)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=30000")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS dream_reports (
@@ -207,6 +209,9 @@ class DreamMode:
 
         # Stage 10 — Morning Summary
         await self._stage10_morning_summary(stage_log, memories_consolidated, gaps, connections, price_conflicts)
+
+        # Stage 12 — Cursor Session Learning
+        await self._stage12_cursor_session_learning(stage_log)
 
         stage_results = {
             name: info.get("status", "unknown")
@@ -853,28 +858,45 @@ class DreamMode:
     # ── persistence helpers ───────────────────────────────────────────────
 
     async def _persist_report(self, report: DreamReport) -> None:
-        """Write the dream report to the SQLite database."""
+        """Write the dream report to the SQLite database. Retries on database lock."""
         if self._db is None:
             return
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            """
+        params = (
+            report.cycle_date.isoformat(),
+            report.memories_consolidated,
+            json.dumps(report.gaps_identified),
+            json.dumps(report.creative_connections),
+            json.dumps(report.campaign_insights),
+            json.dumps(report.stage_results),
+            now,
+        )
+        sql = """
             INSERT OR REPLACE INTO dream_reports
             (cycle_date, memories_consolidated, gaps_identified, creative_connections,
              campaign_insights, stage_results, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                report.cycle_date.isoformat(),
-                report.memories_consolidated,
-                json.dumps(report.gaps_identified),
-                json.dumps(report.creative_connections),
-                json.dumps(report.campaign_insights),
-                json.dumps(report.stage_results),
-                now,
-            ),
-        )
-        await self._db.commit()
+            """
+        last_error: BaseException | None = None
+        for attempt in range(5):
+            try:
+                await self._db.execute(sql, params)
+                await self._db.commit()
+                return
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                    raise
+                delay = 1.0 * (attempt + 1)
+                logger.warning(
+                    "Dream report persist failed (database locked), retry %d/5 in %.1fs: %s",
+                    attempt + 1,
+                    delay,
+                    e,
+                )
+                await asyncio.sleep(delay)
+        logger.error("Dream report could not be persisted after 5 retries: %s", last_error)
+        raise last_error  # type: ignore[misc]
 
     # ── Stage 0.5: Sleep Training ────────────────────────────────────────
 
@@ -1044,6 +1066,67 @@ class DreamMode:
         except (IraError, Exception):
             logger.exception("Dream Stage 10 (morning summary) failed")
             stage_log["stages"]["10_morning_summary"] = {"status": "error"}
+
+    # ── Stage 12: Cursor Session Learning ────────────────────────────────
+
+    async def _stage12_cursor_session_learning(self, stage_log: dict[str, Any]) -> None:
+        """Learn from recent Cursor chat sessions logged by Graphe."""
+        try:
+            from ira.agents.graphe import Graphe, _DB_PATH as _SESSION_DB
+
+            if not _SESSION_DB.exists():
+                stage_log["stages"]["12_cursor_sessions"] = {"status": "skipped", "reason": "no session db"}
+                return
+
+            import aiosqlite
+            async with aiosqlite.connect(str(_SESSION_DB), timeout=30.0) as db:
+                await db.execute("PRAGMA busy_timeout=30000")
+                cursor = await db.execute(
+                    "SELECT query, agents_used, response_summary FROM cursor_sessions "
+                    "ORDER BY timestamp DESC LIMIT 50"
+                )
+                rows = await cursor.fetchall()
+
+            if not rows:
+                stage_log["stages"]["12_cursor_sessions"] = {"status": "ok", "sessions_learned": 0}
+                return
+
+            patterns: list[str] = []
+            for query, agents_json, summary in rows:
+                patterns.append(
+                    f"Q: {(query or '')[:100]} → Agents: {agents_json} → {(summary or '')[:100]}"
+                )
+
+            learning_prompt = (
+                "Analyze these recent Cursor chat sessions and extract 3-5 learnings "
+                "about query patterns, optimal agent routing, and common user needs:\n\n"
+                + "\n".join(patterns[:30])
+            )
+
+            try:
+                learnings = await self._llm.generate_text(
+                    "You extract learnings from Cursor session logs for Ira.",
+                    learning_prompt,
+                    name="dream.cursor_session_learning",
+                )
+                if self._long_term is not None and learnings:
+                    await self._long_term.store(
+                        learnings,
+                        user_id="global",
+                        metadata={"type": "cursor_session_learning", "source": "dream_stage_12"},
+                    )
+                stage_log["stages"]["12_cursor_sessions"] = {
+                    "status": "ok",
+                    "sessions_learned": len(rows),
+                }
+                logger.info("Stage 12: learned from %d cursor sessions", len(rows))
+            except Exception:
+                logger.exception("Stage 12: LLM learning failed")
+                stage_log["stages"]["12_cursor_sessions"] = {"status": "error"}
+
+        except Exception:
+            logger.exception("Dream Stage 12 (cursor session learning) failed")
+            stage_log["stages"]["12_cursor_sessions"] = {"status": "error"}
 
     # ── Stage 11: Agent Journaling ───────────────────────────────────────
 

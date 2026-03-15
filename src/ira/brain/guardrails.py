@@ -23,7 +23,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import warnings
 from typing import Any
+
+# Suppress HHEM/transformers warnings before any model load (they can fire during import)
+warnings.filterwarnings("ignore", message=".*HHEMv2.*")
+warnings.filterwarnings("ignore", message=".*maximum sequence length.*")
 
 from ira.prompt_loader import load_prompt
 from ira.schemas.llm_outputs import ConfidentialityResult, FaithfulnessResult
@@ -54,10 +59,17 @@ def _get_hhem():
     try:
         from transformers import AutoModelForSequenceClassification
 
-        _hhem_model = AutoModelForSequenceClassification.from_pretrained(
-            "vectara/hallucination_evaluation_model",
-            trust_remote_code=True,
-        )
+        # Suppress HHEMv2Config/HHEMv2 and tokenizer length warnings from vectara model; model still works.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            warnings.simplefilter("ignore", DeprecationWarning)
+            # transformers may emit FutureWarning or message containing "HHEMv2"
+            warnings.filterwarnings("ignore", message=".*HHEMv2.*")
+            warnings.filterwarnings("ignore", message=".*maximum sequence length.*")
+            _hhem_model = AutoModelForSequenceClassification.from_pretrained(
+                "vectara/hallucination_evaluation_model",
+                trust_remote_code=True,
+            )
         logger.info("HHEM model loaded for local faithfulness scoring")
         return _hhem_model
     except Exception:
@@ -85,8 +97,12 @@ async def _hhem_faithfulness(
     if not sentences:
         return {"faithful": True, "unsupported_claims": [], "score": 1.0}
 
-    context_text = " ".join(context_docs)[:4000]
-    pairs = [(context_text, sent) for sent in sentences[:20]]
+    # HHEM max sequence length is 512 tokens (~1500 chars). Truncate premise so (premise, hypothesis) fits.
+    _max_premise_chars = 1200
+    _max_sent_chars = 200
+    context_text = " ".join(context_docs)[:_max_premise_chars]
+    sentences_trunc = [s[:_max_sent_chars] for s in sentences[:20]]
+    pairs = [(context_text, sent) for sent in sentences_trunc]
 
     try:
         scores = await asyncio.to_thread(model.predict, pairs)

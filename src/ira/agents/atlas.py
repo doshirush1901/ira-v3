@@ -160,7 +160,8 @@ class Atlas(BaseAgent):
         if self._db_initialised:
             return
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(str(_DB_PATH)) as db:
+        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             await db.executescript(_INIT_SQL)
             await db.commit()
         self._db_initialised = True
@@ -372,7 +373,8 @@ class Atlas(BaseAgent):
         kb_context = self._format_context(kb_results)
 
         logbook_context = ""
-        async with aiosqlite.connect(str(_DB_PATH)) as db:
+        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM projects WHERE name = ? COLLATE NOCASE",
@@ -414,7 +416,8 @@ class Atlas(BaseAgent):
         """Log an event to the project logbook, creating the project if needed."""
         now = datetime.now(timezone.utc).isoformat()
 
-        async with aiosqlite.connect(str(_DB_PATH)) as db:
+        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT id FROM projects WHERE name = ? COLLATE NOCASE",
@@ -453,7 +456,8 @@ class Atlas(BaseAgent):
         kb_context = self._format_context(results)
 
         logbook_context = ""
-        async with aiosqlite.connect(str(_DB_PATH)) as db:
+        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT p.name, p.customer, p.status, "
@@ -483,7 +487,8 @@ class Atlas(BaseAgent):
         kb_context = self._format_context(results)
 
         logbook_context = ""
-        async with aiosqlite.connect(str(_DB_PATH)) as db:
+        async with aiosqlite.connect(str(_DB_PATH), timeout=30.0) as db:
+            await db.execute("PRAGMA busy_timeout=30000")
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT p.name, e.event_type, e.description, e.created_at "

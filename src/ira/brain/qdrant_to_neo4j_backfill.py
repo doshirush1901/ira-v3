@@ -3,18 +3,61 @@
 Use for one-time or occasional sync of graph data from chunk content that was
 already stored in Qdrant (e.g. after restore or to re-run extraction with a
 better model). Uses MERGE so duplicates are idempotent.
+
+Resume: use --resume to continue from the last saved offset (state in data/.graph_backfill_state.json).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.qdrant_manager import QdrantManager
 from ira.exceptions import DatabaseError
+from ira.systems.data_dir_lock import get_data_dir
 
 logger = logging.getLogger(__name__)
+
+_BACKFILL_STATE_FILENAME = ".graph_backfill_state.json"
+
+
+def _backfill_state_path() -> Path:
+    return get_data_dir() / _BACKFILL_STATE_FILENAME
+
+
+def _read_backfill_state() -> dict[str, Any] | None:
+    path = _backfill_state_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data.get("last_point_id"), str):
+            return data
+    except (OSError, json.JSONDecodeError):
+        logger.debug("Could not read backfill state from %s", path, exc_info=True)
+    return None
+
+
+def _write_backfill_state(last_point_id: str, chunks_processed: int) -> None:
+    path = _backfill_state_path()
+    try:
+        path.write_text(
+            json.dumps({"last_point_id": last_point_id, "chunks_processed": chunks_processed})
+        )
+    except OSError:
+        logger.warning("Could not write backfill state to %s", path, exc_info=True)
+
+
+def _clear_backfill_state() -> None:
+    path = _backfill_state_path()
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            logger.debug("Could not remove backfill state %s", path, exc_info=True)
 
 
 async def run_backfill_from_qdrant(
@@ -24,11 +67,13 @@ async def run_backfill_from_qdrant(
     max_chunks: int | None = None,
     batch_size: int = 200,
     source_category: str | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Scroll Qdrant chunks, extract entities from content, write to Neo4j.
 
     Same entity/relationship logic as DigestiveSystem._extract_entities.
     Returns stats: chunks_processed, companies, people, machines, relationships.
+    If resume=True and state exists, continues from last saved point and clears state on success.
     """
     stats: dict[str, int] = {
         "chunks_processed": 0,
@@ -38,10 +83,33 @@ async def run_backfill_from_qdrant(
         "relationships": 0,
         "errors": 0,
     }
+    start_after_point_id: str | None = None
+    chunks_already_done = 0
+    if resume:
+        state = _read_backfill_state()
+        if state:
+            start_after_point_id = state["last_point_id"]
+            chunks_already_done = int(state.get("chunks_processed", 0))
+            logger.info(
+                "Resuming backfill after point %s (%s chunks already processed)",
+                start_after_point_id,
+                chunks_already_done,
+            )
+        else:
+            logger.info("Resume requested but no state file found; starting from beginning.")
+
+    max_points_this_run: int | None = None
+    if max_chunks is not None:
+        max_points_this_run = max(0, max_chunks - chunks_already_done)
+        if max_points_this_run == 0:
+            logger.info("Already processed %s chunks (max_chunks=%s); nothing left to do.", chunks_already_done, max_chunks)
+            return stats
+
     async for batch in qdrant.scroll_collection_payloads(
         batch_size=batch_size,
-        max_points=max_chunks,
+        max_points=max_points_this_run,
         source_category=source_category,
+        start_after_point_id=start_after_point_id,
     ):
         for item in batch:
             content = (item.get("content") or "").strip()
@@ -152,6 +220,12 @@ async def run_backfill_from_qdrant(
                     stats["relationships"],
                 )
 
+        # Persist resume state after each batch so --resume can continue after interrupt
+        if batch:
+            last_id = batch[-1].get("point_id") or ""
+            if last_id:
+                _write_backfill_state(last_id, stats["chunks_processed"])
+
         # Final batch progress
         if stats["chunks_processed"] and stats["chunks_processed"] % 10 != 0:
             logger.info(
@@ -163,4 +237,6 @@ async def run_backfill_from_qdrant(
                 stats["relationships"],
             )
 
+    # Success: clear state so next run starts fresh unless --resume is used with new state
+    _clear_backfill_state()
     return stats

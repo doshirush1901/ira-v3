@@ -13,9 +13,11 @@ import logging
 from typing import Any, Callable, Sequence
 from uuid import UUID
 
+import httpx
 from qdrant_client import AsyncQdrantClient, models
 
 from ira.brain.embeddings import EmbeddingService
+from ira.services.resilience import RetryPolicy, run_with_retry
 from ira.config import QdrantConfig, get_settings
 from ira.data.models import KnowledgeItem
 from ira.exceptions import DatabaseError, IraError, LLMError
@@ -23,6 +25,8 @@ from ira.exceptions import DatabaseError, IraError, LLMError
 logger = logging.getLogger(__name__)
 
 _UPSERT_BATCH_SIZE = 100
+# Smaller batches for Qdrant Cloud to avoid request/payload size limits (e.g. 32MB).
+_CLOUD_UPSERT_BATCH_SIZE = 50
 
 
 class QdrantManager:
@@ -37,7 +41,10 @@ class QdrantManager:
         cfg = config or get_settings().qdrant
         api_key = cfg.api_key.get_secret_value() or None
         self._client = AsyncQdrantClient(
-            url=cfg.url, api_key=api_key, check_compatibility=False
+            url=cfg.url,
+            api_key=api_key,
+            check_compatibility=False,
+            timeout=cfg.timeout,
         )
         self._embeddings = embedding_service
         self._default_collection = cfg.collection
@@ -52,6 +59,7 @@ class QdrantManager:
                     url=cfg.cloud_url.strip(),
                     api_key=cloud_key,
                     check_compatibility=False,
+                    timeout=cfg.timeout,
                 )
                 logger.info("Qdrant sync enabled: writes will mirror to %s", cfg.cloud_url[:50])
             except Exception:
@@ -155,24 +163,26 @@ class QdrantManager:
                     len(batch),
                 )
                 raise
-        # Mirror to cloud if sync is enabled (same points, same collection); one retry per batch
+        # Mirror to cloud if sync is enabled (same points, same collection); use smaller batches for Cloud limits
         if self._client_cloud is not None:
             for start in range(0, len(points), _UPSERT_BATCH_SIZE):
                 batch = points[start : start + _UPSERT_BATCH_SIZE]
-                try:
-                    await self._client_cloud.upsert(collection_name=col, points=batch)
-                except (DatabaseError, Exception):
+                for cloud_start in range(0, len(batch), _CLOUD_UPSERT_BATCH_SIZE):
+                    cloud_batch = batch[cloud_start : cloud_start + _CLOUD_UPSERT_BATCH_SIZE]
                     try:
-                        import asyncio
-                        await asyncio.sleep(0.5)
-                        await self._client_cloud.upsert(collection_name=col, points=batch)
+                        await self._client_cloud.upsert(collection_name=col, points=cloud_batch)
                     except (DatabaseError, Exception):
-                        logger.warning(
-                            "Qdrant cloud sync upsert failed at offset %d (batch size %d) — primary succeeded",
-                            start,
-                            len(batch),
-                            exc_info=True,
-                        )
+                        try:
+                            import asyncio
+                            await asyncio.sleep(0.5)
+                            await self._client_cloud.upsert(collection_name=col, points=cloud_batch)
+                        except (DatabaseError, Exception):
+                            logger.warning(
+                                "Qdrant cloud sync upsert failed at offset %d (batch size %d) — primary succeeded",
+                                start + cloud_start,
+                                len(cloud_batch),
+                                exc_info=True,
+                            )
 
         logger.info("Upserted %d items into '%s'%s", upserted, col, " (synced to cloud)" if self._client_cloud else "")
 
@@ -284,9 +294,12 @@ class QdrantManager:
                 limit=limit,
             )
             hits = result.points
-        except (DatabaseError, Exception):
-            logger.exception("Hybrid search failed in '%s'", col)
-            raise
+        except Exception as e:
+            logger.warning(
+                "Hybrid search failed in '%s' (timeout or unreachable): %s — returning no results",
+                col, e,
+            )
+            return []
 
         return [_hit_to_dict(hit) for hit in hits]
 
@@ -421,7 +434,10 @@ class QdrantManager:
                             payload=pt.payload or {},
                         )
                     )
-                await self._client_cloud.upsert(collection_name=col, points=batch)
+                # Upsert to cloud in smaller chunks to stay under request size limits
+                for sub_start in range(0, len(batch), _CLOUD_UPSERT_BATCH_SIZE):
+                    sub = batch[sub_start : sub_start + _CLOUD_UPSERT_BATCH_SIZE]
+                    await self._client_cloud.upsert(collection_name=col, points=sub)
                 total += len(batch)
                 logger.info("Synced %d points to cloud (total so far: %d)", len(batch), total)
                 if progress_callback is not None:
@@ -442,11 +458,13 @@ class QdrantManager:
         batch_size: int = 200,
         max_points: int | None = None,
         source_category: str | None = None,
+        start_after_point_id: str | None = None,
     ):
         """Async generator: scroll collection and yield batches of payload dicts.
 
         Does not load vectors. Optional filter by source_category (or doc_type).
         Each item includes "point_id", "content", "source", "source_category", "payload".
+        If start_after_point_id is set, scrolling starts after that point (for resume).
         """
         col = collection or self._default_collection
         scroll_filter: models.Filter | None = None
@@ -463,17 +481,39 @@ class QdrantManager:
                     ),
                 ]
             )
+        def _is_retryable_scroll_error(exc: Exception) -> bool:
+            if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+                return True
+            cause = getattr(exc, "__cause__", None)
+            if cause is not None and isinstance(
+                cause, (httpx.ConnectError, httpx.TimeoutException)
+            ):
+                return True
+            if type(exc).__name__ == "ResponseHandlingException" and cause is not None:
+                return isinstance(cause, (httpx.ConnectError, httpx.TimeoutException))
+            return False
+
+        scroll_retry = RetryPolicy(max_attempts=5, base_delay_seconds=2.0)
         total_yielded = 0
-        offset: models.PointId | None = None
+        offset: models.PointId | None = (
+            start_after_point_id if start_after_point_id else None
+        )
         try:
             while True:
-                points, offset = await self._client.scroll(
-                    collection_name=col,
-                    limit=batch_size,
-                    with_payload=True,
-                    with_vectors=False,
-                    offset=offset,
-                    scroll_filter=scroll_filter,
+                async def _do_scroll() -> tuple[Any, Any]:
+                    return await self._client.scroll(
+                        collection_name=col,
+                        limit=batch_size,
+                        with_payload=True,
+                        with_vectors=False,
+                        offset=offset,
+                        scroll_filter=scroll_filter,
+                    )
+
+                points, offset = await run_with_retry(
+                    _do_scroll,
+                    policy=scroll_retry,
+                    is_retryable=_is_retryable_scroll_error,
                 )
                 batch: list[dict[str, Any]] = []
                 for pt in points:

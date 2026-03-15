@@ -20,6 +20,13 @@ alwaysApply: true
 - Prefer recalled memory to personalize context, but re-verify critical operational/commercial facts before final answer.
 - If memory conflicts with fresher authoritative data, authoritative data wins.
 
+## Email-Derived Facts
+
+- Email-derived facts (e.g. "Acme's contact is X", "meeting scheduled for Y") **may** be stored in Mem0 with `source: "email:{thread_id}"` or `source: "takeout_email:{key}"`.
+- Sensitive email content (pricing, deal terms, margins, HR data, vendor pricing) must **not** be stored as raw text. Only store structured facts: contact name, company, date, topic, action items.
+- When storing email-derived facts, metadata includes `source_type: "email"` for future filtering and audit.
+- Corrections to email-derived facts follow the standard Mnemon/Nemesis path (same as any other fact).
+
 ## Correction Supremacy
 
 - Mnemon correction ledger overrides stale memory and stale document snippets.

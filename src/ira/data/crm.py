@@ -170,6 +170,7 @@ class DealModel(Base):
         default=DealStage.NEW,
     )
     machine_model: Mapped[str | None] = mapped_column(String(255))
+    application: Mapped[str | None] = mapped_column(String(255))
     expected_close_date: Mapped[datetime | None] = mapped_column(DateTime)
     actual_close_date: Mapped[datetime | None] = mapped_column(DateTime)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -189,6 +190,7 @@ class DealModel(Base):
             "currency": self.currency,
             "stage": self.stage.value if isinstance(self.stage, DealStage) else self.stage,
             "machine_model": self.machine_model,
+            "application": self.application,
             "expected_close_date": (
                 self.expected_close_date.isoformat() if self.expected_close_date else None
             ),
@@ -551,7 +553,8 @@ class CRMDatabase:
             for k, v in kwargs.items():
                 setattr(deal, k, v)
             if "updated_at" not in kwargs:
-                deal.updated_at = datetime.now(timezone.utc)
+                # Column is TIMESTAMP WITHOUT TIME ZONE; use naive UTC for asyncpg
+                deal.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await session.commit()
             await session.refresh(deal)
         await self._emit("deal_updated", "deal", str(deal.id), deal.to_dict())
@@ -600,6 +603,7 @@ class CRMDatabase:
                 "value": float(d.value) if d.value else 0,
                 "currency": d.currency or "USD",
                 "machine_model": d.machine_model,
+                "application": d.application,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "contact_id": str(d.contact_id),
@@ -893,6 +897,7 @@ class CRMDatabase:
         pattern = f"%{query}%"
         stmt = (
             select(ContactModel)
+            .options(selectinload(ContactModel.company))
             .outerjoin(CompanyModel, ContactModel.company_id == CompanyModel.id)
             .where(
                 or_(
@@ -904,7 +909,7 @@ class CRMDatabase:
         )
         async with self._session_factory() as session:
             result = await session.execute(stmt)
-            contacts = result.scalars().all()
+            contacts = result.unique().scalars().all()
         return [c.to_dict() for c in contacts]
 
     # ── Protocol-compatible wrappers ─────────────────────────────────────

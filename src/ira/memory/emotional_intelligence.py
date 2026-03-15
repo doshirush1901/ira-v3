@@ -198,8 +198,9 @@ class EmotionalIntelligence:
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self._db_path)
+        self._db = await aiosqlite.connect(self._db_path, timeout=30.0)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=30000")
         await self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS emotion_log (

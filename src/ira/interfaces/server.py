@@ -34,6 +34,7 @@ from ira.middleware.request_context import RequestContextMiddleware, RequestIdFi
 
 from ira.config import get_settings
 from ira.exceptions import ConfigurationError, IraError
+from ira.systems.data_dir_lock import async_data_dir_lock
 from ira.services.structured_logging import configure_root_logging
 from ira.service_keys import ServiceKey as SK
 
@@ -187,590 +188,594 @@ def _normalize_task_event(event: dict[str, Any]) -> dict[str, Any]:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Bootstrap all Ira subsystems on startup, tear down on shutdown."""
     settings = get_settings()
-
-    # ── Sentry (must be first so it captures all boot errors) ────
-    sentry_dsn = settings.sentry.dsn
-    if sentry_dsn:
-        try:
-            import sentry_sdk
-
-            sentry_sdk.init(
-                dsn=sentry_dsn,
-                traces_sample_rate=settings.sentry.traces_sample_rate,
-                environment=settings.app.environment,
-                send_default_pii=False,
-            )
-            logger.info("Sentry initialised (env=%s)", settings.app.environment)
-        except Exception:
-            logger.warning("Sentry init failed — continuing without error tracking", exc_info=True)
-
-    configure_root_logging(
-        log_level=settings.app.log_level,
-        log_format=settings.app.log_format,
-    )
-    for handler in logging.root.handlers:
-        handler.addFilter(RequestIdFilter())
-
-    from ira.systems.legacy_guard import enforce_legacy_quarantine
-
-    legacy_violations = enforce_legacy_quarantine(strict=settings.app.legacy_quarantine_strict)
-    if legacy_violations:
-        logger.warning(
-            "Legacy quarantine found %d runtime import violations",
-            len(legacy_violations),
-        )
-
-    # ── Redis ─────────────────────────────────────────────────────────
-    from ira.systems.redis_cache import RedisCache
-
-    redis_cache = RedisCache()
-    await redis_cache.connect()
-    _services[SK.REDIS] = redis_cache
-    from ira.services.llm_client import get_llm_client
-    get_llm_client().set_redis_cache(redis_cache)
-
-    # ── Google Docs / Drive ──────────────────────────────────────────
-    from ira.systems.google_docs import GoogleDocsService
-
-    google_docs = GoogleDocsService()
+    _data_dir_lock = async_data_dir_lock()
+    await _data_dir_lock.__aenter__()
     try:
-        await google_docs.connect()
-    except Exception:
-        logger.warning("Google Docs/Drive unavailable — continuing without it")
-    _services[SK.GOOGLE_DOCS] = google_docs
-
-    # ── Google Document AI ────────────────────────────────────────────
-    from ira.systems.document_ai import DocumentAIService
-
-    document_ai = DocumentAIService()
-    try:
-        await document_ai.connect()
-    except Exception:
-        logger.warning("Document AI unavailable — continuing without it")
-    _services[SK.DOCUMENT_AI] = document_ai
-
-    # ── PDF.co ────────────────────────────────────────────────────────
-    from ira.systems.pdfco import PdfCoService
-
-    pdfco = PdfCoService()
-    _services[SK.PDFCO] = pdfco
-
-    # ── Google DLP ────────────────────────────────────────────────────
-    from ira.systems.dlp import DlpService
-
-    dlp = DlpService()
-    try:
-        await dlp.connect()
-    except Exception:
-        logger.warning("DLP unavailable — continuing without it")
-    _services[SK.DLP] = dlp
-
-    # ── Brain layer ───────────────────────────────────────────────────
-    from ira.brain.document_ingestor import DocumentIngestor
-    from ira.brain.embeddings import EmbeddingService
-    from ira.brain.knowledge_graph import KnowledgeGraph
-    from ira.brain.qdrant_manager import QdrantManager
-    from ira.brain.retriever import UnifiedRetriever
-
-    embedding = EmbeddingService()
-    if redis_cache.available:
-        embedding.set_redis_cache(redis_cache)
-    qdrant = QdrantManager(embedding_service=embedding)
-    await qdrant.ensure_collection()
-    graph = KnowledgeGraph()
-
-    mem0_client = None
-    mem0_key = settings.memory.api_key.get_secret_value()
-    if mem0_key:
-        try:
-            from mem0 import MemoryClient
-            mem0_client = MemoryClient(api_key=mem0_key)
-            logger.info("Mem0 client initialised")
-        except (ConfigurationError, Exception):
-            logger.warning("Mem0 init failed — continuing without conversational memory")
-
-    retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
-    ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
-
-    _services["embedding"] = embedding
-    _services["qdrant"] = qdrant
-    _services["graph"] = graph
-    _services["retriever"] = retriever
-    _services["ingestor"] = ingestor
-
-    # ── Data layer ────────────────────────────────────────────────────
-    from ira.data.crm import CRMDatabase
-    from ira.data.quotes import QuoteManager
-
-    crm = CRMDatabase()
-    await crm.create_tables()
-    quotes = QuoteManager(session_factory=crm.session_factory)
-
-    from ira.data.vendors import VendorDatabase
-
-    vendor_db = VendorDatabase()
-    await vendor_db.create_tables()
-
-    _services[SK.CRM] = crm
-    _services[SK.QUOTES] = quotes
-    _services[SK.VENDOR_DB] = vendor_db
-
-    # ── Circulatory system (data sync) ────────────────────────────────
-    from ira.systems.circulatory import CirculatorySystem
-    from ira.systems.data_event_bus import DataEventBus
-
-    data_event_bus = DataEventBus()
-    await data_event_bus.start()
-
-    crm.set_event_bus(data_event_bus)
-    graph.set_event_bus(data_event_bus)
-    qdrant.set_event_bus(data_event_bus)
-
-    circulatory = CirculatorySystem(
-        data_event_bus,
-        crm=crm,
-        graph=graph,
-        qdrant=qdrant,
-        embedding=embedding,
-    )
-
-    from ira.brain.correction_learner import CorrectionLearner
-    from ira.systems.data_event_bus import DataEvent, EventType
-
-    correction_learner = CorrectionLearner()
-    data_event_bus.subscribe(EventType.KNOWLEDGE_CORRECTED, correction_learner.on_knowledge_corrected)
-
-    async def _ws_bus_handler(evt: DataEvent) -> None:
-        """Broadcast DataEventBus events to Command Center WebSocket clients."""
-        payload = {
-            "ts": evt.timestamp.isoformat(),
-            "type": evt.event_type.value,
-            "entity_type": evt.entity_type,
-            "entity_id": evt.entity_id,
-            "source_store": evt.source_store.value,
-            "payload_keys": list(evt.payload.keys()),
-        }
-        await _broadcast_ws(payload)
-
-    data_event_bus.subscribe_all(_ws_bus_handler)
-
-    _services[SK.DATA_EVENT_BUS] = data_event_bus
-    _services[SK.CIRCULATORY] = circulatory
-
-    # ── Pricing engine ────────────────────────────────────────────────
-    from ira.brain.pricing_engine import PricingEngine
-
-    pricing_engine = PricingEngine(retriever=retriever, crm=crm)
-
-    _services[SK.PRICING_ENGINE] = pricing_engine
-
-    # ── Pantheon ──────────────────────────────────────────────────────
-    from ira.message_bus import MessageBus
-    from ira.pantheon import Pantheon
-
-    bus = MessageBus()
-    if redis_cache.available:
-        bus.set_redis(redis_cache)
-    pantheon = Pantheon(retriever=retriever, bus=bus)
-
-    shared_services = {
-        SK.CRM: crm,
-        SK.QUOTES: quotes,
-        SK.PRICING_ENGINE: pricing_engine,
-        SK.RETRIEVER: retriever,
-        SK.VENDOR_DB: vendor_db,
-    }
-
-    pantheon.inject_services(shared_services)
-
-    from ira.skills.handlers import bind_services as bind_skill_services
-    bind_skill_services(shared_services)
-
-    await pantheon.start()
-
-    _services["bus"] = bus
-    _services["pantheon"] = pantheon
-
-    # ── Body systems ──────────────────────────────────────────────────
-    from ira.systems.digestive import DigestiveSystem
-    from ira.systems.endocrine import EndocrineSystem
-    from ira.systems.immune import ImmuneSystem
-    from ira.systems.sensory import SensorySystem
-    from ira.systems.voice import VoiceSystem
-
-    digestive = DigestiveSystem(
-        ingestor=ingestor,
-        knowledge_graph=graph,
-        embedding_service=embedding,
-        qdrant=qdrant,
-    )
-    immune = ImmuneSystem(
-        qdrant=qdrant,
-        knowledge_graph=graph,
-        embedding_service=embedding,
-    )
-    sensory = SensorySystem(knowledge_graph=graph)  # memory wired after init below
-    try:
-        await asyncio.wait_for(sensory.create_tables(), timeout=30)
-    except (asyncio.TimeoutError, Exception):
-        logger.warning("SensorySystem table creation slow/failed — continuing")
-    voice = VoiceSystem()
-    endocrine = EndocrineSystem()
-    immune.set_endocrine(endocrine)
-
-    _services["digestive"] = digestive
-    _services["immune"] = immune
-    _services["sensory"] = sensory
-    _services["voice"] = voice
-    _services["endocrine"] = endocrine
-
-    # ── Memory systems ────────────────────────────────────────────────
-    from ira.memory.conversation import ConversationMemory
-    from ira.memory.dream_mode import DreamMode
-    from ira.memory.episodic import EpisodicMemory
-    from ira.memory.long_term import LongTermMemory
-    from ira.systems.musculoskeletal import MusculoskeletalSystem
-
-    _INIT_TIMEOUT = 30
-
-    async def _safe_init(name: str, coro: Any) -> None:
-        try:
-            await asyncio.wait_for(coro, timeout=_INIT_TIMEOUT)
-            logger.info("Initialised %s", name)
-        except asyncio.TimeoutError:
-            logger.warning("Timed out initialising %s after %ds — skipping", name, _INIT_TIMEOUT)
-        except (ConfigurationError, Exception):
-            logger.warning("Failed to initialise %s — skipping", name, exc_info=True)
-
-    long_term = LongTermMemory()
-    episodic = EpisodicMemory(long_term=long_term)
-    await _safe_init("episodic", episodic.initialize())
-    conversation = ConversationMemory()
-    await _safe_init("conversation", conversation.initialize())
-    musculoskeletal = MusculoskeletalSystem()
-    await _safe_init("musculoskeletal", musculoskeletal.create_tables())
-
-    dream_mode = DreamMode(
-        long_term=long_term,
-        episodic=episodic,
-        conversation=conversation,
-        musculoskeletal=musculoskeletal,
-        retriever=retriever,
-        crm=crm,
-        data_event_bus=data_event_bus,
-    )
-    await _safe_init("dream_mode", dream_mode.initialize())
-
-    _services["long_term"] = long_term
-    _services["episodic"] = episodic
-    _services["conversation"] = conversation
-    _services["musculoskeletal"] = musculoskeletal
-    _services["dream_mode"] = dream_mode
-
-    # ── Learning hub ──────────────────────────────────────────────────
-    from ira.memory.procedural import ProceduralMemory
-    from ira.systems.learning_hub import LearningHub
-
-    procedural_memory = ProceduralMemory()
-    await _safe_init("procedural_memory", procedural_memory.initialize())
-    learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
-
-    dream_mode.configure(procedural_memory=procedural_memory)
-
-    # ── Agent journal (daily actions + nightly reflections) ─────────────
-    from ira.memory.agent_journal import AgentJournal
-    agent_journal = AgentJournal()
-    await _safe_init("agent_journal", agent_journal.initialize())
-    dream_mode.configure(agent_journal=agent_journal)
-
-    _services["procedural_memory"] = procedural_memory
-    _services["agent_journal"] = agent_journal
-    _services["learning_hub"] = learning_hub
-
-    # ── Feedback handler & power levels (trust matrix) ─────────────────
-    from ira.brain.correction_store import CorrectionStore
-    from ira.brain.feedback_handler import FeedbackHandler
-    from ira.brain.power_levels import PowerLevelTracker
-
-    correction_store = CorrectionStore()
-    await _safe_init("correction_store", correction_store.initialize())
-    power_level_tracker = PowerLevelTracker()
-    await _safe_init("power_level_tracker", power_level_tracker._load())
-
-    feedback_handler = FeedbackHandler(
-        learning_hub=learning_hub,
-        correction_store=correction_store,
-        mem0_client=mem0_client,
-        procedural_memory=procedural_memory,
-        data_event_bus=data_event_bus,
-        power_level_tracker=power_level_tracker,
-    )
-    await feedback_handler.load_scores()
-
-    _services["feedback_handler"] = feedback_handler
-    _services["correction_store"] = correction_store
-    _services["power_level_tracker"] = power_level_tracker
-
-    nemesis = pantheon.get_agent("nemesis")
-    if nemesis is not None:
-        nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
-
-    # ── Additional memory systems ─────────────────────────────────────
-    from ira.memory.emotional_intelligence import EmotionalIntelligence
-    from ira.memory.goal_manager import GoalManager
-    from ira.memory.inner_voice import InnerVoice
-    from ira.memory.metacognition import Metacognition
-    from ira.memory.relationship import RelationshipMemory
-
-    emotional_intelligence = EmotionalIntelligence()
-    await _safe_init("emotional_intelligence", emotional_intelligence.initialize())
-    relationship_memory = RelationshipMemory()
-    await _safe_init("relationship_memory", relationship_memory.initialize())
-    goal_manager = GoalManager()
-    await _safe_init("goal_manager", goal_manager.initialize())
-    metacognition = Metacognition()
-    await _safe_init("metacognition", metacognition.initialize())
-    inner_voice = InnerVoice()
-    await _safe_init("inner_voice", inner_voice.initialize())
-
-    sensory.configure_memory(
-        emotional_intelligence=emotional_intelligence,
-        conversation_memory=conversation,
-        relationship_memory=relationship_memory,
-    )
-
-    _services["emotional_intelligence"] = emotional_intelligence
-    _services["relationship_memory"] = relationship_memory
-    _services["goal_manager"] = goal_manager
-    _services["metacognition"] = metacognition
-    _services["inner_voice"] = inner_voice
-
-    # ── Inject ALL memory services into Pantheon agents ───────────────
-    pantheon.inject_services({
-        SK.LONG_TERM_MEMORY: long_term,
-        SK.EPISODIC_MEMORY: episodic,
-        SK.CONVERSATION_MEMORY: conversation,
-        SK.RELATIONSHIP_MEMORY: relationship_memory,
-        SK.GOAL_MANAGER: goal_manager,
-        SK.EMOTIONAL_INTELLIGENCE: emotional_intelligence,
-        SK.PROCEDURAL_MEMORY: procedural_memory,
-        SK.LEARNING_HUB: learning_hub,
-        SK.DATA_EVENT_BUS: data_event_bus,
-        SK.PANTHEON: pantheon,
-        SK.REDIS: redis_cache,
-        SK.GOOGLE_DOCS: google_docs,
-        SK.DOCUMENT_AI: document_ai,
-        SK.PDFCO: pdfco,
-        SK.DLP: dlp,
-        SK.AGENT_JOURNAL: agent_journal,
-        SK.IMMUNE: immune,
-        SK.POWER_LEVEL_TRACKER: power_level_tracker,
-    })
-
-    # ── Unified context ───────────────────────────────────────────────
-    from ira.context import UnifiedContextManager
-
-    unified_context = UnifiedContextManager()
-    _services["unified_context"] = unified_context
-
-    # ── Tool stats (observability) ────────────────────────────────────
-    from ira.brain.tool_stats import ToolStatsTracker
-    tool_stats_tracker = ToolStatsTracker()
-    _services["tool_stats_tracker"] = tool_stats_tracker
-
-    # ── Request pipeline ──────────────────────────────────────────────
-    from ira.pipeline import RequestPipeline
-
-    request_pipeline = RequestPipeline(
-        sensory=sensory,
-        conversation_memory=conversation,
-        relationship_memory=relationship_memory,
-        goal_manager=goal_manager,
-        procedural_memory=procedural_memory,
-        metacognition=metacognition,
-        inner_voice=inner_voice,
-        pantheon=pantheon,
-        voice=voice,
-        endocrine=endocrine,
-        crm=crm,
-        musculoskeletal=musculoskeletal,
-        unified_context=unified_context,
-        redis_cache=redis_cache,
-        episodic_memory=episodic,
-        long_term_memory=long_term,
-        tool_stats_tracker=tool_stats_tracker,
-        agent_journal=agent_journal,
-        power_level_tracker=power_level_tracker,
-    )
-    _services["pipeline"] = request_pipeline
-
-    # ── Task orchestrator ────────────────────────────────────────────
-    from ira.systems.task_orchestrator import TaskOrchestrator
-
-    task_orchestrator = TaskOrchestrator(
-        pantheon=pantheon,
-        redis_cache=redis_cache,
-        voice=voice,
-        pdfco=pdfco,
-    )
-    _services["task_orchestrator"] = task_orchestrator
-
-    # ── Board meeting system ──────────────────────────────────────────
-    from ira.systems.board_meeting import BoardMeeting
-
-    async def _agent_handler(name: str, topic: str) -> str:
-        agent = pantheon.get_agent(name)
-        if agent is None:
-            return f"(Agent '{name}' not found)"
-        return await agent.handle(topic)
-
-    board_meeting = BoardMeeting(agent_handler=_agent_handler)
-    _services["board_meeting"] = board_meeting
-
-    # ── Email processor ───────────────────────────────────────────────
-    from ira.interfaces.email_processor import EmailProcessor
-
-    delphi = pantheon.get_agent("delphi")
-    email_processor = EmailProcessor(
-        delphi=delphi,
-        digestive=digestive,
-        sensory=sensory,
-        crm=crm,
-        pantheon=pantheon,
-        unified_context=unified_context,
-    )
-    _services["email_processor"] = email_processor
-    pantheon.inject_services({SK.EMAIL_PROCESSOR: email_processor})
-
-    # ── Drip engine ────────────────────────────────────────────────────
-    from ira.interfaces.email_processor import GmailDraftSender
-    from ira.systems.drip_engine import AutonomousDripEngine
-    from ira.systems.outbound_approvals import OutboundApprovalService
-
-    gmail_sender = GmailDraftSender(email_processor=email_processor)
-    outbound_approvals = OutboundApprovalService(
-        storage_path=Path("data/operations/outbound_approvals.json"),
-    )
-    _services[SK.OUTBOUND_APPROVALS] = outbound_approvals
-    drip_engine = AutonomousDripEngine(
-        crm=crm,
-        quotes=quotes,
-        message_bus=bus,
-        gmail=gmail_sender,
-    )
-    _services["drip_engine"] = drip_engine
-
-    # ── Respiratory system (background tasks) ─────────────────────────
-    from ira.systems.respiratory import RespiratorySystem
-
-    respiratory = RespiratorySystem(
-        dream_mode=dream_mode,
-        drip_engine=drip_engine,
-        immune_system=immune,
-        email_processor=email_processor,
-    )
-    await respiratory.start()
-    _services["respiratory"] = respiratory
-
-    # ── Curiosity loop (boredom-driven inter-agent exploration) ──────
-    from ira.systems.curiosity_loop import CuriosityLoop
-    curiosity_loop = CuriosityLoop(endocrine=endocrine, bus=bus, pantheon=pantheon)
-    await curiosity_loop.start()
-    _services["curiosity_loop"] = curiosity_loop
-
-    # ── Dream mode: sleep phase (phantom limb, trust, curiosity) ──────
-    dream_mode.configure(
-        immune_system=immune,
-        power_level_tracker=power_level_tracker,
-        curiosity_runner=lambda: curiosity_loop.run_one_cycle(),
-    )
-
-    # ── Email polling background task ─────────────────────────────────
-    email_poll_task = None
-    if settings.google.email_poll_enabled:
-        email_poll_task = asyncio.create_task(email_processor.poll_inbox())
-        logger.info(
-            "Email polling started (mode=%s)", settings.google.email_mode.value,
-        )
-    else:
-        logger.info("Email polling disabled (IRA_EMAIL_POLL=false)")
-
-    # ── Immune startup validation ─────────────────────────────────────
-    try:
-        health_report = await immune.run_startup_validation()
-        healthy = all(
-            v.get("status") == "healthy" for v in health_report.values()
-        )
-        status = "ALL HEALTHY" if healthy else "DEGRADED"
-        logger.info("Startup validation: %s — %s", status, list(health_report))
-    except (IraError, Exception):
-        logger.exception("Startup validation failed — continuing in degraded mode")
-
-    # ── Ready ─────────────────────────────────────────────────────────
-    component_count = len(_services)
-    agent_count = len(pantheon.agents)
-    logger.info(
-        "Ira is awake — %d components, %d agents, mode=%s",
-        component_count,
-        agent_count,
-        settings.google.email_mode.value,
-    )
-
-    yield
-
-    # ── SHUTDOWN ──────────────────────────────────────────────────────
-    logger.info("Ira is going to sleep.")
-
-    try:
-        from langfuse import Langfuse
-        Langfuse().flush()
-        logger.info("Langfuse traces flushed")
-    except Exception:
-        logger.warning("Langfuse flush failed", exc_info=True)
-
-    if email_poll_task is not None:
-        email_poll_task.cancel()
-        try:
-            await email_poll_task
-        except asyncio.CancelledError:
-            pass
-
-    curiosity_loop = _services.get("curiosity_loop")
-    if curiosity_loop is not None and hasattr(curiosity_loop, "stop"):
-        try:
-            await curiosity_loop.stop()
-        except (IraError, Exception):
-            logger.exception("CuriosityLoop stop failed")
-    await respiratory.stop()
-    await data_event_bus.stop()
-    await pantheon.stop()
-    await redis_cache.close()
-    await google_docs.close()
-    await document_ai.close()
-    await dlp.close()
-    await sensory.close()
-    await musculoskeletal.close()
-    await graph.close()
-    await crm.close()
-    await vendor_db.close()
-
-    for svc_name in (
-        "crm",
-        "vendor_db",
-        "correction_store",
-        "conversation", "episodic", "dream_mode", "emotional_intelligence",
-        "relationship_memory", "goal_manager", "metacognition", "inner_voice",
-        "procedural_memory",
-    ):
-        svc = _services.get(svc_name)
-        if svc is not None and hasattr(svc, "close"):
+            # ── Sentry (must be first so it captures all boot errors) ────
+        sentry_dsn = settings.sentry.dsn
+        if sentry_dsn:
             try:
-                await svc.close()
+                import sentry_sdk
+    
+                sentry_sdk.init(
+                    dsn=sentry_dsn,
+                    traces_sample_rate=settings.sentry.traces_sample_rate,
+                    environment=settings.app.environment,
+                    send_default_pii=False,
+                )
+                logger.info("Sentry initialised (env=%s)", settings.app.environment)
+            except Exception:
+                logger.warning("Sentry init failed — continuing without error tracking", exc_info=True)
+    
+        configure_root_logging(
+            log_level=settings.app.log_level,
+            log_format=settings.app.log_format,
+        )
+        for handler in logging.root.handlers:
+            handler.addFilter(RequestIdFilter())
+    
+        from ira.systems.legacy_guard import enforce_legacy_quarantine
+    
+        legacy_violations = enforce_legacy_quarantine(strict=settings.app.legacy_quarantine_strict)
+        if legacy_violations:
+            logger.warning(
+                "Legacy quarantine found %d runtime import violations",
+                len(legacy_violations),
+            )
+    
+        # ── Redis ─────────────────────────────────────────────────────────
+        from ira.systems.redis_cache import RedisCache
+    
+        redis_cache = RedisCache()
+        await redis_cache.connect()
+        _services[SK.REDIS] = redis_cache
+        from ira.services.llm_client import get_llm_client
+        get_llm_client().set_redis_cache(redis_cache)
+    
+        # ── Google Docs / Drive ──────────────────────────────────────────
+        from ira.systems.google_docs import GoogleDocsService
+    
+        google_docs = GoogleDocsService()
+        try:
+            await google_docs.connect()
+        except Exception:
+            logger.warning("Google Docs/Drive unavailable — continuing without it")
+        _services[SK.GOOGLE_DOCS] = google_docs
+    
+        # ── Google Document AI ────────────────────────────────────────────
+        from ira.systems.document_ai import DocumentAIService
+    
+        document_ai = DocumentAIService()
+        try:
+            await document_ai.connect()
+        except Exception:
+            logger.warning("Document AI unavailable — continuing without it")
+        _services[SK.DOCUMENT_AI] = document_ai
+    
+        # ── PDF.co ────────────────────────────────────────────────────────
+        from ira.systems.pdfco import PdfCoService
+    
+        pdfco = PdfCoService()
+        _services[SK.PDFCO] = pdfco
+    
+        # ── Google DLP ────────────────────────────────────────────────────
+        from ira.systems.dlp import DlpService
+    
+        dlp = DlpService()
+        try:
+            await dlp.connect()
+        except Exception:
+            logger.warning("DLP unavailable — continuing without it")
+        _services[SK.DLP] = dlp
+    
+        # ── Brain layer ───────────────────────────────────────────────────
+        from ira.brain.document_ingestor import DocumentIngestor
+        from ira.brain.embeddings import EmbeddingService
+        from ira.brain.knowledge_graph import KnowledgeGraph
+        from ira.brain.qdrant_manager import QdrantManager
+        from ira.brain.retriever import UnifiedRetriever
+    
+        embedding = EmbeddingService()
+        if redis_cache.available:
+            embedding.set_redis_cache(redis_cache)
+        qdrant = QdrantManager(embedding_service=embedding)
+        await qdrant.ensure_collection()
+        graph = KnowledgeGraph()
+    
+        mem0_client = None
+        mem0_key = settings.memory.api_key.get_secret_value()
+        if mem0_key:
+            try:
+                from mem0 import MemoryClient
+                mem0_client = MemoryClient(api_key=mem0_key)
+                logger.info("Mem0 client initialised")
+            except (ConfigurationError, Exception):
+                logger.warning("Mem0 init failed — continuing without conversational memory")
+    
+        retriever = UnifiedRetriever(qdrant=qdrant, graph=graph, mem0_client=mem0_client)
+        ingestor = DocumentIngestor(qdrant=qdrant, knowledge_graph=graph)
+    
+        _services["embedding"] = embedding
+        _services["qdrant"] = qdrant
+        _services["graph"] = graph
+        _services["retriever"] = retriever
+        _services["ingestor"] = ingestor
+    
+        # ── Data layer ────────────────────────────────────────────────────
+        from ira.data.crm import CRMDatabase
+        from ira.data.quotes import QuoteManager
+    
+        crm = CRMDatabase()
+        await crm.create_tables()
+        quotes = QuoteManager(session_factory=crm.session_factory)
+    
+        from ira.data.vendors import VendorDatabase
+    
+        vendor_db = VendorDatabase()
+        await vendor_db.create_tables()
+    
+        _services[SK.CRM] = crm
+        _services[SK.QUOTES] = quotes
+        _services[SK.VENDOR_DB] = vendor_db
+    
+        # ── Circulatory system (data sync) ────────────────────────────────
+        from ira.systems.circulatory import CirculatorySystem
+        from ira.systems.data_event_bus import DataEventBus
+    
+        data_event_bus = DataEventBus()
+        await data_event_bus.start()
+    
+        crm.set_event_bus(data_event_bus)
+        graph.set_event_bus(data_event_bus)
+        qdrant.set_event_bus(data_event_bus)
+    
+        circulatory = CirculatorySystem(
+            data_event_bus,
+            crm=crm,
+            graph=graph,
+            qdrant=qdrant,
+            embedding=embedding,
+        )
+    
+        from ira.brain.correction_learner import CorrectionLearner
+        from ira.systems.data_event_bus import DataEvent, EventType
+    
+        correction_learner = CorrectionLearner()
+        data_event_bus.subscribe(EventType.KNOWLEDGE_CORRECTED, correction_learner.on_knowledge_corrected)
+    
+        async def _ws_bus_handler(evt: DataEvent) -> None:
+            """Broadcast DataEventBus events to Command Center WebSocket clients."""
+            payload = {
+                "ts": evt.timestamp.isoformat(),
+                "type": evt.event_type.value,
+                "entity_type": evt.entity_type,
+                "entity_id": evt.entity_id,
+                "source_store": evt.source_store.value,
+                "payload_keys": list(evt.payload.keys()),
+            }
+            await _broadcast_ws(payload)
+    
+        data_event_bus.subscribe_all(_ws_bus_handler)
+    
+        _services[SK.DATA_EVENT_BUS] = data_event_bus
+        _services[SK.CIRCULATORY] = circulatory
+    
+        # ── Pricing engine ────────────────────────────────────────────────
+        from ira.brain.pricing_engine import PricingEngine
+    
+        pricing_engine = PricingEngine(retriever=retriever, crm=crm)
+    
+        _services[SK.PRICING_ENGINE] = pricing_engine
+    
+        # ── Pantheon ──────────────────────────────────────────────────────
+        from ira.message_bus import MessageBus
+        from ira.pantheon import Pantheon
+    
+        bus = MessageBus()
+        if redis_cache.available:
+            bus.set_redis(redis_cache)
+        pantheon = Pantheon(retriever=retriever, bus=bus)
+    
+        shared_services = {
+            SK.CRM: crm,
+            SK.QUOTES: quotes,
+            SK.PRICING_ENGINE: pricing_engine,
+            SK.RETRIEVER: retriever,
+            SK.VENDOR_DB: vendor_db,
+        }
+    
+        pantheon.inject_services(shared_services)
+    
+        from ira.skills.handlers import bind_services as bind_skill_services
+        bind_skill_services(shared_services)
+    
+        await pantheon.start()
+    
+        _services["bus"] = bus
+        _services["pantheon"] = pantheon
+    
+        # ── Body systems ──────────────────────────────────────────────────
+        from ira.systems.digestive import DigestiveSystem
+        from ira.systems.endocrine import EndocrineSystem
+        from ira.systems.immune import ImmuneSystem
+        from ira.systems.sensory import SensorySystem
+        from ira.systems.voice import VoiceSystem
+    
+        digestive = DigestiveSystem(
+            ingestor=ingestor,
+            knowledge_graph=graph,
+            embedding_service=embedding,
+            qdrant=qdrant,
+        )
+        immune = ImmuneSystem(
+            qdrant=qdrant,
+            knowledge_graph=graph,
+            embedding_service=embedding,
+        )
+        sensory = SensorySystem(knowledge_graph=graph)  # memory wired after init below
+        try:
+            await asyncio.wait_for(sensory.create_tables(), timeout=30)
+        except (asyncio.TimeoutError, Exception):
+            logger.warning("SensorySystem table creation slow/failed — continuing")
+        voice = VoiceSystem()
+        endocrine = EndocrineSystem()
+        immune.set_endocrine(endocrine)
+    
+        _services["digestive"] = digestive
+        _services["immune"] = immune
+        _services["sensory"] = sensory
+        _services["voice"] = voice
+        _services["endocrine"] = endocrine
+    
+        # ── Memory systems ────────────────────────────────────────────────
+        from ira.memory.conversation import ConversationMemory
+        from ira.memory.dream_mode import DreamMode
+        from ira.memory.episodic import EpisodicMemory
+        from ira.memory.long_term import LongTermMemory
+        from ira.systems.musculoskeletal import MusculoskeletalSystem
+    
+        _INIT_TIMEOUT = 30
+    
+        async def _safe_init(name: str, coro: Any) -> None:
+            try:
+                await asyncio.wait_for(coro, timeout=_INIT_TIMEOUT)
+                logger.info("Initialised %s", name)
+            except asyncio.TimeoutError:
+                logger.warning("Timed out initialising %s after %ds — skipping", name, _INIT_TIMEOUT)
+            except (ConfigurationError, Exception):
+                logger.warning("Failed to initialise %s — skipping", name, exc_info=True)
+    
+        long_term = LongTermMemory()
+        episodic = EpisodicMemory(long_term=long_term)
+        await _safe_init("episodic", episodic.initialize())
+        conversation = ConversationMemory()
+        await _safe_init("conversation", conversation.initialize())
+        musculoskeletal = MusculoskeletalSystem()
+        await _safe_init("musculoskeletal", musculoskeletal.create_tables())
+    
+        dream_mode = DreamMode(
+            long_term=long_term,
+            episodic=episodic,
+            conversation=conversation,
+            musculoskeletal=musculoskeletal,
+            retriever=retriever,
+            crm=crm,
+            data_event_bus=data_event_bus,
+        )
+        await _safe_init("dream_mode", dream_mode.initialize())
+    
+        _services["long_term"] = long_term
+        _services["episodic"] = episodic
+        _services["conversation"] = conversation
+        _services["musculoskeletal"] = musculoskeletal
+        _services["dream_mode"] = dream_mode
+    
+        # ── Learning hub ──────────────────────────────────────────────────
+        from ira.memory.procedural import ProceduralMemory
+        from ira.systems.learning_hub import LearningHub
+    
+        procedural_memory = ProceduralMemory()
+        await _safe_init("procedural_memory", procedural_memory.initialize())
+        learning_hub = LearningHub(crm=crm, procedural_memory=procedural_memory)
+    
+        dream_mode.configure(procedural_memory=procedural_memory)
+    
+        # ── Agent journal (daily actions + nightly reflections) ─────────────
+        from ira.memory.agent_journal import AgentJournal
+        agent_journal = AgentJournal()
+        await _safe_init("agent_journal", agent_journal.initialize())
+        dream_mode.configure(agent_journal=agent_journal)
+    
+        _services["procedural_memory"] = procedural_memory
+        _services["agent_journal"] = agent_journal
+        _services["learning_hub"] = learning_hub
+    
+        # ── Feedback handler & power levels (trust matrix) ─────────────────
+        from ira.brain.correction_store import CorrectionStore
+        from ira.brain.feedback_handler import FeedbackHandler
+        from ira.brain.power_levels import PowerLevelTracker
+    
+        correction_store = CorrectionStore()
+        await _safe_init("correction_store", correction_store.initialize())
+        power_level_tracker = PowerLevelTracker()
+        await _safe_init("power_level_tracker", power_level_tracker._load())
+    
+        feedback_handler = FeedbackHandler(
+            learning_hub=learning_hub,
+            correction_store=correction_store,
+            mem0_client=mem0_client,
+            procedural_memory=procedural_memory,
+            data_event_bus=data_event_bus,
+            power_level_tracker=power_level_tracker,
+        )
+        await feedback_handler.load_scores()
+    
+        _services["feedback_handler"] = feedback_handler
+        _services["correction_store"] = correction_store
+        _services["power_level_tracker"] = power_level_tracker
+    
+        nemesis = pantheon.get_agent("nemesis")
+        if nemesis is not None:
+            nemesis.configure(learning_hub=learning_hub, peer_agents=pantheon.agents)
+    
+        # ── Additional memory systems ─────────────────────────────────────
+        from ira.memory.emotional_intelligence import EmotionalIntelligence
+        from ira.memory.goal_manager import GoalManager
+        from ira.memory.inner_voice import InnerVoice
+        from ira.memory.metacognition import Metacognition
+        from ira.memory.relationship import RelationshipMemory
+    
+        emotional_intelligence = EmotionalIntelligence()
+        await _safe_init("emotional_intelligence", emotional_intelligence.initialize())
+        relationship_memory = RelationshipMemory()
+        await _safe_init("relationship_memory", relationship_memory.initialize())
+        goal_manager = GoalManager()
+        await _safe_init("goal_manager", goal_manager.initialize())
+        metacognition = Metacognition()
+        await _safe_init("metacognition", metacognition.initialize())
+        inner_voice = InnerVoice()
+        await _safe_init("inner_voice", inner_voice.initialize())
+    
+        sensory.configure_memory(
+            emotional_intelligence=emotional_intelligence,
+            conversation_memory=conversation,
+            relationship_memory=relationship_memory,
+        )
+    
+        _services["emotional_intelligence"] = emotional_intelligence
+        _services["relationship_memory"] = relationship_memory
+        _services["goal_manager"] = goal_manager
+        _services["metacognition"] = metacognition
+        _services["inner_voice"] = inner_voice
+    
+        # ── Inject ALL memory services into Pantheon agents ───────────────
+        pantheon.inject_services({
+            SK.LONG_TERM_MEMORY: long_term,
+            SK.EPISODIC_MEMORY: episodic,
+            SK.CONVERSATION_MEMORY: conversation,
+            SK.RELATIONSHIP_MEMORY: relationship_memory,
+            SK.GOAL_MANAGER: goal_manager,
+            SK.EMOTIONAL_INTELLIGENCE: emotional_intelligence,
+            SK.PROCEDURAL_MEMORY: procedural_memory,
+            SK.LEARNING_HUB: learning_hub,
+            SK.DATA_EVENT_BUS: data_event_bus,
+            SK.PANTHEON: pantheon,
+            SK.REDIS: redis_cache,
+            SK.GOOGLE_DOCS: google_docs,
+            SK.DOCUMENT_AI: document_ai,
+            SK.PDFCO: pdfco,
+            SK.DLP: dlp,
+            SK.AGENT_JOURNAL: agent_journal,
+            SK.IMMUNE: immune,
+            SK.POWER_LEVEL_TRACKER: power_level_tracker,
+        })
+    
+        # ── Unified context ───────────────────────────────────────────────
+        from ira.context import UnifiedContextManager
+    
+        unified_context = UnifiedContextManager()
+        _services["unified_context"] = unified_context
+    
+        # ── Tool stats (observability) ────────────────────────────────────
+        from ira.brain.tool_stats import ToolStatsTracker
+        tool_stats_tracker = ToolStatsTracker()
+        _services["tool_stats_tracker"] = tool_stats_tracker
+    
+        # ── Request pipeline ──────────────────────────────────────────────
+        from ira.pipeline import RequestPipeline
+    
+        request_pipeline = RequestPipeline(
+            sensory=sensory,
+            conversation_memory=conversation,
+            relationship_memory=relationship_memory,
+            goal_manager=goal_manager,
+            procedural_memory=procedural_memory,
+            metacognition=metacognition,
+            inner_voice=inner_voice,
+            pantheon=pantheon,
+            voice=voice,
+            endocrine=endocrine,
+            crm=crm,
+            musculoskeletal=musculoskeletal,
+            unified_context=unified_context,
+            redis_cache=redis_cache,
+            episodic_memory=episodic,
+            long_term_memory=long_term,
+            tool_stats_tracker=tool_stats_tracker,
+            agent_journal=agent_journal,
+            power_level_tracker=power_level_tracker,
+        )
+        _services["pipeline"] = request_pipeline
+    
+        # ── Task orchestrator ────────────────────────────────────────────
+        from ira.systems.task_orchestrator import TaskOrchestrator
+    
+        task_orchestrator = TaskOrchestrator(
+            pantheon=pantheon,
+            redis_cache=redis_cache,
+            voice=voice,
+            pdfco=pdfco,
+        )
+        _services["task_orchestrator"] = task_orchestrator
+    
+        # ── Board meeting system ──────────────────────────────────────────
+        from ira.systems.board_meeting import BoardMeeting
+    
+        async def _agent_handler(name: str, topic: str) -> str:
+            agent = pantheon.get_agent(name)
+            if agent is None:
+                return f"(Agent '{name}' not found)"
+            return await agent.handle(topic)
+    
+        board_meeting = BoardMeeting(agent_handler=_agent_handler)
+        _services["board_meeting"] = board_meeting
+    
+        # ── Email processor ───────────────────────────────────────────────
+        from ira.interfaces.email_processor import EmailProcessor
+    
+        delphi = pantheon.get_agent("delphi")
+        email_processor = EmailProcessor(
+            delphi=delphi,
+            digestive=digestive,
+            sensory=sensory,
+            crm=crm,
+            pantheon=pantheon,
+            unified_context=unified_context,
+        )
+        _services["email_processor"] = email_processor
+        pantheon.inject_services({SK.EMAIL_PROCESSOR: email_processor})
+    
+        # ── Drip engine ────────────────────────────────────────────────────
+        from ira.interfaces.email_processor import GmailDraftSender
+        from ira.systems.drip_engine import AutonomousDripEngine
+        from ira.systems.outbound_approvals import OutboundApprovalService
+    
+        gmail_sender = GmailDraftSender(email_processor=email_processor)
+        outbound_approvals = OutboundApprovalService(
+            storage_path=Path("data/operations/outbound_approvals.json"),
+        )
+        _services[SK.OUTBOUND_APPROVALS] = outbound_approvals
+        drip_engine = AutonomousDripEngine(
+            crm=crm,
+            quotes=quotes,
+            message_bus=bus,
+            gmail=gmail_sender,
+        )
+        _services["drip_engine"] = drip_engine
+    
+        # ── Respiratory system (background tasks) ─────────────────────────
+        from ira.systems.respiratory import RespiratorySystem
+    
+        respiratory = RespiratorySystem(
+            dream_mode=dream_mode,
+            drip_engine=drip_engine,
+            immune_system=immune,
+            email_processor=email_processor,
+        )
+        await respiratory.start()
+        _services["respiratory"] = respiratory
+    
+        # ── Curiosity loop (boredom-driven inter-agent exploration) ──────
+        from ira.systems.curiosity_loop import CuriosityLoop
+        curiosity_loop = CuriosityLoop(endocrine=endocrine, bus=bus, pantheon=pantheon)
+        await curiosity_loop.start()
+        _services["curiosity_loop"] = curiosity_loop
+    
+        # ── Dream mode: sleep phase (phantom limb, trust, curiosity) ──────
+        dream_mode.configure(
+            immune_system=immune,
+            power_level_tracker=power_level_tracker,
+            curiosity_runner=lambda: curiosity_loop.run_one_cycle(),
+        )
+    
+        # ── Email polling background task ─────────────────────────────────
+        email_poll_task = None
+        if settings.google.email_poll_enabled:
+            email_poll_task = asyncio.create_task(email_processor.poll_inbox())
+            logger.info(
+                "Email polling started (mode=%s)", settings.google.email_mode.value,
+            )
+        else:
+            logger.info("Email polling disabled (IRA_EMAIL_POLL=false)")
+    
+        # ── Immune startup validation ─────────────────────────────────────
+        try:
+            health_report = await immune.run_startup_validation()
+            healthy = all(
+                v.get("status") == "healthy" for v in health_report.values()
+            )
+            status = "ALL HEALTHY" if healthy else "DEGRADED"
+            logger.info("Startup validation: %s — %s", status, list(health_report))
+        except (IraError, Exception):
+            logger.exception("Startup validation failed — continuing in degraded mode")
+    
+        # ── Ready ─────────────────────────────────────────────────────────
+        component_count = len(_services)
+        agent_count = len(pantheon.agents)
+        logger.info(
+            "Ira is awake — %d components, %d agents, mode=%s",
+            component_count,
+            agent_count,
+            settings.google.email_mode.value,
+        )
+    
+        yield
+    
+        # ── SHUTDOWN ──────────────────────────────────────────────────────
+        logger.info("Ira is going to sleep.")
+    
+        try:
+            from langfuse import Langfuse
+            Langfuse().flush()
+            logger.info("Langfuse traces flushed")
+        except Exception:
+            logger.warning("Langfuse flush failed", exc_info=True)
+    
+        if email_poll_task is not None:
+            email_poll_task.cancel()
+            try:
+                await email_poll_task
+            except asyncio.CancelledError:
+                pass
+    
+        curiosity_loop = _services.get("curiosity_loop")
+        if curiosity_loop is not None and hasattr(curiosity_loop, "stop"):
+            try:
+                await curiosity_loop.stop()
             except (IraError, Exception):
-                logger.exception("Failed to close %s", svc_name)
-
-    _services.clear()
-    logger.info("All services shut down.")
+                logger.exception("CuriosityLoop stop failed")
+        await respiratory.stop()
+        await data_event_bus.stop()
+        await pantheon.stop()
+        await redis_cache.close()
+        await google_docs.close()
+        await document_ai.close()
+        await dlp.close()
+        await sensory.close()
+        await musculoskeletal.close()
+        await graph.close()
+        await crm.close()
+        await vendor_db.close()
+    
+        for svc_name in (
+            "crm",
+            "vendor_db",
+            "correction_store",
+            "conversation", "episodic", "dream_mode", "emotional_intelligence",
+            "relationship_memory", "goal_manager", "metacognition", "inner_voice",
+            "procedural_memory",
+        ):
+            svc = _services.get(svc_name)
+            if svc is not None and hasattr(svc, "close"):
+                try:
+                    await svc.close()
+                except (IraError, Exception):
+                    logger.exception("Failed to close %s", svc_name)
+    
+        _services.clear()
+        logger.info("All services shut down.")
+    finally:
+        await _data_dir_lock.__aexit__(None, None, None)
 
 
 # ── App ───────────────────────────────────────────────────────────────────

@@ -173,16 +173,15 @@ class LongTermMemory:
         source: str,
         confidence: float,
     ) -> list[dict]:
-        return await self.store(
-            fact,
-            user_id="global",
-            metadata={
-                "type": "fact",
-                "source": source,
-                "confidence": confidence,
-                "verified": confidence >= 0.8,
-            },
-        )
+        meta: dict[str, Any] = {
+            "type": "fact",
+            "source": source,
+            "confidence": confidence,
+            "verified": confidence >= 0.8,
+        }
+        if source.startswith(("email:", "takeout_email", "contact_history:")):
+            meta["source_type"] = "email"
+        return await self.store(fact, user_id="global", metadata=meta)
 
     def apply_decay(self, days_old: int, access_count: int = 0) -> float:
         base_stability = 30.0

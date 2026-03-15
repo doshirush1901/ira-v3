@@ -38,14 +38,19 @@ Use the **conversation history in this chat** to decide. Session state is per-ch
 
 ## When Ira session is ON and the user sends any other message
 
+**Ira runs in Cursor using the agentic flow by default.** Always follow `.cursor/rules/ira-cursor-agentic-mode.mdc`: show **Explore → Think → Act → (loop) → Result** in the chat. The user must see each phase.
+
 1. Treat the **entire current user message** as the question for Ira.
-2. **Cursor-only running indicator:** First post this single line so the user sees Ira is working:
 
-   **⟳ Ira is thinking…** *Running full pipeline (routing, agents, retrieval).*
+2. **🔍 Explore** — Before calling Ira, gather context in the chat:
+   - Run `SemanticSearch` or `Grep` for concepts relevant to the question (e.g. lead time, PF1, vendor, pipeline, pricing).
+   - Optionally read `docs/`, `data/`, or agent/code paths that match the query domain.
+   - In the chat, post **🔍 Exploring** and list what you’re looking at (queries, file paths, or a one-line summary). Keep it short.
 
-3. **Manus-style steps in Cursor** — show what Ira is doing (which agent, what data/tools):
+3. **💭 Think** — Post **💭 Thinking** and write 2–4 sentences in plain language: what the question is about, which domain/agents likely apply (per ira-delegation-matrix), and what you’ll do next (e.g. run Ira’s pipeline and use the context we found).
 
-   - **If the API server is running** (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health` returns `200`): use the **streaming** endpoint so the user sees steps as they happen. POST to `http://localhost:8000/api/query/stream` with `{"query": "<user message>", "user_id": "cursor_user"}` and read the SSE stream. For each event (before `final_answer`), append a line to a **steps block** using this mapping:
+4. **▶ Act** — Post **▶ Acting** and run Ira:
+   - **If the API server is running** (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health` returns `200`): POST to `http://localhost:8000/api/query/stream` with `{"query": "<user message>", "user_id": "cursor_user"}` and read the SSE stream. For each event (before `final_answer`), append to a **steps block**:
      - `perceiving` → "• Perceiving input"
      - `remembering` → "• Recalling memory"
      - `routing` → "• Routing (Athena)"
@@ -58,15 +63,16 @@ Use the **conversation history in this chat** to decide. Session state is per-ch
      - `faithfulness_check` → "• Faithfulness check"
      - `assessing` → "• Assessing confidence"
      - `shaping` → "• Shaping response"
-     Emit the steps block (as a code block or bullet list) so it grows as events arrive, then when `final_answer` is received display the response. This gives a live "animation" of what Ira is doing. **If the stream fails** (timeout, connection refused, or error event): fall back to the CLI path below and show steps from the JSON.
-   - **If the API server is not running** (or stream failed): run the CLI and show the steps block from the JSON, then the response:
+     Show the steps block under **What Ira did**, then when `final_answer` is received use it for the Result phase. **If the stream fails:** fall back to the CLI below and show steps from the JSON.
+   - **If the API server is not running** (or stream failed): run:
      ```bash
      cd "$(git rev-parse --show-toplevel)" && poetry run ira ask "<user message>" --json
      ```
-     Parse stdout as JSON. The CLI now returns `{"response": "...", "agents_consulted": [...], "steps": ["• Perceiving input", "• Routing (Athena)", "▶ Clio — Researcher", "  ↳ Clio → search_qdrant", "✓ Clio done", ...]}` when steps are collected.
-     **Always display the steps block** (Manus-style) before the response: use a heading **What Ira did** and then a code block or bullet list with each step on its own line (e.g. `• Perceiving input`, `▶ Clio — Researcher`, `  ↳ Clio → search_qdrant`, `✓ Clio done`). Then display the `response` as Markdown. Optionally mention agents consulted.
+     Parse stdout as JSON. Display the `steps` array under **What Ira did**, then use `response` for the Result phase. Optionally mention `agents_consulted`.
 
-5. If the command or stream fails: follow the **Cursor-as-Ira fallback** in `ira-cursor-workflow.mdc` and say that Ira's full stack was unavailable.
+5. **Loop (if needed)** — If the Act step failed (CLI/API error, timeout) or the answer is clearly incomplete: post **💭 Thinking (next)** with one or two sentences (e.g. “Stack unavailable; I’ll answer from codebase and data.”), then **▶ Acting** again (e.g. follow Cursor-as-Ira fallback in `ira-cursor-workflow.mdc`: search, read, synthesize). Repeat until you have something to present.
+
+6. **✅ Result** — Post **✅ Result** and display the final answer as Markdown. Use Ira’s voice (SOUL.md): decisive, concise, grounded. For factual answers include Confidence, Freshness, and Sources (per ira-response-contracts). If the stack was unavailable, say so and cite the sources you used (files, data).
 
 ## When Ira session is OFF
 
@@ -79,5 +85,5 @@ Use the **conversation history in this chat** to decide. Session state is per-ch
 |----------------------------|---------------|-------------|
 | "start Ira"                | → ON          | Run Docker/containers (ira-api), then confirm "Ira session started" for this chat. |
 | "end Ira"                  | → OFF         | Confirm "Ira session ended". |
-| Any other message, ON      | ON            | Run `ira ask "<message>" --json`, show Ira's response. |
+| Any other message, ON      | ON            | **Agentic flow:** Explore → Think → Act (run Ira stream/CLI) → loop if needed → Result. Show each phase in the chat. |
 | Any other message, OFF     | OFF           | Normal Cursor; route to Ira only if they say @Ira / ask Ira. |

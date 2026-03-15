@@ -44,7 +44,8 @@ try:
     )
 
     HAS_RAGAS = True
-except ImportError:
+except (ImportError, AttributeError):
+    # AttributeError: pyarrow/datasets version mismatch (e.g. PyExtensionType)
     HAS_RAGAS = False
 
 pytestmark = [
