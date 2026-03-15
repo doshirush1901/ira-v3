@@ -9,6 +9,7 @@ embedding generation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Callable, Sequence
 from uuid import UUID
@@ -27,6 +28,25 @@ logger = logging.getLogger(__name__)
 _UPSERT_BATCH_SIZE = 100
 # Smaller batches for Qdrant Cloud to avoid request/payload size limits (e.g. 32MB).
 _CLOUD_UPSERT_BATCH_SIZE = 50
+# Max concurrent search requests to Qdrant.  Qdrant Cloud resets connections
+# when too many arrive simultaneously (ResponseHandlingException); a semaphore
+# of 4 keeps throughput high while avoiding connection drops.
+_MAX_CONCURRENT_SEARCHES = 4
+
+# Payload fields returned by search/hybrid_search.  Fetching only these avoids
+# transferring large raw payloads over the network — critical for Qdrant Cloud
+# where full-payload responses can be 10-30x slower than selective ones.
+_SEARCH_PAYLOAD_FIELDS: list[str] = [
+    "content", "text", "raw_text",
+    "source", "filename",
+    "source_category", "doc_type",
+    "metadata",
+    "machines", "prices", "customer",
+    "chunk", "total_chunks",
+    "source_group", "ingested_at",
+    "subject", "from_email", "to_email", "direction",
+    "thread_key", "company_domain", "has_quote", "has_price",
+]
 
 
 class QdrantManager:
@@ -49,6 +69,7 @@ class QdrantManager:
         self._embeddings = embedding_service
         self._default_collection = cfg.collection
         self._event_bus = event_bus
+        self._search_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
         # Optional second client for sync: when cloud_url is set, every upsert
         # and ensure_collection is mirrored so local and cloud stay in sync.
         self._client_cloud: AsyncQdrantClient | None = None
@@ -70,6 +91,19 @@ class QdrantManager:
 
     # ── collection lifecycle ─────────────────────────────────────────────
 
+    _PAYLOAD_INDEXES: list[tuple[str, str]] = [
+        ("source_category", "keyword"),
+        ("doc_type", "keyword"),
+        ("source", "keyword"),
+        ("source_group", "keyword"),
+        ("filename", "keyword"),
+        ("from_email", "keyword"),
+        ("to_email", "keyword"),
+        ("direction", "keyword"),
+        ("company_domain", "keyword"),
+        ("thread_key", "keyword"),
+    ]
+
     async def ensure_collection(
         self,
         name: str | None = None,
@@ -78,7 +112,8 @@ class QdrantManager:
         """Create the collection if it does not already exist.
 
         Defaults to cosine distance, which matches the normalised Voyage
-        embeddings.
+        embeddings.  Also ensures payload indexes exist for commonly
+        filtered fields (required by Qdrant Cloud).
         """
         collection = name or self._default_collection
         try:
@@ -93,6 +128,7 @@ class QdrantManager:
                     ),
                 )
                 logger.info("Created Qdrant collection '%s' (dim=%d)", collection, vector_size)
+            await self._ensure_payload_indexes(self._client, collection)
             # Mirror to cloud if sync is enabled
             if self._client_cloud is not None:
                 if await self._client_cloud.collection_exists(collection):
@@ -106,9 +142,48 @@ class QdrantManager:
                         ),
                     )
                     logger.info("Created Qdrant cloud collection '%s' (dim=%d)", collection, vector_size)
+                await self._ensure_payload_indexes(self._client_cloud, collection)
         except (DatabaseError, Exception):
             logger.exception("Failed to ensure collection '%s'", collection)
             raise
+
+    async def _ensure_payload_indexes(
+        self,
+        client: AsyncQdrantClient,
+        collection: str,
+    ) -> None:
+        """Create payload indexes if they don't already exist.
+
+        Required for Qdrant Cloud where filtered queries fail without
+        explicit indexes.  Errors are logged but not raised so that
+        startup is not blocked by index creation on large collections.
+        """
+        try:
+            info = await client.get_collection(collection)
+            existing = set((info.payload_schema or {}).keys())
+        except Exception:
+            existing = set()
+
+        for field, schema_type in self._PAYLOAD_INDEXES:
+            if field in existing:
+                continue
+            try:
+                schema = (
+                    models.PayloadSchemaType.KEYWORD
+                    if schema_type == "keyword"
+                    else models.PayloadSchemaType.BOOL
+                )
+                await client.create_payload_index(
+                    collection_name=collection,
+                    field_name=field,
+                    field_schema=schema,
+                )
+                logger.info("Created payload index '%s' (%s) on '%s'", field, schema_type, collection)
+            except Exception:
+                logger.debug(
+                    "Payload index '%s' on '%s' not created (may already exist or cluster busy)",
+                    field, collection, exc_info=True,
+                )
 
     # ── upsert ───────────────────────────────────────────────────────────
 
@@ -220,7 +295,7 @@ class QdrantManager:
             points = await self._client.retrieve(
                 collection_name=col,
                 ids=list(point_ids),
-                with_payload=True,
+                with_payload=_SEARCH_PAYLOAD_FIELDS,
                 with_vectors=False,
             )
         except (DatabaseError, Exception):
@@ -240,18 +315,20 @@ class QdrantManager:
         """Dense vector search — embed the query and find nearest neighbours."""
         col = collection or self._default_collection
 
-        try:
-            query_vector = await self._embeddings.embed_query(query)
-            result = await self._client.query_points(
-                collection_name=col,
-                query=query_vector,
-                limit=limit,
-                score_threshold=score_threshold,
-            )
-            hits = result.points
-        except (DatabaseError, Exception):
-            logger.exception("Search failed in '%s'", col)
-            raise
+        async with self._search_semaphore:
+            try:
+                query_vector = await self._embeddings.embed_query(query)
+                result = await self._client.query_points(
+                    collection_name=col,
+                    query=query_vector,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    with_payload=_SEARCH_PAYLOAD_FIELDS,
+                )
+                hits = result.points
+            except (DatabaseError, Exception):
+                logger.exception("Search failed in '%s'", col)
+                raise
 
         return [_hit_to_dict(hit) for hit in hits]
 
@@ -285,21 +362,50 @@ class QdrantManager:
                 ]
             )
 
-        try:
-            query_vector = await self._embeddings.embed_query(query)
-            result = await self._client.query_points(
-                collection_name=col,
-                query=query_vector,
-                query_filter=keyword_filter,
-                limit=limit,
-            )
-            hits = result.points
-        except Exception as e:
-            logger.warning(
-                "Hybrid search failed in '%s' (timeout or unreachable): %s — returning no results",
-                col, e,
-            )
-            return []
+        async with self._search_semaphore:
+            try:
+                query_vector = await self._embeddings.embed_query(query)
+                result = await self._client.query_points(
+                    collection_name=col,
+                    query=query_vector,
+                    query_filter=keyword_filter,
+                    limit=limit,
+                    with_payload=_SEARCH_PAYLOAD_FIELDS,
+                )
+                hits = result.points
+            except Exception as e:
+                _err_str = str(e)
+                if keyword_filter is not None and (
+                    "Index required" in _err_str
+                    or "400" in _err_str
+                    or "Bad request" in _err_str.lower()
+                ):
+                    logger.warning(
+                        "Hybrid search filter failed in '%s' (missing index?) — "
+                        "retrying without filter: %s",
+                        col, type(e).__name__,
+                    )
+                    try:
+                        result = await self._client.query_points(
+                            collection_name=col,
+                            query=query_vector,
+                            query_filter=None,
+                            limit=limit,
+                            with_payload=_SEARCH_PAYLOAD_FIELDS,
+                        )
+                        hits = result.points
+                    except Exception as e2:
+                        logger.warning(
+                            "Hybrid search fallback also failed in '%s': %s",
+                            col, e2,
+                        )
+                        return []
+                else:
+                    logger.warning(
+                        "Hybrid search failed in '%s' (%s: %s) — returning no results",
+                        col, type(e).__name__, e,
+                    )
+                    return []
 
         return [_hit_to_dict(hit) for hit in hits]
 
@@ -339,7 +445,13 @@ class QdrantManager:
                 total += len(points)
                 if offset is None or not points:
                     break
-        except Exception:
+        except Exception as exc:
+            if "Index required" in str(exc) or "400" in str(exc):
+                logger.warning(
+                    "count_by_source_category: payload index missing for '%s' — returning 0",
+                    source_category,
+                )
+                return 0
             logger.exception("count_by_source_category failed for %s", source_category)
             raise
         return total

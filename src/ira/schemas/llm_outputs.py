@@ -85,18 +85,46 @@ class MachineEntity(BaseModel):
     description: str = ""
 
 
+class ProjectEntity(BaseModel):
+    project_id: str = ""
+    customer: str = ""
+    machine_model: str = ""
+    status: str = ""
+
+
+class ApplicationEntity(BaseModel):
+    name: str = ""
+    description: str = ""
+
+
+class MaterialEntity(BaseModel):
+    name: str = ""
+    category: str = ""
+
+
+class ExhibitionEntity(BaseModel):
+    name: str = ""
+    location: str = ""
+    year: str = ""
+
+
 class GraphRelationship(BaseModel):
     from_type: str = ""
     from_key: str = ""
     rel: str = ""
     to_type: str = ""
     to_key: str = ""
+    properties: dict[str, str] = Field(default_factory=dict)
 
 
 class GraphEntities(BaseModel):
     companies: list[CompanyEntity] = Field(default_factory=list)
     people: list[PersonEntity] = Field(default_factory=list)
     machines: list[MachineEntity] = Field(default_factory=list)
+    projects: list[ProjectEntity] = Field(default_factory=list)
+    applications: list[ApplicationEntity] = Field(default_factory=list)
+    materials: list[MaterialEntity] = Field(default_factory=list)
+    exhibitions: list[ExhibitionEntity] = Field(default_factory=list)
     relationships: list[GraphRelationship] = Field(default_factory=list)
 
 

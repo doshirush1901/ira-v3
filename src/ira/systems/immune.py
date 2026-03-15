@@ -155,7 +155,9 @@ class ImmuneSystem:
         collection_names = [c.name for c in collections.collections]
         expected = self._qdrant._default_collection
         if expected not in collection_names:
-            logger.warning("Qdrant collection '%s' not found (available: %s)", expected, collection_names)
+            error_msg = f"Collection '{expected}' not found (available: {collection_names})"
+            logger.warning("Qdrant %s", error_msg)
+            return {"status": "unhealthy", "latency_ms": round(latency, 1), "error": error_msg}
         return {"status": "healthy", "latency_ms": round(latency, 1), "error": None}
 
     async def _check_neo4j(self) -> dict[str, Any]:
@@ -332,6 +334,7 @@ class ImmuneSystem:
                     url=self._qdrant_url,
                     api_key=api_key or None,
                     check_compatibility=False,
+                    timeout=settings.qdrant.timeout,
                 )
                 await self._qdrant.ensure_collection()
                 check = await self._check_qdrant()
@@ -340,10 +343,13 @@ class ImmuneSystem:
             elif service_name == "neo4j":
                 result["action"] = "reconnect_neo4j"
                 from neo4j import AsyncGraphDatabase
+                settings = get_settings()
                 await self._graph._driver.close()
                 self._graph._driver = AsyncGraphDatabase.driver(
                     self._neo4j_uri,
                     auth=(self._neo4j_user, self._neo4j_password),
+                    max_connection_pool_size=settings.app.neo4j_max_pool_size,
+                    connection_acquisition_timeout=60.0,
                 )
                 check = await self._check_neo4j()
                 result["success"] = check["status"] == "healthy"

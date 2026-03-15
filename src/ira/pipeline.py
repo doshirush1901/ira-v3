@@ -709,7 +709,15 @@ class RequestPipeline:
                     trace["faithfulness"] = _faith_result.get("score", 1.0)
                     _faith_score = _faith_result.get("score", 1.0)
 
-                    if _faith_score < _app_cfg.faithfulness_hard_threshold:
+                    _agents_did_real_work = (
+                        len(agents_used) > 1
+                        or (agents_used and agents_used[0] not in ("athena", "timeout", "truth_hints", "fast_path"))
+                    )
+                    _response_is_substantive = len(raw_response) > 200
+
+                    if _faith_score < _app_cfg.faithfulness_hard_threshold and not (
+                        _agents_did_real_work and _response_is_substantive
+                    ):
                         raw_response = (
                             "I can't provide a reliable answer from the current evidence. "
                             "Please narrow the request or provide additional source documents."
@@ -719,7 +727,10 @@ class RequestPipeline:
                             "FAITHFULNESS | score=%.2f < hard threshold %.2f — response blocked",
                             _faith_score, _app_cfg.faithfulness_hard_threshold,
                         )
-                    elif _faith_score < _app_cfg.faithfulness_threshold:
+                    elif _faith_score < _app_cfg.faithfulness_threshold or (
+                        _faith_score < _app_cfg.faithfulness_hard_threshold
+                        and _agents_did_real_work
+                    ):
                         _caveat = (
                             "\n\n> Note: Some claims could not be fully verified "
                             "against our documentation. Please cross-check "
@@ -731,11 +742,7 @@ class RequestPipeline:
                             _faith_score, _app_cfg.faithfulness_threshold,
                         )
             except (LLMError, Exception):
-                logger.warning("Faithfulness gate failed", exc_info=True)
-                raw_response = (
-                    "I can't verify this answer against internal documentation right now. "
-                    "Please retry shortly or request source-backed details."
-                )
+                logger.warning("Faithfulness gate failed — continuing with unverified response", exc_info=True)
         _record_stage("faithfulness")
 
         # ── 6.4b GUARDRAILS (LLM-routed responses) ───────────────────

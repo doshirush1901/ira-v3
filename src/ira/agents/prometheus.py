@@ -133,7 +133,7 @@ class Prometheus(BaseAgent):
 
     # ── tool handlers ─────────────────────────────────────────────────────
 
-    async def _tool_search_sales_knowledge(self, query: str) -> str:
+    async def _tool_search_sales_knowledge(self, query: str, **_kwargs: str) -> str:
         """Search across sales categories AND the full KB for maximum coverage."""
         domain_results = await self.search_domain_knowledge(query, limit=8)
         general_results = await self.search_knowledge(query, limit=5)

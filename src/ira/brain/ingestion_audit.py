@@ -84,6 +84,7 @@ async def _fetch_qdrant_sources(collection: str) -> tuple[set[str], dict[str, An
         url=cfg.url,
         api_key=(cfg.api_key.get_secret_value() or None),
         check_compatibility=False,
+        timeout=cfg.timeout,
     )
     raw_sources: set[str] = set()
     scanned_points = 0
@@ -94,7 +95,7 @@ async def _fetch_qdrant_sources(collection: str) -> tuple[set[str], dict[str, An
             points, offset = await client.scroll(
                 collection_name=collection,
                 limit=1000,
-                with_payload=True,
+                with_payload=["source"],
                 with_vectors=False,
                 offset=offset,
             )
@@ -137,7 +138,13 @@ async def _fetch_neo4j_evidence() -> dict[str, Any]:
             "per_file_source_supported": False,
         }
 
-    driver = AsyncGraphDatabase.driver(cfg.uri, auth=(user, password))
+    app_cfg = get_settings().app
+    driver = AsyncGraphDatabase.driver(
+        cfg.uri,
+        auth=(user, password),
+        max_connection_pool_size=app_cfg.neo4j_max_pool_size,
+        connection_acquisition_timeout=60.0,
+    )
     try:
         async with driver.session() as session:
             nodes_row = await (await session.run("MATCH (n) RETURN count(n) AS c")).single()

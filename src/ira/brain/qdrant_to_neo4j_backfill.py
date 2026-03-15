@@ -163,6 +163,49 @@ async def run_backfill_from_qdrant(
                     except (DatabaseError, Exception):
                         logger.debug("Failed to add machine %s", machine.get("model"), exc_info=True)
 
+            for project in extracted.get("projects", []):
+                if project.get("project_id"):
+                    try:
+                        await graph.add_project(
+                            project_id=project["project_id"],
+                            customer=project.get("customer", ""),
+                            machine_model=project.get("machine_model", ""),
+                            status=project.get("status", ""),
+                        )
+                    except (DatabaseError, Exception):
+                        logger.debug("Failed to add project %s", project.get("project_id"), exc_info=True)
+
+            for app in extracted.get("applications", []):
+                if app.get("name"):
+                    try:
+                        await graph.add_application(
+                            name=app["name"],
+                            description=app.get("description", ""),
+                        )
+                    except (DatabaseError, Exception):
+                        logger.debug("Failed to add application %s", app.get("name"), exc_info=True)
+
+            for mat in extracted.get("materials", []):
+                if mat.get("name"):
+                    try:
+                        await graph.add_material(
+                            name=mat["name"],
+                            category=mat.get("category", ""),
+                        )
+                    except (DatabaseError, Exception):
+                        logger.debug("Failed to add material %s", mat.get("name"), exc_info=True)
+
+            for exh in extracted.get("exhibitions", []):
+                if exh.get("name"):
+                    try:
+                        await graph.add_exhibition(
+                            name=exh["name"],
+                            location=exh.get("location", ""),
+                            year=exh.get("year", ""),
+                        )
+                    except (DatabaseError, Exception):
+                        logger.debug("Failed to add exhibition %s", exh.get("name"), exc_info=True)
+
             for rel in extracted.get("relationships", []):
                 try:
                     ok = await graph.add_relationship(

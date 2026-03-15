@@ -709,12 +709,22 @@ class BaseAgent(ABC):
         return {"thought": "Could not parse structured response.", "final_answer": raw}
 
     async def _execute_tool(self, name: str, inputs: dict[str, Any]) -> str:
-        """Find and execute a registered tool by name."""
+        """Find and execute a registered tool by name.
+
+        Strips unexpected keyword arguments that the LLM may hallucinate
+        (e.g. ``limit``, ``max_results``) so tool handlers don't crash
+        with ``got an unexpected keyword argument``.
+        """
         tracker = self._services.get("tool_stats_tracker")
         for tool in self.tools:
             if tool.name == name:
+                declared_params = set(tool.parameters.keys())
+                safe_inputs = {k: v for k, v in inputs.items() if k in declared_params}
+                if len(safe_inputs) < len(inputs):
+                    _dropped = set(inputs) - declared_params
+                    logger.debug("Tool '%s': dropped undeclared params %s", name, _dropped)
                 try:
-                    result = await tool.handler(**inputs)
+                    result = await tool.handler(**safe_inputs)
                     if tracker is not None:
                         await tracker.record_tool_call(self.name, name, success=True)
                     return str(result)[:4000]

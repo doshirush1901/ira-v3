@@ -186,6 +186,45 @@ class KnowledgeGraph:
             model=model, category=category, description=description,
         )
 
+    async def add_project(
+        self,
+        project_id: str,
+        customer: str = "",
+        machine_model: str = "",
+        status: str = "",
+    ) -> None:
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (p:Project {project_id: $pid}) "
+                "SET p.customer = $customer, p.machine_model = $machine_model, p.status = $status",
+                pid=project_id, customer=customer, machine_model=machine_model, status=status,
+            )
+        await self._emit("project", project_id, {
+            "project_id": project_id, "customer": customer,
+            "machine_model": machine_model, "status": status,
+        })
+
+    async def add_application(self, name: str, description: str = "") -> None:
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (a:Application {name: $name}) SET a.description = $description",
+                name=name, description=description,
+            )
+
+    async def add_material(self, name: str, category: str = "") -> None:
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (m:Material {name: $name}) SET m.category = $category",
+                name=name, category=category,
+            )
+
+    async def add_exhibition(self, name: str, location: str = "", year: str = "") -> None:
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (e:Exhibition {name: $name}) SET e.location = $location, e.year = $year",
+                name=name, location=location, year=year,
+            )
+
     async def add_quote(
         self,
         quote_id: str,
@@ -237,6 +276,10 @@ class KnowledgeGraph:
         "Person": "email",
         "Machine": "model",
         "Quote": "quote_id",
+        "Project": "project_id",
+        "Application": "name",
+        "Material": "name",
+        "Exhibition": "name",
     }
 
     _ALLOWED_REL_TYPES = frozenset({
@@ -244,6 +287,8 @@ class KnowledgeGraph:
         "MANUFACTURES", "COMPETES_WITH", "CONTACTED_BY", "REFERRED_BY",
         "QUOTED_TO", "QUOTES_MACHINE", "CO_RELEVANT",
         "DESCRIBES", "FROM_SOURCE", "REFERS_TO", "IN_CLUSTER",
+        "CUSTOMER_OF", "SUPPLIES_PARTS_TO", "DISTRIBUTES_FOR", "EXHIBITED_AT",
+        "USES_MATERIAL", "FOR_APPLICATION", "PART_OF_PROJECT", "PROJECT_FOR",
     })
 
     async def add_relationship(
@@ -645,6 +690,18 @@ class KnowledgeGraph:
         schema_builder.add_entity(
             SchemaEntity(label="Quote", properties=["quote_id", "value", "status"])
         )
+        schema_builder.add_entity(
+            SchemaEntity(label="Project", properties=["project_id", "customer", "machine_model", "status"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Application", properties=["name", "description"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Material", properties=["name", "category"])
+        )
+        schema_builder.add_entity(
+            SchemaEntity(label="Exhibition", properties=["name", "location", "year"])
+        )
 
         for rel_label, source, target in [
             ("WORKS_AT", "Person", "Company"),
@@ -656,6 +713,14 @@ class KnowledgeGraph:
             ("COMPETES_WITH", "Company", "Company"),
             ("CONTACTED_BY", "Company", "Person"),
             ("REFERRED_BY", "Person", "Person"),
+            ("CUSTOMER_OF", "Company", "Company"),
+            ("SUPPLIES_PARTS_TO", "Company", "Company"),
+            ("DISTRIBUTES_FOR", "Company", "Company"),
+            ("EXHIBITED_AT", "Company", "Exhibition"),
+            ("USES_MATERIAL", "Machine", "Material"),
+            ("FOR_APPLICATION", "Machine", "Application"),
+            ("PART_OF_PROJECT", "Machine", "Project"),
+            ("PROJECT_FOR", "Project", "Company"),
         ]:
             schema_builder.add_relation(
                 SchemaRelation(label=rel_label, source_type=source, target_type=target)
@@ -682,11 +747,19 @@ class KnowledgeGraph:
             "Person": "email",
             "Machine": "model",
             "Quote": "quote_id",
+            "Project": "project_id",
+            "Application": "name",
+            "Material": "name",
+            "Exhibition": "name",
         }
 
         companies: list[dict[str, Any]] = []
         people: list[dict[str, Any]] = []
         machines: list[dict[str, Any]] = []
+        projects: list[dict[str, Any]] = []
+        applications: list[dict[str, Any]] = []
+        materials: list[dict[str, Any]] = []
+        exhibitions: list[dict[str, Any]] = []
         relationships: list[dict[str, Any]] = []
 
         node_by_id: dict[str, Any] = {}
@@ -717,6 +790,29 @@ class KnowledgeGraph:
                     "category": props.get("category", ""),
                     "description": props.get("description", ""),
                 })
+            elif label == "Project":
+                projects.append({
+                    "project_id": props.get("project_id", ""),
+                    "customer": props.get("customer", ""),
+                    "machine_model": props.get("machine_model", ""),
+                    "status": props.get("status", ""),
+                })
+            elif label == "Application":
+                applications.append({
+                    "name": props.get("name", ""),
+                    "description": props.get("description", ""),
+                })
+            elif label == "Material":
+                materials.append({
+                    "name": props.get("name", ""),
+                    "category": props.get("category", ""),
+                })
+            elif label == "Exhibition":
+                exhibitions.append({
+                    "name": props.get("name", ""),
+                    "location": props.get("location", ""),
+                    "year": props.get("year", ""),
+                })
 
         for rel in graph_result.relationships:
             start_node = node_by_id.get(rel.start_node_id)
@@ -744,6 +840,10 @@ class KnowledgeGraph:
             "companies": companies,
             "people": people,
             "machines": machines,
+            "projects": projects,
+            "applications": applications,
+            "materials": materials,
+            "exhibitions": exhibitions,
             "relationships": relationships,
         }
 
