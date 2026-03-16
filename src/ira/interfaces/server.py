@@ -222,6 +222,12 @@ class RecruitmentCandidateUpdateRequest(BaseModel):
     role_applied: str | None = None
 
 
+class RecruitmentScoreRequest(BaseModel):
+    """Request to compute and store applicant score (dimension-based)."""
+    role_applied: str = "Procurement"
+    stage2_response_text: str = ""  # Optional: paste Stage 2 reply for case_study/behavioural scoring
+
+
 # ── Service registry ──────────────────────────────────────────────────────
 #
 # Populated during the lifespan startup phase and cleared on shutdown.
@@ -2007,6 +2013,59 @@ async def recruitment_update_candidate(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Recruitment update candidate failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.get("/api/recruitment/scoring-system")
+async def recruitment_get_scoring_system() -> dict[str, Any]:
+    """Return the current recruitment scoring system (dimensions + weights). From data/knowledge/recruitment_scoring_system.json."""
+    from ira.data.recruitment_scoring import load_scoring_system
+    data = load_scoring_system()
+    dimensions = data.get("dimensions") or []
+    return {
+        "name": data.get("name", "Default"),
+        "role_default": data.get("role_default", "Procurement"),
+        "dimensions": [d for d in dimensions if isinstance(d, dict)],
+    }
+
+
+@app.post("/api/recruitment/candidates/by-email/score")
+async def recruitment_score_candidate(
+    email: str,
+    req: RecruitmentScoreRequest,
+) -> dict[str, Any]:
+    """Compute dimension-based score for the candidate (Anu), store in score_json, and return the score."""
+    from ira.data.recruitment import RecruitmentStore
+    from ira.data.recruitment_scoring import get_dimensions
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+    store = RecruitmentStore()
+    try:
+        c = await store.get_by_email(email)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        profile = c.get("cv_parsed") or c.get("profile") or {}
+        if not profile:
+            raise HTTPException(
+                status_code=400,
+                detail="Candidate has no CV-parsed or profile data; parse resume first.",
+            )
+        dimensions = get_dimensions()
+        result = await anu.score_candidate_by_dimensions(
+            candidate_profile=profile,
+            role_applied=req.role_applied or "Procurement",
+            stage2_response_text=req.stage2_response_text or "",
+            dimensions=dimensions,
+        )
+        score_payload = result.model_dump()
+        await store.update_score(email, score_payload)
+        return score_payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Recruitment score candidate failed")
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 

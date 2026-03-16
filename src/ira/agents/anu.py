@@ -14,9 +14,17 @@ from typing import Any
 
 from pypdf import PdfReader
 
+from datetime import datetime, timezone
+
 from ira.agents.base_agent import BaseAgent
+from ira.data.recruitment_scoring import get_dimensions
 from ira.prompt_loader import load_prompt
-from ira.schemas.anu_outputs import CandidateScore, ParsedCandidate
+from ira.schemas.anu_outputs import (
+    ApplicantScore,
+    CandidateScore,
+    ParsedCandidate,
+    ScoringDimension,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +146,52 @@ class Anu(BaseAgent):
         except Exception as e:
             logger.exception("Anu score_candidate failed: %s", e)
             return CandidateScore(score=0.0, label="Error", rationale=str(e))
+
+    async def score_candidate_by_dimensions(
+        self,
+        candidate_profile: dict[str, Any] | ParsedCandidate,
+        role_applied: str = "Procurement",
+        stage2_response_text: str = "",
+        dimensions: list[ScoringDimension] | None = None,
+    ) -> ApplicantScore:
+        """Score candidate on each dimension (from recruitment_scoring_system), then weighted overall. Saves scored_at."""
+        if dimensions is None:
+            dimensions = get_dimensions()
+        if isinstance(candidate_profile, ParsedCandidate):
+            profile_str = candidate_profile.model_dump_json(indent=2)
+        else:
+            profile_str = json.dumps(candidate_profile, indent=2)
+        dimensions_text = "\n".join(
+            f"- id: {d.id}, name: {d.name}, description: {d.description}, weight: {d.weight}"
+            for d in dimensions
+        )
+        prompt_text = load_prompt("anu_score_dimensions").format(
+            candidate_profile=profile_str,
+            role_applied=role_applied or "Procurement",
+            stage2_response_text=stage2_response_text or "(No Stage 2 response provided.)",
+            dimensions_text=dimensions_text,
+        )
+        try:
+            result = await self._llm.generate_structured(
+                system="You are Anu, an AI recruiter. Output only the requested structured score (overall_score, label, rationale, strengths, gaps, dimension_scores with dimension_id, score, rationale for each).",
+                user=prompt_text,
+                response_model=ApplicantScore,
+                max_tokens=1200,
+                name="anu_score_dimensions",
+            )
+            result.scored_at = datetime.now(timezone.utc).isoformat()
+            result.role_applied = role_applied or None
+            return result
+        except Exception as e:
+            logger.exception("Anu score_candidate_by_dimensions failed: %s", e)
+            return ApplicantScore(
+                overall_score=1.0,
+                label="Error",
+                rationale=str(e),
+                dimension_scores=[],
+                scored_at=datetime.now(timezone.utc).isoformat(),
+                role_applied=role_applied or None,
+            )
 
     # ── Mentor chat ────────────────────────────────────────────────────────
 

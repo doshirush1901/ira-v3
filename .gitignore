@@ -156,6 +156,7 @@ data/cadmus/linkedin_connections.json
 data/cadmus/linkedin_connections_summary.json
 data/arachne/newsletter_archive/
 data/knowledge/*.json
+!data/knowledge/recruitment_scoring_system.json
 data/knowledge/*.jsonl
 !data/knowledge/.gitkeep
 data/themis/*.csv

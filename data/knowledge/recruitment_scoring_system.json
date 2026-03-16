@@ -1,0 +1,42 @@
+{
+  "name": "Default Machinecraft Recruitment",
+  "role_default": "Procurement",
+  "dimensions": [
+    {
+      "id": "experience",
+      "name": "Relevant experience",
+      "description": "Years and quality of experience in procurement, supply chain, or coordination roles.",
+      "weight": 0.2
+    },
+    {
+      "id": "skills_fit",
+      "name": "Skills fit",
+      "description": "Match to role: Tally/ERP, PO tracking, vendor coordination, inventory, multi-site coordination.",
+      "weight": 0.2
+    },
+    {
+      "id": "communication",
+      "name": "Communication & clarity",
+      "description": "Clarity of written responses, structure, and professionalism in emails and case study.",
+      "weight": 0.2
+    },
+    {
+      "id": "relocation_commitment",
+      "name": "Relocation / commitment",
+      "description": "Willingness to relocate to Umargam or commute; commitment to the role.",
+      "weight": 0.1
+    },
+    {
+      "id": "case_study",
+      "name": "Case study / problem-solving",
+      "description": "Quality of case study response: prioritisation, stakeholders involved, concrete steps, awareness of impact.",
+      "weight": 0.2
+    },
+    {
+      "id": "behavioural",
+      "name": "Behavioural (DICE)",
+      "description": "Quality of DICE answers: difficult feedback, vendor vs alternate, learning quickly, prioritisation under pressure.",
+      "weight": 0.1
+    }
+  ]
+}

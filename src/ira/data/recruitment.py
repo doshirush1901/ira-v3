@@ -265,6 +265,28 @@ class RecruitmentStore:
                 session.add(candidate)
                 await session.commit()
 
+    async def update_score(self, email: str, score_payload: dict[str, Any]) -> None:
+        """Update score_json for a candidate (from ApplicantScore.model_dump())."""
+        email = (email or "").strip().lower()
+        if not email or "@" not in email:
+            raise ValueError("Invalid email")
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(RecruitmentCandidateModel).where(
+                    RecruitmentCandidateModel.email == email
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                row.score_json = score_payload
+                await session.commit()
+            else:
+                candidate = RecruitmentCandidateModel(
+                    email=email, score_json=score_payload
+                )
+                session.add(candidate)
+                await session.commit()
+
     async def add_stage_event(
         self,
         email: str,
