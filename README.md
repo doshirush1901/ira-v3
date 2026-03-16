@@ -64,7 +64,7 @@ Now, most people solve this one of two ways:
 
 Ira is a multi-agent AI system built for [Machinecraft](https://machinecraft.org) — an industrial machinery company that designs and manufactures thermoforming, panel forming, and packaging machines. But here's the thing that makes it different from every other "AI assistant" repo on GitHub:
 
-**Ira doesn't just answer questions. It reads your email, remembers your relationships, knows your products, tracks your deals, and gets smarter every day.** It has 27 specialist AI agents — each named after a figure from Greek mythology, each with a specific job — and they collaborate through an 11-stage pipeline that mimics how a real organization processes information.
+**Ira doesn't just answer questions. It reads your email, remembers your relationships, knows your products, tracks your deals, and gets smarter every day.** It has 33 specialist AI agents — each named after a figure from Greek mythology, each with a specific job — and they collaborate through a 17-step pipeline that mimics how a real organization processes information.
 
 Think of it like this: you don't walk into a company and ask the receptionist to design your machine, draft your quote, check your invoice, *and* write your marketing email. You talk to the right person. Ira figures out who that person is, briefs them, and delivers the result.
 
@@ -133,7 +133,7 @@ Every agent that contributed is named. Every fact traces to a real email or docu
 
 ## How It Actually Works
 
-Every message — whether it comes from the CLI or the REST API — flows through an **11-stage pipeline** that mimics how a human organization processes a request:
+Every message — whether it comes from the CLI or the REST API — flows through a **17-step pipeline** (simplified below) that mimics how a human organization processes a request:
 
 ```
   You say something
@@ -166,7 +166,7 @@ Routing is a three-tier cascade: a fast **deterministic router** catches obvious
 
 ## The Agent Loop
 
-The 11-stage pipeline handles single-turn questions. But what about complex, multi-step tasks — "prepare a quarterly business review," "analyze the European pipeline and draft a proposal," "investigate quality issues and recommend fixes"?
+The 17-step pipeline handles single-turn questions. But what about complex, multi-step tasks — "prepare a quarterly business review," "analyze the European pipeline and draft a proposal," "investigate quality issues and recommend fixes"?
 
 For these, Ira uses an **Agent Loop** — an iterative Plan-Execute-Observe-Compile cycle that wraps the pipeline:
 
@@ -181,7 +181,7 @@ For these, Ira uses an **Agent Loop** — an iterative Plan-Execute-Observe-Comp
 │                  assigns specialist agents to each            │
 │                                                              │
 │   2. EXECUTE   → Run one phase at a time through agents      │
-│                  (each agent uses the 11-stage pipeline)      │
+│                  (each agent uses the 17-step pipeline)      │
 │                                                              │
 │   3. OBSERVE   → Athena evaluates results:                   │
 │                  continue | replan | clarify | complete       │
@@ -201,7 +201,7 @@ The observe step is the key differentiator: after each phase, Athena reviews res
 
 ## The Pantheon
 
-Twenty-seven agents. Each with a name from Greek mythology, a specific role, and their own set of tools.
+Thirty-three agents. Each with a name from Greek mythology, a specific role, and their own set of tools.
 
 ### The C-Suite
 
@@ -239,6 +239,7 @@ Twenty-seven agents. Each with a name from Greek mythology, a specific role, and
 | **Mnemon** | Memory Guardian | Correction authority — maintains the correction ledger, overrides stale data |
 | **Gapper** | Gap Resolver | Finds and fills missing data using email, documents, KB, and web search |
 | **Artemis** | Lead Hunter | Mailbox intelligence, historical email scanning, missed lead detection |
+| **Anu** | AI Recruiter | Resume parsing (PDF → JSON), candidate scoring, mentor chat, profile export |
 
 Every agent runs a **ReAct loop** (Reason → Act → Observe) with up to 8 iterations, calling tools, reading results, and reasoning about next steps until they have a complete answer. Default tools include knowledge search, memory recall, inter-agent delegation, and — when Gmail is connected — `search_emails` and `read_email_thread` for pulling real email data into any agent's reasoning.
 
@@ -369,7 +370,7 @@ Ira’s body systems are wired for **emergent, autonomous behavior** (not just p
 
 ## Shared Identity
 
-Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 28 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 28 separate prompt files.
+Every agent in the pantheon shares a common foundation. At startup, `prompt_loader.load_soul_preamble()` extracts the **Identity**, **Voice**, and **Behavioral Boundaries** sections from [`SOUL.md`](SOUL.md) and `BaseAgent.run()` prepends them to every system prompt. This means all 33 agents speak with the same voice, respect the same hard boundaries, and know who they are — without duplicating the rules in 33 separate prompt files.
 
 Project priorities and architectural guardrails live in [`VISION.md`](VISION.md).
 
@@ -410,7 +411,7 @@ ira-v3/
 │   ├── rules/               # Cursor rules for Ira API, agent loop, conventions
 │   └── skills/              # Cursor skills: research, email, reports, sales pipeline
 ├── src/ira/
-│   ├── agents/              # 27 specialist agents + base_agent.py
+│   ├── agents/              # 33 specialist agents + base_agent.py
 │   ├── brain/               # Knowledge retrieval, embeddings, graph, pricing,
 │   │                        #   entity extraction (GLiNER + LLM), guardrails (32 modules)
 │   ├── memory/              # 10 memory subsystems + dream mode + goal sweep
@@ -422,7 +423,7 @@ ira-v3/
 │   ├── skills/              # Skill matrix + tool handlers
 │   ├── middleware/          # Auth + request context
 │   ├── data/                # CRM models, quote models
-│   ├── pipeline.py          # 11-stage request pipeline
+│   ├── pipeline.py          # 17-step request pipeline
 │   ├── pipeline_loop.py     # Agent Loop: Plan-Execute-Observe-Compile orchestration
 │   ├── pantheon.py          # Agent orchestrator
 │   ├── config.py            # Pydantic settings (all config from env)
@@ -559,6 +560,7 @@ The **primary** way to query Ira is via the CLI (`ira ask`, `ira task`). The API
 | POST | `/api/email/search` | Search Gmail with filters (from, subject, date) |
 | GET | `/api/email/thread/{id}` | Fetch a full email thread by Gmail thread ID |
 | POST | `/api/email/draft` | Draft an email via Calliope |
+| POST | `/api/email/send` | Send an email (explicit user instruction only; requires OPERATIONAL mode) |
 | POST | `/api/email/rescan` | Deep historical email scan with SSE progress |
 | GET | `/api/email/rescan` | Check status of running/last email rescan |
 | GET | `/api/corrections` | List recent corrections (filterable) |
@@ -567,6 +569,10 @@ The **primary** way to query Ira is via the CLI (`ira ask`, `ira task`). The API
 | GET | `/api/vendors/payables` | Payables summary across all vendors |
 | GET | `/api/vendors/overdue` | Overdue vendor payables |
 | POST | `/api/vendors/payables` | Record a vendor payable/invoice |
+| GET | `/api/anu/candidates` | List recruitment candidates (optional: `role_applied`, `stage`) |
+| GET | `/api/anu/candidates/by-email` | Get candidate by email (includes stage events) |
+| POST | `/api/recruitment/candidates` | Upsert recruitment candidate |
+| POST | `/api/recruitment/candidates/by-email/events` | Record candidate stage event |
 | GET | `/dashboard/` | Observability dashboard: agent leaderboard, pipeline stage latency, tool success rate, interactions, feedback |
 
 ## Running Tests

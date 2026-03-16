@@ -7,7 +7,7 @@ Ira v3 codebase. For Ira's identity and behavioral principles, see
 ## Repository Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes requests
-through a 17-step pipeline, delegates to 32 specialist agents, and maintains
+through a 17-step pipeline, delegates to 33 specialist agents, and maintains
 persistent memory across conversations. Inside Cursor, Ira runs as a
 **Cursor-native agentic experience** using an Explore → Think → Act → Loop
 → Result flow with bounded execution, parallel sub-agents, and progressive
@@ -15,13 +15,13 @@ disclosure of reasoning.
 
 ```
 src/ira/
-  agents/       # 32 specialist agents + BaseAgent
+  agents/       # 33 specialist agents + BaseAgent
   brain/        # Retrieval, embeddings, graph, routing, pricing,
                 #   entity extraction (GLiNER), guardrails (32 modules)
   memory/       # 10 memory subsystems + dream mode + goal sweep
   systems/      # Body-system metaphor (21 modules)
   interfaces/   # FastAPI server, CLI, MCP server, email processor, dashboard
-  data/         # CRM models, quote models
+  data/         # CRM models, quote models, recruitment/candidate models
   middleware/   # Auth, request context
   skills/       # Shared skill handlers
   schemas/      # Pydantic models for structured LLM outputs
@@ -368,6 +368,10 @@ Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used wh
 | POST | `/api/recruitment/candidates` | Upsert candidate (body: email, name, phone, role_applied, profile, cv_parsed, score, ctc_current, etc.) |
 | PATCH | `/api/recruitment/candidates/by-email` | Update candidate (body: ctc_current, notes, name, phone, role_applied) |
 | POST | `/api/recruitment/candidates/by-email/events` | Record stage event (body: stage, event_at?, metadata?) |
+| GET | `/api/recruitment/scoring-system` | Return scoring dimensions + weights (from `data/knowledge/recruitment_scoring_system.json`) |
+| POST | `/api/recruitment/candidates/by-email/score` | Compute dimension-based score (Anu), store in `score_json`, return (body: role_applied?, stage2_response_text?) |
+
+**Applicant scoring** — Each candidate has a `score` (in GET candidate response) with `overall_score` (1–5), `label`, `rationale`, `strengths`, `gaps`, and `dimension_scores` (per-dimension score + rationale). Dimensions and weights are defined in `data/knowledge/recruitment_scoring_system.json`. Use POST `.../score` after CV is parsed (and optionally paste Stage 2 reply for case_study/behavioural dimensions).
 
 ## MCP Tools (Cursor Integration)
 
