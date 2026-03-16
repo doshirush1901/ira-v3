@@ -614,6 +614,7 @@ class CRMDatabase:
                 "contact_id": str(d.contact_id),
                 "contact_name": contact.name if contact else None,
                 "contact_email": contact.email if contact else None,
+                "contact_type": contact.contact_type.value if contact and contact.contact_type else None,
                 "company_name": company_name,
                 "account_summary": contact.account_summary if contact else None,
             })
@@ -667,6 +668,115 @@ class CRMDatabase:
         deals.sort(key=lambda x: (x["heat_score"], x.get("updated_at") or ""), reverse=reverse)
         return deals
 
+    async def list_deals_with_lead_score(
+        self,
+        limit: int = 200,
+        sort_by_score: str = "desc",
+    ) -> list[dict[str, Any]]:
+        """List deals with contact/company and a 0–100 lead score (order size, interest, stage, customer, meeting).
+
+        Uses lead_ranker formula; see data/knowledge/lead_ranker_formula.md.
+        sort_by_score: 'desc' = hottest first.
+        """
+        from ira.brain.lead_ranker import (
+            had_meeting_or_web_call,
+            score_lead,
+        )
+
+        deals = await self.list_deals_with_details(limit=limit * 2)
+        if not deals:
+            return []
+
+        contact_ids = [d["contact_id"] for d in deals if d.get("contact_id")]
+        if not contact_ids:
+            for d in deals:
+                d["lead_score"] = 0
+                d["lead_score_breakdown"] = {}
+            return deals[:limit]
+
+        # Per-contact: inbound count; channels (for meeting/web); last outbound (email) for "last email we sent"
+        stmt = select(
+            InteractionModel.contact_id,
+            InteractionModel.channel,
+            InteractionModel.direction,
+        ).where(InteractionModel.contact_id.in_(contact_ids))
+        stmt_last_out = (
+            select(
+                InteractionModel.contact_id,
+                InteractionModel.subject,
+                InteractionModel.content,
+                InteractionModel.created_at,
+            )
+            .where(
+                InteractionModel.contact_id.in_(contact_ids),
+                InteractionModel.direction == Direction.OUTBOUND,
+            )
+            .order_by(InteractionModel.created_at.desc())
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            rows = result.all()
+            result_last = await session.execute(stmt_last_out)
+            rows_last = result_last.all()
+
+        contact_inbound_count: dict[str, int] = {cid: 0 for cid in contact_ids}
+        contact_channels: dict[str, list[str]] = {cid: [] for cid in contact_ids}
+        last_outbound_by_contact: dict[str, dict[str, Any]] = {}
+        for contact_id, subject, content, created_at in rows_last:
+            cid = str(contact_id)
+            if cid not in last_outbound_by_contact:
+                last_outbound_by_contact[cid] = {
+                    "last_email_sent_at": created_at.isoformat() if created_at else None,
+                    "last_email_subject": (subject or "")[:500] if subject else None,
+                    "last_email_preview": (content or "")[:400].strip() if content else None,
+                }
+        for contact_id, channel, direction in rows:
+            cid = str(contact_id)
+            if cid not in contact_inbound_count:
+                continue
+            contact_channels[cid].append(channel.value if isinstance(channel, Channel) else str(channel))
+            if direction == Direction.INBOUND:
+                contact_inbound_count[cid] = contact_inbound_count.get(cid, 0) + 1
+
+        # Simple USD conversion for value (approximate)
+        def to_usd(value: float, currency: str | None) -> float:
+            if not value or value <= 0:
+                return 0.0
+            c = (currency or "USD").strip().upper()
+            if c in ("USD", "$"):
+                return float(value)
+            if c in ("EUR", "€"):
+                return float(value) * 1.08
+            if c in ("INR", "Rs"):
+                return float(value) / 83.0
+            return float(value)
+
+        for d in deals:
+            cid = d.get("contact_id")
+            value_usd = to_usd(d.get("value") or 0, d.get("currency"))
+            stage = d.get("stage")
+            contact_type = d.get("contact_type")
+            emails_from_them = contact_inbound_count.get(cid, 0) if cid else 0
+            had_meeting = had_meeting_or_web_call(contact_channels.get(cid))
+
+            score, breakdown = score_lead(
+                value_usd=value_usd,
+                stage=stage,
+                contact_type=contact_type,
+                emails_from_them=emails_from_them or None,
+                had_meeting_or_web_call=had_meeting,
+            )
+            d["lead_score"] = score
+            d["lead_score_breakdown"] = breakdown
+            last_out = last_outbound_by_contact.get(cid) if cid else None
+            d["last_email_sent_at"] = last_out.get("last_email_sent_at") if last_out else None
+            d["last_email_subject"] = last_out.get("last_email_subject") if last_out else None
+            d["last_email_preview"] = last_out.get("last_email_preview") if last_out else None
+
+        reverse = sort_by_score.lower() == "desc"
+        deals.sort(key=lambda x: (x.get("lead_score") or 0, x.get("updated_at") or ""), reverse=reverse)
+        return deals[:limit]
+
     # ── Interaction CRUD ─────────────────────────────────────────────────
 
     async def create_interaction(self, **kwargs: Any) -> InteractionModel:
@@ -699,6 +809,8 @@ class CRMDatabase:
                 stmt = stmt.where(InteractionModel.deal_id == str(filters["deal_id"]))
             if "channel" in filters:
                 stmt = stmt.where(InteractionModel.channel == filters["channel"])
+            if "direction" in filters:
+                stmt = stmt.where(InteractionModel.direction == filters["direction"])
         stmt = stmt.order_by(InteractionModel.created_at.desc())
         if limit is not None:
             stmt = stmt.limit(limit)

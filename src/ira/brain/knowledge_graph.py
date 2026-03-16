@@ -8,6 +8,7 @@ populate the graph from unstructured text.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, ClassVar
@@ -41,6 +42,30 @@ def normalize_entity_name(name: str) -> str:
     name = _ENTITY_SUFFIXES.sub("", name).strip()
     name = re.sub(r"\s+", " ", name)
     return name
+
+
+def _sanitize_relationship_props(props: dict[str, Any]) -> dict[str, Any]:
+    """Ensure all relationship property values are Neo4j-primitive (no nested Map).
+
+    Neo4j property values must be BOOLEAN, STRING, INTEGER, FLOAT, or arrays thereof.
+    Nested dicts are stringified (JSON); other non-primitives are str()'d or dropped.
+    """
+    out: dict[str, Any] = {}
+    for k, v in props.items():
+        if v is None:
+            out[k] = None
+        elif isinstance(v, (bool, int, float, str)):
+            out[k] = v
+        elif isinstance(v, (list, tuple)):
+            out[k] = [
+                x if isinstance(x, (bool, int, float, str)) else json.dumps(x) if isinstance(x, dict) else str(x)
+                for x in v
+            ]
+        elif isinstance(v, dict):
+            out[k] = json.dumps(v)
+        else:
+            out[k] = str(v)
+    return out
 
 
 class KnowledgeGraph:
@@ -325,7 +350,7 @@ class KnowledgeGraph:
         if not _VALID_LABEL.match(rel_type):
             raise ValueError(f"Invalid relationship type format: {rel_type!r}")
 
-        props = properties or {}
+        props = _sanitize_relationship_props(properties or {})
         for k in props:
             if not _VALID_PROP_KEY.match(k):
                 raise ValueError(f"Invalid relationship property key (unsafe for Cypher SET): {k!r}")

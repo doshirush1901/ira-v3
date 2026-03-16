@@ -43,6 +43,31 @@ _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_OVERLAP = 128
 _TIKTOKEN_ENCODING = "cl100k_base"
 
+# Chunk size by doc_type: precise docs (quote, contract) get smaller chunks; narrative gets default.
+_CHUNK_PARAMS_BY_DOC_TYPE: dict[str, tuple[int, int]] = {
+    "quote": (256, 64),
+    "contract": (256, 64),
+    "invoice": (256, 64),
+    "order": (256, 64),
+    "technical_spec": (384, 96),
+    "manual": (512, 128),
+    "report": (512, 128),
+    "presentation": (512, 128),
+    "catalogue": (512, 128),
+    "brochure": (512, 128),
+    "spreadsheet": (384, 96),
+    "lead_list": (256, 64),
+    "customer_data": (256, 64),
+    "email": (384, 96),
+    "other": (_DEFAULT_CHUNK_SIZE, _DEFAULT_OVERLAP),
+}
+
+
+def get_chunk_params_for_doc_type(doc_type: str) -> tuple[int, int]:
+    """Return (chunk_size, overlap) for the given doc_type. Default 512/128."""
+    key = (doc_type or "other").strip().lower()
+    return _CHUNK_PARAMS_BY_DOC_TYPE.get(key, (_DEFAULT_CHUNK_SIZE, _DEFAULT_OVERLAP))
+
 _LEDGER_PATH = Path("data/ingested_files.db")
 
 _CATEGORY_PATTERN = re.compile(r"^\d{2}_(.+)$")
@@ -275,6 +300,8 @@ def _read_with_docling(path: Path) -> str:
         converter = DocumentConverter()
         result = converter.convert(str(path))
         md = result.document.export_to_markdown()
+        # When Docling exposes figure/caption text (e.g. PictureItem captions), append
+        # "Figure N: <caption>" here for better retrieval of figure references.
         if md and len(md.strip()) >= _MIN_USEFUL_CHARS:
             return md
     except OSError as e:
@@ -305,7 +332,18 @@ _LEGACY_READERS = {
 
 
 def _get_reader(ext: str):
-    """Return a reader function: Unstructured → Docling → legacy."""
+    """Return a reader function. PDF uses Docling first (tables/layout); others use Unstructured → Docling → legacy."""
+    # PDF: Docling first for better tables and reading order, then Unstructured, then pypdf + Document AI.
+    if ext == ".pdf":
+        def _pdf_reader(path: Path) -> str:
+            text = _read_with_docling(path)
+            if text and len(text.strip()) >= _MIN_USEFUL_CHARS:
+                return text
+            text = _read_with_unstructured(path)
+            if text:
+                return text
+            return read_pdf(path)
+        return _pdf_reader
     if ext in _UNSTRUCTURED_EXTENSIONS:
         def _cascading_reader(path: Path) -> str:
             text = _read_with_unstructured(path)
@@ -710,11 +748,12 @@ class DocumentIngestor:
         base_path: str = "data/imports",
         *,
         min_file_size: int = 5 * 1024 * 1024,
+        min_chars_per_page: int = 25,
     ) -> dict[str, Any]:
         """Re-ingest PDFs that are likely scanned (large files with poor text).
 
         Finds PDFs over *min_file_size* bytes, checks if pypdf yields little
-        text, and re-ingests them with Document AI OCR.
+        text per page (below *min_chars_per_page*), and re-ingests with Document AI OCR.
         """
         files = self.discover_files(base_path)
         candidates = [
@@ -722,8 +761,8 @@ class DocumentIngestor:
             if f["extension"] == ".pdf" and f["size"] >= min_file_size
         ]
         logger.info(
-            "Found %d PDF candidates for OCR re-ingestion (>%d bytes)",
-            len(candidates), min_file_size,
+            "Found %d PDF candidates for OCR re-ingestion (>%d bytes, <%d chars/page)",
+            len(candidates), min_file_size, min_chars_per_page,
         )
 
         reingested = 0
@@ -734,9 +773,19 @@ class DocumentIngestor:
             path = Path(file_info["path"])
             try:
                 pypdf_text = await asyncio.to_thread(_read_pdf_pypdf, path)
-                if len(pypdf_text.strip()) >= _MIN_USEFUL_CHARS:
+                text_len = len(pypdf_text.strip())
+                if text_len >= _MIN_USEFUL_CHARS:
+                    try:
+                        from pypdf import PdfReader
+                        reader = PdfReader(str(path))
+                        page_count = max(1, len(reader.pages))
+                        if text_len / page_count >= min_chars_per_page:
+                            skipped += 1
+                            continue
+                    except Exception:
+                        pass
                     skipped += 1
-                    continue
+                    continue  # enough text overall, skip OCR
 
                 ocr_text = await self._ocr_fallback(path)
                 if not ocr_text.strip():

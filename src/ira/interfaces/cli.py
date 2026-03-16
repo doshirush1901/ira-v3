@@ -2525,6 +2525,11 @@ def ingest(
         "--exclude-prefix",
         help="Skip imports whose relative path starts with this prefix (repeatable).",
     ),
+    include_prefixes: list[str] = typer.Option(
+        [],
+        "--include-prefix",
+        help="Only process files under these paths, e.g. 01_Quotes_and_Proposals (repeatable).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
     """Run Alexandros-gated intelligent document ingestion.
@@ -2539,6 +2544,7 @@ def ingest(
       LIVER     — entities (companies, people, machines) to Neo4j
 
     Use ``--force`` to re-ingest everything.
+    Use ``--include-prefix 01_Quotes_and_Proposals`` to deep-scan only that folder.
     Use ``--workers N`` to control parallelism (default: 3).
     """
     _configure_logging(verbose)
@@ -2550,8 +2556,19 @@ def ingest(
         for p in exclude_prefixes
         if isinstance(p, str) and p.strip()
     )
+    normalized_includes = tuple(
+        p.strip()
+        for p in include_prefixes
+        if isinstance(p, str) and p.strip()
+    )
 
-    queue = _run(scan_for_undigested(force=force, exclude_prefixes=normalized_excludes))
+    queue = _run(
+        scan_for_undigested(
+            force=force,
+            exclude_prefixes=normalized_excludes,
+            include_prefixes=normalized_includes,
+        )
+    )
 
     if not queue:
         console.print("[green]All files are up-to-date. Nothing to ingest.[/green]")
@@ -2577,6 +2594,7 @@ def ingest(
             f"[bold]Parallel workers:[/bold]        {concurrency}\n"
             f"[bold]Reasons:[/bold]                {reason_lines}\n"
             f"[bold]Excludes:[/bold]               {', '.join(normalized_excludes) if normalized_excludes else 'none'}\n"
+            f"[bold]Includes:[/bold]               {', '.join(normalized_includes) if normalized_includes else 'all'}\n"
             f"[bold]Est. time:[/bold]              {est_label}\n"
             f"[bold]Force:[/bold]                  {'yes' if force else 'no'}",
             title="Alexandros Ingestion Scan",
@@ -2605,6 +2623,7 @@ def ingest(
                 batch_size=batch_size,
                 concurrency=concurrency,
                 exclude_prefixes=normalized_excludes,
+                include_prefixes=normalized_includes,
                 progress_callback=on_progress,
             )
 
@@ -3836,6 +3855,49 @@ def crm_enrich(
         console.print(table)
 
     _run(_enrich())
+
+
+@crm_app.command("sync-apollo")
+def crm_sync_apollo(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Log what would change without writing to CRM."),
+    limit: int = typer.Option(None, "--limit", "-n", help="Process only the first N contacts."),
+    contact_type: str = typer.Option("", "--type", "-t", help="Only sync contacts of this type (e.g. LEAD_NO_INTERACTIONS)."),
+    contacts_only: bool = typer.Option(False, "--contacts-only", help="Only enrich contacts (role, LinkedIn); skip company enrichment."),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
+) -> None:
+    """Sync CRM with Apollo.io: enrich contacts (role, LinkedIn) and companies (industry, website, employees, region).
+
+    Uses Apollo credits per contact and per company. Requires APOLLO_API_KEY in .env.
+    """
+    _configure_logging(verbose)
+
+    async def _sync() -> None:
+        from ira.data.crm import CRMDatabase
+        from ira.systems.apollo_crm_sync import sync_crm_with_apollo
+
+        crm = CRMDatabase()
+        await crm.create_tables()
+        result = await sync_crm_with_apollo(
+            crm,
+            dry_run=dry_run,
+            limit=limit or None,
+            contact_type=contact_type or None,
+            contacts_only=contacts_only,
+        )
+        if result.get("contact_type_error"):
+            err_console.print(f"[red]{result['contact_type_error']}[/red]")
+            raise typer.Exit(1)
+        table = Table(title="Apollo sync results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", justify="right", style="green")
+        table.add_row("Contacts updated", str(result["contacts_updated"]))
+        table.add_row("Companies updated", str(result["companies_updated"]))
+        table.add_row("Skipped (no email)", str(result["skipped_no_email"]))
+        table.add_row("No Apollo match", str(result["no_match"]))
+        table.add_row("Errors", str(result["errors"]))
+        console.print(table)
+
+    _run(_sync())
 
 
 @crm_app.command("refresh-summaries")

@@ -179,9 +179,9 @@ When asked about support/service:
 ### PF1 Series (Single Station Vacuum Forming)
 | Model | Forming Area | Max Depth | Base Price |
 |-------|--------------|-----------|------------|
-| PF1-C-1015 | 1000 x 1500mm (1×1.5 m) | 500mm | ₹55 Lakhs (pneumatic); sheet 2–6 mm |
+| PF1-C-1015 | 1000 x 1500mm (1×1.5 m) | 500mm | ₹55 Lakhs (pneumatic); sheet 2–12 mm |
 | PF1-1515 | 1500 x 1500mm | 650mm | €120,000 (pneumatic) |
-| PF1-C-1520 | 1500 x 2000mm | 650mm | $65,000 (India: ₹65 Lakhs EXW indicative; sheet 2–6 mm) |
+| PF1-C-1520 | 1500 x 2000mm | 650mm | $65,000 (India: ₹65 Lakhs EXW indicative; sheet 2–12 mm) |
 | PF1-C-2020 | 2000 x 2000mm | 500mm | €70,000 (UAE/Middle East: $76,000 EXW indicative) |
 | PF1-C-3020 | 3000 x 2000mm (2×3 m class) | 800mm | ₹85L (non-India: $100,000 EXW indicative) |
 
@@ -189,16 +189,21 @@ When asked about support/service:
 
 **Critical: PF1-C = pneumatic table movements only.** Upper and lower table are pneumatic (with motorised height adjustment where applicable). Servo table movements are on **PF1-X** (and other upgraded configs). Never state "electric servo" or "servo driven" for PF1-C tables in quotes or emails.
 
-**Critical: PF1-C = cut-sheet manual feeding only.** PF1-C does not have roll feeder. Roll feeder is available on **PF1-R** and **ATF** machines only; those handle **thin sheet 0.2 to 1.5 mm max**. For 2–6 mm (or thicker) sheet, offer PF1-C with cut-sheet manual loading. Do not offer "roll feeder" or "PF1-C with roll feeder" in quotes or emails.
+**Critical: PF1-C = cut-sheet manual feeding only.** PF1-C does not have roll feeder. Roll feeder is available on **PF1-R** and **ATF** machines only; those handle **thin sheet 0.2 to 1.5 mm max**. PF1-C and PF1-X (single-station) sheet thickness range: **2–12 mm**. Sheet loading: **manual or with autoloader** (autoloader is an option). Do not offer "roll feeder" or "PF1-C with roll feeder" in quotes or emails.
 
-**PF1-X (servo) — for sizes above 2×3 m:** Universal frames and autoloader are **optional** on PF1-X; quote with or without as per customer need.
+**PF1-X (servo) — for sizes above 2×3 m:** **Universal frames** = sheet size changeover system (for quick size changeover), not just loading. **Autoloader** = optional for sheet loading. Quote with or without as per customer need.
 
 **India PF1-X inquiries — dual option with comparison table:** When an **Indian client** asks for a **PF1-X type** machine (servo, etc.), give **two options** in the same email: **(1) PF1-X** (servo, same forming size) with indicative price in INR, and **(2) PF1-C** (same forming size, pneumatic, economic) with indicative price in INR. Present both in a **comparison table** in the email body: one column per option, rows for forming area, max depth, sheet thickness, table movement (pneumatic vs servo), loading, heater, **price (EXW INR)**, and lead time. Tell the client there are two options and the table shows the comparison. Use sales_playbook PF1-C prices and playbook/Plutus for PF1-X same size; keep within ~20% of any prior quote to that contact. See `lead_email_drafting_learnings_eduardo_case.md` Section 7 and `lead_engagement_email_skill.md`.
 
+**Detailed PF1-C tech specs (heater kW, vacuum, dimensions, cylinder specs, electrical):** `data/imports/14_Miscellaneous/pf1 table 2016.xls` — Sheet1 has specs by forming area (1000×600 through 3000×2500 mm and 1500×1500). Use for accurate PF1-C type machine specs.
+
+**Lead times:** PF1-C typical 16–20 weeks (4–5 months). **PF1-X-5028 (and large XL): 6 months+.**
+
 ### Options & Upgrades
+- **PF1 options (autoloader, universal frames, etc.):** See `data/imports/04_Machine_Manuals_and_Specs/PF1 1015 all options format Machinecraft INR.pdf` and `PF1 3520 Machinecraft all Options V02.pdf` for full option lists and descriptions.
 - Servo movements: PF1-X (for sizes > 2×3 m); +€60,000 (approx) where applicable
-- Universal frames: Optional on PF1-X; included or +cost
-- Autoloader: Optional on PF1-X; included or +cost
+- **Universal frames:** Sheet size changeover system (quick size changeover); optional on PF1-X; included or +cost
+- **Autoloader:** Optional sheet loading; manual loading also available on PF1-X; quote as needed
 - Quick tool clamp: Included or +cost
 
 ### Technical Specs to Include

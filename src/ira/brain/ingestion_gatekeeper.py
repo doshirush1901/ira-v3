@@ -19,6 +19,7 @@ inhale cycle, or directly by the Alexandros agent.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,7 @@ from ira.memory.long_term import LongTermMemory
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONCURRENCY = 5
+_INGESTION_METRICS_PATH = Path(__file__).resolve().parents[3] / "data" / "brain" / "ingestion_metrics.jsonl"
 
 _ASANA_IMPORT_MARKERS = ("23_asana", "asana_grounded_gold_sets")
 _ASANA_DOC_TYPE_TO_CATEGORY: dict[str, str] = {
@@ -72,12 +74,17 @@ async def scan_for_undigested(
     *,
     force: bool = False,
     exclude_prefixes: tuple[str, ...] = (),
+    include_prefixes: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Compare the metadata index against the ingestion log.
 
     Returns a list of file dicts needing ingestion, each with keys
     ``rel_path``, ``path``, ``hash``, ``reason``, ``category``,
     ``extension``, ``name``.
+
+    If *include_prefixes* is non-empty, only files whose relative path
+    starts with one of those prefixes (e.g. ``01_Quotes_and_Proposals/``)
+    are considered. Otherwise all files (subject to excludes) are considered.
     """
     index = await load_index()
     log = await load_log()
@@ -88,10 +95,19 @@ async def scan_for_undigested(
         for p in exclude_prefixes
         if p and p.strip()
     )
+    normalized_includes = tuple(
+        p.strip().lower().rstrip("/") + "/"
+        for p in include_prefixes
+        if p and p.strip()
+    )
 
     for rel_path, meta in index.get("files", {}).items():
         rel_path_lower = rel_path.lower()
         if any(rel_path_lower.startswith(prefix) for prefix in normalized_excludes):
+            continue
+        if normalized_includes and not any(
+            rel_path_lower.startswith(prefix) for prefix in normalized_includes
+        ):
             continue
 
         filepath = Path(meta.get("path", ""))
@@ -147,6 +163,7 @@ async def run_ingestion_cycle(
     batch_size: int = 712,
     concurrency: int = DEFAULT_CONCURRENCY,
     exclude_prefixes: tuple[str, ...] = (),
+    include_prefixes: tuple[str, ...] = (),
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run a gated ingestion cycle through the DigestiveSystem.
@@ -164,7 +181,11 @@ async def run_ingestion_cycle(
     from ira.config import get_settings
     from ira.systems.digestive import DigestiveSystem
 
-    queue = await scan_for_undigested(force=force, exclude_prefixes=exclude_prefixes)
+    queue = await scan_for_undigested(
+        force=force,
+        exclude_prefixes=exclude_prefixes,
+        include_prefixes=include_prefixes,
+    )
     if not queue:
         logger.info("Gatekeeper: nothing to ingest")
         return {"files_processed": 0, "files_skipped": 0, "reason": "up_to_date"}
@@ -269,6 +290,7 @@ async def run_ingestion_cycle(
                 source=str(filepath),
                 source_category=file_info["category"],
                 source_id=source_id,
+                doc_type=file_info.get("doc_type", "other"),
             )
 
             chunks = result.get("chunks_created", 0)
@@ -360,4 +382,19 @@ async def run_ingestion_cycle(
         "exclude_prefixes": list(exclude_prefixes),
     }
     logger.info("Gatekeeper ingestion cycle complete: %s", summary)
+
+    # Append metrics for trend tracking (one JSON object per line).
+    try:
+        _INGESTION_METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        metrics_line = json.dumps(
+            {"ts": datetime.now(UTC).isoformat(), **summary},
+            default=str,
+        ) + "\n"
+        def _write() -> None:
+            with _INGESTION_METRICS_PATH.open("a", encoding="utf-8") as f:
+                f.write(metrics_line)
+        await asyncio.to_thread(_write)
+    except (OSError, TypeError) as e:
+        logger.debug("Could not write ingestion metrics: %s", e)
+
     return summary

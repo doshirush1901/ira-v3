@@ -67,7 +67,11 @@ class QdrantManager:
             timeout=cfg.timeout,
         )
         self._embeddings = embedding_service
-        self._default_collection = cfg.collection
+        app = get_settings().app
+        self._use_sparse_hybrid = getattr(app, "use_sparse_hybrid", False)
+        self._default_collection = (
+            cfg.collection_hybrid if self._use_sparse_hybrid else cfg.collection
+        )
         self._event_bus = event_bus
         self._search_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
         # Optional second client for sync: when cloud_url is set, every upsert
@@ -120,28 +124,60 @@ class QdrantManager:
             if await self._client.collection_exists(collection):
                 logger.debug("Collection '%s' already exists", collection)
             else:
-                await self._client.create_collection(
-                    collection_name=collection,
-                    vectors_config=models.VectorParams(
-                        size=vector_size,
-                        distance=models.Distance.COSINE,
-                    ),
-                )
-                logger.info("Created Qdrant collection '%s' (dim=%d)", collection, vector_size)
-            await self._ensure_payload_indexes(self._client, collection)
-            # Mirror to cloud if sync is enabled
-            if self._client_cloud is not None:
-                if await self._client_cloud.collection_exists(collection):
-                    logger.debug("Cloud collection '%s' already exists", collection)
+                if self._use_sparse_hybrid:
+                    await self._client.create_collection(
+                        collection_name=collection,
+                        vectors_config={
+                            "dense": models.VectorParams(
+                                size=vector_size,
+                                distance=models.Distance.COSINE,
+                            ),
+                        },
+                        sparse_vectors_config={
+                            "sparse": models.SparseVectorParams(),
+                        },
+                    )
+                    logger.info(
+                        "Created Qdrant collection '%s' (dense+sparse hybrid)",
+                        collection,
+                    )
                 else:
-                    await self._client_cloud.create_collection(
+                    await self._client.create_collection(
                         collection_name=collection,
                         vectors_config=models.VectorParams(
                             size=vector_size,
                             distance=models.Distance.COSINE,
                         ),
                     )
-                    logger.info("Created Qdrant cloud collection '%s' (dim=%d)", collection, vector_size)
+                    logger.info("Created Qdrant collection '%s' (dim=%d)", collection, vector_size)
+            await self._ensure_payload_indexes(self._client, collection)
+            # Mirror to cloud if sync is enabled
+            if self._client_cloud is not None:
+                if await self._client_cloud.collection_exists(collection):
+                    logger.debug("Cloud collection '%s' already exists", collection)
+                else:
+                    if self._use_sparse_hybrid:
+                        await self._client_cloud.create_collection(
+                            collection_name=collection,
+                            vectors_config={
+                                "dense": models.VectorParams(
+                                    size=vector_size,
+                                    distance=models.Distance.COSINE,
+                                ),
+                            },
+                            sparse_vectors_config={
+                                "sparse": models.SparseVectorParams(),
+                            },
+                        )
+                    else:
+                        await self._client_cloud.create_collection(
+                            collection_name=collection,
+                            vectors_config=models.VectorParams(
+                                size=vector_size,
+                                distance=models.Distance.COSINE,
+                            ),
+                        )
+                    logger.info("Created Qdrant cloud collection '%s'", collection)
                 await self._ensure_payload_indexes(self._client_cloud, collection)
         except (DatabaseError, Exception):
             logger.exception("Failed to ensure collection '%s'", collection)
@@ -210,20 +246,45 @@ class QdrantManager:
             logger.exception("Embedding failed for %d items", len(items))
             raise
 
-        points = [
-            models.PointStruct(
-                id=_uuid_to_hex(item.id),
-                vector=vector,
-                payload={
-                    "content": item.content,
-                    "source": item.source,
-                    "source_category": item.source_category,
-                    "metadata": item.metadata,
-                    "created_at": item.created_at.isoformat(),
-                },
-            )
-            for item, vector in zip(items, vectors)
-        ]
+        if self._use_sparse_hybrid:
+            from ira.brain.sparse_vectors import text_to_sparse
+            points = []
+            for item, vector in zip(items, vectors):
+                indices, values = text_to_sparse(item.content)
+                points.append(
+                    models.PointStruct(
+                        id=_uuid_to_hex(item.id),
+                        vector={
+                            "dense": vector,
+                            "sparse": models.SparseVector(
+                                indices=indices,
+                                values=values,
+                            ),
+                        },
+                        payload={
+                            "content": item.content,
+                            "source": item.source,
+                            "source_category": item.source_category,
+                            "metadata": item.metadata,
+                            "created_at": item.created_at.isoformat(),
+                        },
+                    )
+                )
+        else:
+            points = [
+                models.PointStruct(
+                    id=_uuid_to_hex(item.id),
+                    vector=vector,
+                    payload={
+                        "content": item.content,
+                        "source": item.source,
+                        "source_category": item.source_category,
+                        "metadata": item.metadata,
+                        "created_at": item.created_at.isoformat(),
+                    },
+                )
+                for item, vector in zip(items, vectors)
+            ]
 
         upserted = 0
         for start in range(0, len(points), _UPSERT_BATCH_SIZE):
@@ -318,13 +379,23 @@ class QdrantManager:
         async with self._search_semaphore:
             try:
                 query_vector = await self._embeddings.embed_query(query)
-                result = await self._client.query_points(
-                    collection_name=col,
-                    query=query_vector,
-                    limit=limit,
-                    score_threshold=score_threshold,
-                    with_payload=_SEARCH_PAYLOAD_FIELDS,
-                )
+                if self._use_sparse_hybrid:
+                    result = await self._client.query_points(
+                        collection_name=col,
+                        query=query_vector,
+                        using="dense",
+                        limit=limit,
+                        score_threshold=score_threshold,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    )
+                else:
+                    result = await self._client.query_points(
+                        collection_name=col,
+                        query=query_vector,
+                        limit=limit,
+                        score_threshold=score_threshold,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    )
                 hits = result.points
             except (DatabaseError, Exception):
                 logger.exception("Search failed in '%s'", col)
@@ -365,13 +436,36 @@ class QdrantManager:
         async with self._search_semaphore:
             try:
                 query_vector = await self._embeddings.embed_query(query)
-                result = await self._client.query_points(
-                    collection_name=col,
-                    query=query_vector,
-                    query_filter=keyword_filter,
-                    limit=limit,
-                    with_payload=_SEARCH_PAYLOAD_FIELDS,
-                )
+                if self._use_sparse_hybrid:
+                    from ira.brain.sparse_vectors import text_to_sparse
+                    si, sv = text_to_sparse(query)
+                    result = await self._client.query_points(
+                        collection_name=col,
+                        prefetch=[
+                            models.Prefetch(
+                                query=models.SparseVector(indices=si, values=sv),
+                                using="sparse",
+                                limit=limit * 2,
+                            ),
+                            models.Prefetch(
+                                query=query_vector,
+                                using="dense",
+                                limit=limit * 2,
+                            ),
+                        ],
+                        query=models.FusionQuery(fusion=models.Fusion.RRF),
+                        query_filter=keyword_filter,
+                        limit=limit,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    )
+                else:
+                    result = await self._client.query_points(
+                        collection_name=col,
+                        query=query_vector,
+                        query_filter=keyword_filter,
+                        limit=limit,
+                        with_payload=_SEARCH_PAYLOAD_FIELDS,
+                    )
                 hits = result.points
             except Exception as e:
                 _err_str = str(e)
@@ -386,13 +480,34 @@ class QdrantManager:
                         col, type(e).__name__,
                     )
                     try:
-                        result = await self._client.query_points(
-                            collection_name=col,
-                            query=query_vector,
-                            query_filter=None,
-                            limit=limit,
-                            with_payload=_SEARCH_PAYLOAD_FIELDS,
-                        )
+                        if self._use_sparse_hybrid:
+                            result = await self._client.query_points(
+                                collection_name=col,
+                                prefetch=[
+                                    models.Prefetch(
+                                        query=models.SparseVector(indices=si, values=sv),
+                                        using="sparse",
+                                        limit=limit * 2,
+                                    ),
+                                    models.Prefetch(
+                                        query=query_vector,
+                                        using="dense",
+                                        limit=limit * 2,
+                                    ),
+                                ],
+                                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                                query_filter=None,
+                                limit=limit,
+                                with_payload=_SEARCH_PAYLOAD_FIELDS,
+                            )
+                        else:
+                            result = await self._client.query_points(
+                                collection_name=col,
+                                query=query_vector,
+                                query_filter=None,
+                                limit=limit,
+                                with_payload=_SEARCH_PAYLOAD_FIELDS,
+                            )
                         hits = result.points
                     except Exception as e2:
                         logger.warning(
@@ -677,6 +792,42 @@ class QdrantManager:
             logger.info("Deleted points with source='%s' from '%s'", source, col)
         except (DatabaseError, Exception):
             logger.exception("Failed to delete points for source '%s'", source)
+            raise
+
+    async def delete_by_source_category(
+        self,
+        source_category: str,
+        collection: str | None = None,
+    ) -> None:
+        """Delete all points whose source_category (or doc_type) payload matches *source_category*."""
+        col = collection or self._default_collection
+        try:
+            await self._client.delete(
+                collection_name=col,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        should=[
+                            models.FieldCondition(
+                                key="source_category",
+                                match=models.MatchValue(value=source_category),
+                            ),
+                            models.FieldCondition(
+                                key="doc_type",
+                                match=models.MatchValue(value=source_category),
+                            ),
+                        ]
+                    )
+                ),
+            )
+            logger.info(
+                "Deleted points with source_category/doc_type='%s' from '%s'",
+                source_category, col,
+            )
+        except (DatabaseError, Exception):
+            logger.exception(
+                "Failed to delete points for source_category '%s'",
+                source_category,
+            )
             raise
 
     # ── payload updates ─────────────────────────────────────────────────

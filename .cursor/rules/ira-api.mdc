@@ -49,6 +49,8 @@ Ira runs via the **CLI**; no API server is started. For queries, Cursor runs `ir
 
 ## 2. Querying Ira ("@Ira", "ask Ira", "tell Ira")
 
+**@Ira = bot in Cursor:** When the user types **@Ira** (or @ Ira) plus a question in Cursor chat, Cursor runs the agentic flow and executes `ira ask "<question>" --json` so the answer comes from Ira's full stack. No "Start Ira" needed; @Ira is the on-demand invocation.
+
 **Primary — CLI (full stack, no server):** Run from the **project root** (works on any PC):
 
 ```bash
@@ -194,6 +196,7 @@ curl -s -X POST http://localhost:8000/api/ingest \
 - **Email rescan (SSE):** `curl -s -N -X POST http://localhost:8000/api/email/rescan -H "Content-Type: application/json" -d '{"after": "2023/01/01", "before": "2026/03/08"}'`
 - **Email rescan status:** `curl -s http://localhost:8000/api/email/rescan | python3 -m json.tool`
 - **Corrections list:** `curl -s "http://localhost:8000/api/corrections?limit=50" | python3 -m json.tool`
+- **CRM sync with Apollo:** `curl -s -X POST http://localhost:8000/api/crm/sync-apollo -H "Content-Type: application/json" -d '{"dry_run": false, "limit": null, "contact_type": null, "contacts_only": false}' | python3 -m json.tool` — enriches contacts (role, LinkedIn) and companies (industry, website, employees, region). Requires APOLLO_API_KEY. Optional body: dry_run, limit, contact_type, contacts_only.
 - **Vendors:** `curl -s http://localhost:8000/api/vendors | python3 -m json.tool`
 - **Vendor payables:** `curl -s http://localhost:8000/api/vendors/payables | python3 -m json.tool`
 - **Overdue payables:** `curl -s http://localhost:8000/api/vendors/overdue | python3 -m json.tool`

@@ -31,7 +31,88 @@ logger = logging.getLogger(__name__)
 
 _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose_query")
 
+# Over-retrieve from Qdrant so rerank has more candidates; 3x gives better precision.
+_OVER_RETRIEVE_FACTOR = 3
+# After rerank, keep results diverse by dropping items too similar to already-selected (word overlap).
+_DIVERSITY_OVERLAP_THRESHOLD = 0.55
+_RERANK_CANDIDATES_FACTOR = 2  # Ask reranker for 2x limit, then diversify down to limit.
+_KEYWORD_BOOST_WEIGHT = 0.35  # Blend keyword overlap into pre-rerank order so exact matches float up.
+
 _VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+
+
+def _keyword_score(query: str, content: str, source: str = "") -> float:
+    """Fraction of query words (min 2 chars) that appear in content or source. 0–1."""
+    words = {w.lower() for w in query.split() if len(w) >= 2}
+    if not words:
+        return 0.0
+    text = ((content or "") + " " + (source or "")).lower()
+    hits = sum(1 for w in words if w in text)
+    return hits / len(words)
+
+
+def _apply_keyword_boost(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort results by vector score + keyword boost so exact-match candidates rank higher before rerank."""
+    if not query or not results:
+        return results
+    for r in results:
+        r["_keyword_score"] = _keyword_score(
+            query,
+            r.get("content", ""),
+            r.get("source", ""),
+        )
+    # Blend: higher keyword score moves item up when vector scores are close.
+    def _sort_key(r: dict[str, Any]) -> tuple[float, float]:
+        base = float(r.get("score", 0))
+        kw = float(r.get("_keyword_score", 0))
+        return (-(base + _KEYWORD_BOOST_WEIGHT * kw), -kw)
+    results.sort(key=_sort_key)
+    for r in results:
+        r.pop("_keyword_score", None)
+    return results
+
+
+def _diversify_results(
+    results: list[dict[str, Any]],
+    limit: int,
+    overlap_threshold: float = _DIVERSITY_OVERLAP_THRESHOLD,
+) -> list[dict[str, Any]]:
+    """Reduce near-duplicate chunks: keep items whose content is not too similar to already-selected.
+
+    Uses word-set overlap as a cheap proxy for semantic similarity so we avoid extra embedding calls.
+    """
+    if not results or limit <= 0:
+        return results[:limit]
+    if len(results) <= limit:
+        return results
+
+    def _word_set(text: str, max_words: int = 80) -> set[str]:
+        words = (text or "").strip().lower().split()
+        return set(words[:max_words])
+
+    selected: list[dict[str, Any]] = []
+    selected_sigs: list[set[str]] = []
+
+    for r in results:
+        if len(selected) >= limit:
+            break
+        content = r.get("content", "") or ""
+        sig = _word_set(content)
+        if not sig:
+            selected.append(r)
+            selected_sigs.append(sig)
+            continue
+        max_overlap = 0.0
+        for prev in selected_sigs:
+            if not prev:
+                continue
+            overlap = len(sig & prev) / min(len(sig), len(prev)) if prev else 0
+            max_overlap = max(max_overlap, overlap)
+        if max_overlap <= overlap_threshold:
+            selected.append(r)
+            selected_sigs.append(sig)
+
+    return selected
 
 
 def _is_retryable_external_error(exc: Exception) -> bool:
@@ -94,7 +175,9 @@ class UnifiedRetriever:
 
         tasks: dict[str, asyncio.Task[Any]] = {}
         if "qdrant" in use:
-            tasks["qdrant"] = asyncio.create_task(self._search_qdrant(query, limit=limit * 2))
+            tasks["qdrant"] = asyncio.create_task(
+                self._search_qdrant(query, limit=limit * _OVER_RETRIEVE_FACTOR)
+            )
         if "neo4j" in use:
             tasks["neo4j"] = asyncio.create_task(self._search_graph(query))
         if "mem0" in use and self._mem0 is not None:
@@ -136,6 +219,7 @@ class UnifiedRetriever:
             return await self._imports_fallback(query, limit)
 
         merged = await self._stitch_graph_to_vectors(merged)
+        merged = _apply_keyword_boost(query, merged)
 
         await self._log_retrieval(query, merged)
         return await self._rerank(query, merged, limit)
@@ -274,7 +358,7 @@ class UnifiedRetriever:
     ) -> list[dict[str, Any]]:
         """Search Qdrant restricted to a single source_category."""
         results = await self._qdrant.hybrid_search(
-            query, source_category=category, limit=limit * 2,
+            query, source_category=category, limit=limit * _OVER_RETRIEVE_FACTOR,
         )
         for r in results:
             r["source_type"] = "qdrant"
@@ -499,6 +583,7 @@ class UnifiedRetriever:
         )
         voyage_breaker = getattr(self, "_voyage_breaker", None)
 
+        rerank_top_k = min(limit * _RERANK_CANDIDATES_FACTOR, len(documents))
         async def _operation() -> dict[str, Any]:
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
@@ -507,7 +592,7 @@ class UnifiedRetriever:
                         "query": query,
                         "documents": list(documents),
                         "model": self._voyage_rerank_model,
-                        "top_k": min(limit, len(documents)),
+                        "top_k": rerank_top_k,
                     },
                     headers={
                         "Authorization": f"Bearer {self._voyage_key}",
@@ -534,10 +619,14 @@ class UnifiedRetriever:
         for item in ranked_items:
             idx = item["index"]
             original = results[original_indices[idx]]
+            content = original.get("content", "")
+            parent = (original.get("metadata") or {}).get("parent_summary", "")
+            if parent and isinstance(parent, str) and parent.strip():
+                content = parent.strip() + "\n\n" + content
             output.append(
                 {
                     "id": original.get("id", ""),
-                    "content": original.get("content", ""),
+                    "content": content,
                     "score": item.get("relevance_score", 0.0),
                     "source": original.get("source", ""),
                     "source_type": original.get("source_type", ""),
@@ -545,6 +634,7 @@ class UnifiedRetriever:
                 }
             )
 
+        output = _diversify_results(output, limit)
         return await self._apply_learned_corrections(output)
 
     async def _flashrank_rerank(
@@ -573,13 +663,18 @@ class UnifiedRetriever:
             results.sort(key=lambda r: r.get("score", 0), reverse=True)
             return results[:limit]
 
+        take = min(limit * _RERANK_CANDIDATES_FACTOR, len(reranked))
         output: list[dict[str, Any]] = []
-        for item in reranked[:limit]:
+        for item in reranked[:take]:
             meta: dict[str, Any] = item.get("meta") or item.get("metadata") or {}
+            content = item.get("text", "")
+            parent = (meta.get("metadata") or {}).get("parent_summary", "")
+            if parent and isinstance(parent, str) and parent.strip():
+                content = parent.strip() + "\n\n" + content
             output.append(
                 {
                     "id": meta.get("id", ""),
-                    "content": item.get("text", ""),
+                    "content": content,
                     "score": item.get("score", 0.0),
                     "source": meta.get("source", ""),
                     "source_type": meta.get("source_type", ""),
@@ -587,6 +682,7 @@ class UnifiedRetriever:
                 }
             )
 
+        output = _diversify_results(output, limit)
         return await self._apply_learned_corrections(output)
 
     # ── learned corrections ────────────────────────────────────────────────

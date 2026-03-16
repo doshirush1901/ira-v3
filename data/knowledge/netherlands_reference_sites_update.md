@@ -59,7 +59,7 @@ From Rushabh's email to c.scaramella@mininiplastic.it:
 |----------|---------|------|--------|
 | DutchTides | PF1-X-6520 (6x2m) | 2025 | ✅ Active reference |
 | Dezet | PF1-X series | 2025 | ✅ Active reference |
-| ~~Batelaan~~ | ~~PF1-1015, PF1-1315~~ | ~~2019-2022~~ | ❌ CLOSED (sold 2026) |
+| ~~Batelaan~~ | ~~PF1-1015, PF1-1315~~ | ~~2018–2019~~ | ❌ CLOSED (sold 2026). Machines bought 2018 and 2019 only; no 2022 sale. |
 
 ## For Ira: Key Points
 

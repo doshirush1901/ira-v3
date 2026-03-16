@@ -338,6 +338,50 @@ class BaseAgent(ABC):
                 handler=self._tool_read_email_thread,
             ))
 
+        if get_settings().apollo.api_key.get_secret_value():
+            self.register_tool(AgentTool(
+                name="enrich_contact_apollo",
+                description=(
+                    "Enrich a contact using Apollo.io (title, company, LinkedIn). "
+                    "Pass email and optionally name or company/domain. Uses Apollo credits."
+                ),
+                parameters={
+                    "email": "Contact email (best for matching)",
+                    "name": "Full name (optional)",
+                    "company_or_domain": "Company name or domain e.g. acme.com (optional)",
+                },
+                handler=self._tool_enrich_contact_apollo,
+            ))
+            self.register_tool(AgentTool(
+                name="sync_crm_apollo",
+                description=(
+                    "Sync CRM with Apollo.io: enrich contacts (role, LinkedIn) and companies "
+                    "(industry, website, employee count, region). Use when the user asks to sync or "
+                    "refresh CRM data with Apollo, or to enrich all contacts/companies from Apollo."
+                ),
+                parameters={
+                    "dry_run": "If true, only report what would be updated (default false)",
+                    "limit": "Max contacts to process (default 20 for agent; use 0 or omit for no limit)",
+                    "contacts_only": "If true, only enrich contacts, not companies (default false)",
+                },
+                handler=self._tool_sync_crm_apollo,
+            ))
+
+        gdocs = self._services.get(SK.GOOGLE_DOCS)
+        if gdocs is not None and getattr(gdocs, "calendar_available", False):
+            self.register_tool(AgentTool(
+                name="check_calendar",
+                description=(
+                    "List upcoming calendar events (primary Google Calendar). "
+                    "Use when the user asks about schedule, availability, meetings, or what's coming up."
+                ),
+                parameters={
+                    "days": "Number of days ahead to show (default 7)",
+                    "max_results": "Max events to return (default 20)",
+                },
+                handler=self._tool_check_calendar,
+            ))
+
     # ── default tool handlers ─────────────────────────────────────────────
 
     async def _tool_search_knowledge(self, query: str, limit: str = "10") -> str:
@@ -523,6 +567,113 @@ class BaseAgent(ABC):
                 f"From: {e.from_address} → To: {e.to_address} ---\n"
                 f"Subject: {e.subject}\n{e.body}\n"
             )
+        return "\n".join(lines)
+
+    async def _tool_enrich_contact_apollo(
+        self,
+        email: str = "",
+        name: str = "",
+        company_or_domain: str = "",
+    ) -> str:
+        from ira.systems.apollo_client import enrich_person_async
+
+        if not email and not name and not company_or_domain:
+            return "Provide at least one of: email, name, or company_or_domain."
+        domain = None
+        org = None
+        if company_or_domain:
+            s = company_or_domain.strip()
+            if "." in s and " " not in s:
+                domain = s.replace("www.", "")
+            else:
+                org = s
+        try:
+            result = await enrich_person_async(
+                email=email.strip() or None,
+                name=name.strip() or None,
+                domain=domain,
+                organization_name=org,
+            )
+        except Exception as exc:
+            logger.warning("enrich_contact_apollo failed in %s: %s", self.name, exc)
+            return f"Apollo enrichment error: {exc}"
+        if not result:
+            return "No Apollo match found for that contact."
+        parts = [f"**{result.get('name') or 'Unknown'}**"]
+        if result.get("title"):
+            parts.append(f"Title: {result['title']}")
+        if result.get("organization_name"):
+            parts.append(f"Company: {result['organization_name']}")
+        if result.get("email"):
+            parts.append(f"Email: {result['email']}")
+        if result.get("linkedin_url"):
+            parts.append(f"LinkedIn: {result['linkedin_url']}")
+        return "\n".join(parts)
+
+    async def _tool_sync_crm_apollo(
+        self,
+        dry_run: str = "false",
+        limit: str = "20",
+        contacts_only: str = "false",
+    ) -> str:
+        """Run Apollo sync for CRM; returns a short summary of contacts/companies updated."""
+        crm = self._services.get(SK.CRM)
+        if not crm:
+            return "CRM is not available; cannot run Apollo sync."
+        from ira.systems.apollo_crm_sync import sync_crm_with_apollo
+
+        try:
+            limit_val: int | None = int(limit) if limit and limit.strip() else 20
+            if limit_val <= 0:
+                limit_val = None
+            result = await sync_crm_with_apollo(
+                crm,
+                dry_run=dry_run.strip().lower() in ("true", "1", "yes"),
+                limit=limit_val,
+                contact_type=None,
+                contacts_only=contacts_only.strip().lower() in ("true", "1", "yes"),
+            )
+        except Exception as exc:
+            logger.warning("sync_crm_apollo failed in %s: %s", self.name, exc)
+            return f"Apollo sync error: {exc}"
+
+        if result.get("contact_type_error"):
+            return result["contact_type_error"]
+        return (
+            f"Apollo sync done. Contacts updated: {result['contacts_updated']}, "
+            f"companies updated: {result['companies_updated']}, "
+            f"skipped (no email): {result['skipped_no_email']}, no match: {result['no_match']}, errors: {result['errors']}."
+        )
+
+    async def _tool_check_calendar(
+        self, days: str = "7", max_results: str = "20",
+    ) -> str:
+        gdocs = self._services.get(SK.GOOGLE_DOCS)
+        if not gdocs or not getattr(gdocs, "calendar_available", False):
+            return "Calendar is not available."
+        try:
+            d = int(days) if days else 7
+            m = int(max_results) if max_results else 20
+            d = max(1, min(d, 31))
+            m = max(1, min(m, 50))
+        except ValueError:
+            d, m = 7, 20
+        try:
+            events = await gdocs.list_upcoming_events(days=d, max_results=m)
+        except Exception as exc:
+            logger.warning("check_calendar failed in %s: %s", self.name, exc)
+            return f"Calendar error: {exc}"
+        if not events:
+            return f"No events in the next {d} days."
+        lines = [f"Upcoming events (next {d} days):"]
+        for ev in events:
+            start = ev.get("start", "") or ""
+            summary = ev.get("summary", "(No title)")
+            loc = ev.get("location", "")
+            line = f"- {start}: {summary}"
+            if loc:
+                line += f" @ {loc}"
+            lines.append(line)
         return "\n".join(lines)
 
     async def _tool_web_search_default(self, query: str) -> str:
@@ -1033,10 +1184,14 @@ class BaseAgent(ABC):
         return await self._scrape_url_crawl4ai(url, max_chars=max_chars)
 
     async def _scrape_url_jina(self, url: str, *, max_chars: int = 8000) -> str:
-        """Jina Reader: GET r.jina.ai/<url> returns markdown. No API key for basic use."""
+        """Jina Reader: GET r.jina.ai/<url> returns markdown. Uses JINA_API_KEY when set for better rate limits."""
         try:
+            headers: dict[str, str] = {}
+            jina_key = get_settings().jina.api_key.get_secret_value()
+            if jina_key:
+                headers["Authorization"] = f"Bearer {jina_key}"
             async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-                resp = await client.get(f"https://r.jina.ai/{url}")
+                resp = await client.get(f"https://r.jina.ai/{url}", headers=headers or None)
                 resp.raise_for_status()
                 text = (resp.text or "").strip()
                 if text and len(text) > 100:

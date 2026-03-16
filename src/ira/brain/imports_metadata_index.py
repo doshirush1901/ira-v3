@@ -110,7 +110,7 @@ Return ONLY valid JSON with these fields:
     "summary": "1-2 sentence description of what this document is about",
     "doc_type": "one of: quote, catalogue, order, presentation, email, spreadsheet, report, manual, contract, lead_list, customer_data, technical_spec, brochure, invoice, other",
     "machines": ["list of machine models mentioned, e.g. PF1-C-2015, AM-5060"],
-    "topics": ["list from: pricing, specs, customer, application, lead, order, contract, presentation, marketing, technical, installation, warranty, shipping, competitor, market_research, training"],
+    "topics": ["list from: pricing, specs, customer, application, lead, order, contract, presentation, marketing, technical, installation, warranty, shipping, competitor, market_research, training, quote_sent (add quote_sent for outbound quotes — we sent this to a customer; follow-up status not in document)"],
     "entities": ["company names, person names, countries mentioned"],
     "keywords": ["5-10 important searchable terms from the document"],
     "intent_tags": ["zero or more from: {intents_csv}"],
@@ -240,18 +240,35 @@ async def build_index(
     *,
     use_llm: bool = True,
     force: bool = False,
+    include_prefixes: tuple[str, ...] = (),
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, int]:
     """Build or incrementally update the metadata index.
 
+    If *include_prefixes* is non-empty, only files whose relative path
+    starts with one of those prefixes are considered (e.g. 01_Quotes_and_Proposals/).
+
     Returns stats: ``{"total", "new", "skipped", "errors"}``.
     """
-    index = (await load_index()) if not force else {"files": {}, "built_at": None, "total_files": 0, "version": 2}
+    normalized_includes = tuple(
+        p.strip().lower().rstrip("/") + "/"
+        for p in include_prefixes
+        if p and p.strip()
+    )
+    if force and not normalized_includes:
+        index = {"files": {}, "built_at": None, "total_files": 0, "version": 2}
+    else:
+        index = await load_index()
 
     all_files = [
         fp for fp in IMPORTS_DIR.rglob("*")
         if fp.is_file() and not fp.name.startswith(".") and fp.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
+    if normalized_includes:
+        all_files = [
+            fp for fp in all_files
+            if any(str(fp.relative_to(IMPORTS_DIR)).lower().startswith(prefix) for prefix in normalized_includes)
+        ]
 
     total = len(all_files)
     new_count = 0

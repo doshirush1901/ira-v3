@@ -8,17 +8,50 @@ alwaysApply: true
 
 In **this chat tab**, you can turn on "Ira-only" mode. While it's on, **every** user message is sent to Ira (full stack); you display Ira's reply. When the user turns it off, messages are handled normally again.
 
+## Ira mode vs Cursor mode (do not switch while session is ON)
+
+- **Ira mode:** The user's message is sent to the real Ira stack (`ira ask` or POST `/api/query` / stream). The reply you show is **Ira's output** (pipeline, agents, RAG, memory). You are only the conduit.
+- **Cursor mode:** You (Cursor's AI) answer using your own tools (SemanticSearch, Read, curl to arbitrary endpoints, etc.) and write the answer yourself.
+
+**Rule: While Ira session is ON, you must stay in Ira mode.** When Ira's response implies she needs Cursor to build something (new endpoint, script, migration), do that build and optionally re-ask Ira; see `.cursor/rules/ira-cursor-handshake.mdc`. Do not silently switch to Cursor mode (e.g. calling GET /api/deals or /api/pipeline yourself and formatting a table). That would be Cursor answering, not Ira. If `ira ask` fails (e.g. data dir lock), try the **API query** (POST /api/query or stream) with the **same user message** — the lock often means the API is running. Only if both CLI and API query fail may you use the Cursor-as-Ira fallback, and you **must** start your reply with: **"⚠️ Ira stack is currently unavailable (reason). Below is a fallback from the codebase."** so the user knows they are not in Ira mode.
+
 ## Detecting session state from this chat
 
-- **Ira session ON:** The conversation history contains a user message that is clearly "start Ira" (or "start ira", "Ira start", "activate Ira for this chat", etc.), and there is **no later** user message that is "end Ira" (or "end ira", "stop Ira", "exit Ira", "Ira end").
-- **Ira session OFF:** Either the user has never said "start Ira" in this chat, or they said "end Ira" (or equivalent) after the last "start Ira".
+- **Ira session ON:** The conversation history contains a user message that is clearly "start Ira" (or "Ira", "Ira mode", "switch to Ira", "activate Ira", etc.), and there is **no later** user message that is "end Ira" (or "Cursor", "Cursor mode", "switch to Cursor", "stop Ira", "exit Ira").
+- **Ira session OFF:** Either the user has never said "start Ira" in this chat, or they said "end Ira" (or "Cursor", "Cursor mode", "switch to Cursor", etc.) after the last "start Ira".
 
 Use the **conversation history in this chat** to decide. Session state is per-chat only (no file, no cross-tab).
+
+## Easy switching between Ira and Cursor
+
+| You want | Say (any of these) |
+|----------|--------------------|
+| **Switch to Ira** (session: all messages → Ira) | "Start Ira", "Ira", "Ira mode", "switch to Ira", "activate Ira" |
+| **Switch to Cursor** (session off: normal Cursor) | "End Ira", "Cursor", "Cursor mode", "switch to Cursor", "stop Ira", "exit Ira" |
+| **One question to Ira** (no session) | "@Ira" or "@ Ira" then your question |
+
+When the user says "Cursor" or "Cursor mode" or "switch to Cursor", treat it as **end Ira** (session OFF). When they say "Ira" or "Ira mode" or "switch to Ira" (and session is currently OFF), treat it as **start Ira** (session ON).
 
 ## When the user says "start Ira" (or equivalent)
 
 1. Run the **start-Ira steps** from `ira-api.mdc` (Docker check, then `docker compose -f docker-compose.local.yml up -d` from project root, verify containers). This ensures Ira's stack is up.
-2. Reply with the **Ira running status card** (Cursor-only, so the user sees she is running). Use this exact block:
+2. **Prince of Persia–style startup animation:** Run the splash so the user sees Ira "waking up" and all engines start one by one:
+   - From project root run: `poetry run ira splash` (optional: run in a terminal the user can see so they get the full animation: dungeon frames, then each engine lighting up, then "All engines ready" and "What would you like to do today with Ira?"). Use `ira splash --no-engines` for a shorter animation.
+   - In the **chat reply**, display the following splash (in a code block to preserve alignment), then the status card:
+
+   ```
+   ╔═══════════════════════════════════════╗
+   ║  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ║
+   ║  ░     │ ▐▌            ▐▌ │     ░  ║
+   ║  ░     │  ▄▄▄ ▄▄▄ ▄▄▄  │     ░  ║
+   ║  ░     │  █   █   █   │     ░  ║
+   ║  ░     ▓  ▀▀▀ ▀▀▀ ▀▀▀  ▓     ░  ║
+   ║  ░  ● Ira is running        ░  ║
+   ║  ░  Full stack · This chat → Ira  ░  ║
+   ╚═══════════════════════════════════════╝
+   ```
+
+   Then show the **Ira running status card** (use this exact block):
 
    ```
    ┌──────────────────────────────────────────────────┐
@@ -28,28 +61,52 @@ Use the **conversation history in this chat** to decide. Session state is per-ch
    └──────────────────────────────────────────────────┘
    ```
 
-   If a container failed (e.g. Qdrant), mention it in one line under the block (e.g. *Qdrant container exited; using cloud or fallback.*)
+   Then show **Engines & tools** (all systems Ira is hooked to; treat as activated at startup):
+
+   | Engine   | Role |
+   |----------|------|
+   | Qdrant   | Vectors · document search |
+   | Neo4j    | Knowledge graph |
+   | Postgres | CRM · quotes |
+   | Redis    | Cache · sessions |
+   | Mem0     | Long-term memory |
+   | Gmail    | Email · read & draft |
+   | Pantheon | 31 agents |
+
+   Then **always** add the startup prompt so the user knows what to do next:
+
+   **What would you like to do today with Ira?**
+   - Ask about pipeline, lead time, or a specific deal.
+   - Draft or search emails, or get a proposal outline.
+   - Run a task: e.g. *"Full analysis of Acme and draft a proposal"*.
+   - Ask for both an answer and a build — Ira and Cursor can hand off (see ira-cursor-handshake.mdc).
+
+   If a container failed (e.g. Qdrant), mention it in one line under the status card (e.g. *Qdrant container exited; using cloud or fallback.*)
 3. Do **not** run `ira ask` for the "start Ira" message itself.
 
-## When the user says "end Ira" (or equivalent)
+## When the user says "end Ira" or "switch to Cursor" (or equivalent)
 
-1. Reply in one short line that the session is off: e.g. *"Ira session ended. Messages will no longer go to Ira unless you say @Ira or ask Ira."*
-2. Do **not** run `ira ask` for "end Ira".
+Phrases that mean switch to Cursor / end Ira session: **"End Ira"**, **"Cursor"**, **"Cursor mode"**, **"switch to Cursor"**, **"stop Ira"**, **"exit Ira"**.
+
+1. Reply in one short line: e.g. *"Switched to Cursor mode. Say 'Ira' or 'Start Ira' when you want Ira again."*
+2. Do **not** run `ira ask` for this message.
 
 ## When Ira session is ON and the user sends any other message
+
+**CRITICAL: Stay in Ira mode. Do not revert to Cursor mode.** When session is ON, the reply MUST come from Ira's pipeline. You MUST call Ira (stream or `ira ask`), not answer yourself from other APIs or codebase. If `ira ask` fails with "another process is using this data directory", the API is likely running — use POST /api/query or /api/query/stream with the **user's exact message** and show that response. Do NOT call GET /api/deals or GET /api/pipeline and then write the answer yourself; that is Cursor mode. Only if both CLI and API query fail may you use the fallback, and you MUST prefix the reply with: **"⚠️ Ira stack unavailable; fallback below."**
 
 **Ira runs in Cursor using the agentic flow by default.** Always follow `.cursor/rules/ira-cursor-agentic-mode.mdc`: show **Explore → Think → Act → (loop) → Result** in the chat. The user must see each phase.
 
 1. Treat the **entire current user message** as the question for Ira.
 
-2. **🔍 Explore** — Before calling Ira, gather context in the chat:
+2. **🔍 Explore** — Before calling Ira, gather context in the chat (keep brief; the real answer comes from Act):
    - Run `SemanticSearch` or `Grep` for concepts relevant to the question (e.g. lead time, PF1, vendor, pipeline, pricing).
    - Optionally read `docs/`, `data/`, or agent/code paths that match the query domain.
    - In the chat, post **🔍 Exploring** and list what you’re looking at (queries, file paths, or a one-line summary). Keep it short.
 
 3. **💭 Think** — Post **💭 Thinking** and write 2–4 sentences in plain language: what the question is about, which domain/agents likely apply (per ira-delegation-matrix), and what you’ll do next (e.g. run Ira’s pipeline and use the context we found).
 
-4. **▶ Act** — Post **▶ Acting** and run Ira:
+4. **▶ Act** — Post **▶ Acting** and **run the real Ira** (stream or CLI). You must invoke Ira with the **user's full message** and use Ira's response as Result. Do not substitute your own answer (e.g. by calling other API endpoints and formatting).
    - **If the API server is running** (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health` returns `200`): POST to `http://localhost:8000/api/query/stream` with `{"query": "<user message>", "user_id": "cursor_user"}` and read the SSE stream. For each event (before `final_answer`), append to a **steps block**:
      - `perceiving` → "• Perceiving input"
      - `remembering` → "• Recalling memory"
@@ -70,20 +127,20 @@ Use the **conversation history in this chat** to decide. Session state is per-ch
      ```
      Parse stdout as JSON. Display the `steps` array under **What Ira did**, then use `response` for the Result phase. Optionally mention `agents_consulted`.
 
-5. **Loop (if needed)** — If the Act step failed (CLI/API error, timeout) or the answer is clearly incomplete: post **💭 Thinking (next)** with one or two sentences (e.g. “Stack unavailable; I’ll answer from codebase and data.”), then **▶ Acting** again (e.g. follow Cursor-as-Ira fallback in `ira-cursor-workflow.mdc`: search, read, synthesize). Repeat until you have something to present.
+5. **Loop (if needed)** — If the Act step failed (CLI/API error, timeout) or the answer is clearly incomplete: post **💭 Thinking (next)** with one or two sentences (e.g. “Stack unavailable; I’ll answer from codebase and data.”), then **▶ Acting** again (try the other path: if CLI failed with lock, try POST /api/query; if stream failed, try CLI). Only if both CLI and API query have failed may you use the Cursor-as-Ira fallback. When using fallback you **must** start the Result with: **"⚠️ Ira stack is currently unavailable (reason). Below is a fallback answer."**
 
 6. **✅ Result** — Post **✅ Result** and display the final answer as Markdown. Use Ira’s voice (SOUL.md): decisive, concise, grounded. For factual answers include Confidence, Freshness, and Sources (per ira-response-contracts). If the stack was unavailable, say so and cite the sources you used (files, data).
 
 ## When Ira session is OFF
 
-- Do **not** route the user's message to Ira unless they explicitly invoke Ira (e.g. "@Ira", "ask Ira", "tell Ira") as in `ira-api.mdc`.
-- Normal Cursor behavior for everything else.
+- **@Ira = on-demand bot:** If the user's message contains **@Ira** or **@ Ira** (or "ask Ira", "tell Ira"), treat it as an explicit Ira invocation: run the same agentic flow (Explore → Think → Act → Result) and **run `ira ask`** with their question. Strip the "@Ira" / "ask Ira" prefix so the query is just the actual question. So "@Ira what's the pipeline?" → run `ira ask "what's the pipeline?" --json` and show Ira's response. This is Ira-as-bot: no need to "Start Ira" first.
+- For any other message when session is OFF, do **not** route to Ira. Normal Cursor behavior.
 
 ## Summary
 
 | User said in this chat     | Session state | What you do |
 |----------------------------|---------------|-------------|
-| "start Ira"                | → ON          | Run Docker/containers (ira-api), then confirm "Ira session started" for this chat. |
-| "end Ira"                  | → OFF         | Confirm "Ira session ended". |
-| Any other message, ON      | ON            | **Agentic flow:** Explore → Think → Act (run Ira stream/CLI) → loop if needed → Result. Show each phase in the chat. |
-| Any other message, OFF     | OFF           | Normal Cursor; route to Ira only if they say @Ira / ask Ira. |
+| "start Ira" / "Ira" / "switch to Ira" | → ON    | Run Docker/containers, then confirm "Ira mode" for this chat. |
+| "end Ira" / "Cursor" / "switch to Cursor" | → OFF | Confirm "Cursor mode"; say how to switch back. |
+| Any other message, ON      | ON            | **Stay in Ira mode.** Act = run stream or `ira ask` with user's message; Result = Ira's output. If CLI fails (e.g. lock), try API query. Do not switch to Cursor mode (e.g. calling /api/deals yourself). Fallback only if both fail, and say "⚠️ Ira unavailable; fallback below." |
+| Any other message, OFF     | OFF           | If message contains @Ira / ask Ira → run ira ask (Ira-as-bot). Else normal Cursor. |

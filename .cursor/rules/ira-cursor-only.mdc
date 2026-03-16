@@ -1,0 +1,23 @@
+---
+description: User preference — Ira is used from Cursor only; start Ira session in this chat and run the agentic flow here when the user asks to use Ira.
+globs:
+alwaysApply: true
+---
+
+# Ira — Cursor Only (User Preference)
+
+Ira is **Cursor only** for this user. No web UI, Telegram, or other interfaces are used for Ira.
+
+## When the user asks to use Ira
+
+- **Start the Ira session in this chat.** Treat it as "start Ira" (see `ira-session-mode.mdc`): ensure Docker/containers if needed, then confirm Ira is running for this chat.
+- **Run the agentic flow here.** Every subsequent message in this chat goes to Ira until the user says "end Ira". Use Explore → Think → Act → Result; show steps and final answer in the Cursor tab.
+- Do not direct the user to open a browser, run a separate terminal, or use another UI for Ira.
+
+## Summary
+
+| User says / wants     | Do this                                                                 |
+|-----------------------|-------------------------------------------------------------------------|
+| Use Ira / Start Ira   | Start Ira session in this chat, run agentic flow here, show results here |
+| Any message (session ON) | Route to Ira; run flow; display answer in chat                       |
+| End Ira               | End session; confirm in one line                                        |

@@ -354,7 +354,7 @@ This document contains detailed information about actual customer orders and pur
 - Max Forming Area: 5000 x 2800 mm
 - Min Forming Area: 3000 x 2000 mm (using Universal Frames)
 - Max Depth: 500mm (male) / 1000mm (female)
-- Heater Load: 516 KW
+- Heater Load: 516 KW (top & bottom combined)
 - Max Servo Motor Load: 86 KW
 - Total Connected Load: ~602 KW
 - Vacuum Pump: 300 m3/hr
@@ -438,8 +438,9 @@ This document contains detailed information about actual customer orders and pur
 
 ### Lead Time Patterns
 - Small machines (UNO): 8-16 weeks
-- Medium PF1: 16-24 weeks
+- Medium PF1 / PF1-C: 16-24 weeks
 - Large/XL machines: 20-28 weeks
+- **PF1-X-5028 (and similar large XL): 6 months+**
 - IMG machines: 24-28 weeks
 
 ---

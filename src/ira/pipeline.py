@@ -10,6 +10,9 @@ Steps
 2. **REMEMBER** — ConversationMemory, coreference resolution, goals.
 2.5. **FAST PATH** — Regex classifier for greetings, identity, thanks, farewells.
      Matched queries skip stages 3-8 and return in 1-3 seconds.
+2.55. **QUICK PIPELINE** — Short queries that only ask for the sales pipeline
+      (e.g. "show pipeline", "sales pipeline") return CRM summary directly
+      without routing or agents; sub-second response.
 2.7. **SPHINX GATE** — Sphinx evaluates query clarity.  Vague queries get
      clarifying questions returned immediately via ``[CLARIFY]`` prefix.
 3. **ROUTE (Fast)** — DeterministicRouter for keyword-matched intents.
@@ -46,6 +49,44 @@ from ira.data.models import Channel, Contact, Direction, PipelineContextModel
 from ira.exceptions import DatabaseError, IraError, LLMError, ToolExecutionError
 
 logger = logging.getLogger(__name__)
+
+# Quick pipeline: short queries that only ask for the sales pipeline summary.
+_QUICK_PIPELINE_PATTERN = re.compile(
+    r"^\s*"
+    r"(show\s+(me\s+)?(the\s+)?|what'?s\s+(the\s+)?|what\s+is\s+(the\s+)?|"
+    r"give\s+me\s+(the\s+)?|(get|fetch|generate)\s+(the\s+)?(sales\s+)?)?"
+    r"(sales\s+)?pipeline(\s+summary|\s+status)?\s*[!?.]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_quick_pipeline_query(text: str) -> bool:
+    """True if the query is a short, simple request for the pipeline summary."""
+    t = (text or "").strip()
+    return len(t) <= 80 and bool(_QUICK_PIPELINE_PATTERN.match(t))
+
+
+def _format_pipeline_summary_md(summary: dict[str, Any]) -> str:
+    """Format CRM pipeline summary as markdown for chat."""
+    total_count = summary.get("total_count", 0)
+    total_value = summary.get("total_value", 0)
+    stages = summary.get("stages") or {}
+    lines = [
+        "**Sales pipeline**",
+        f"Total: **{total_count}** deals | **${total_value:,.0f}** value",
+        "",
+    ]
+    if stages:
+        lines.append("| Stage | Count | Value |")
+        lines.append("|-------|-------|-------|")
+        for stage_name, data in sorted(stages.items()):
+            if isinstance(data, dict):
+                count = data.get("count", 0)
+                val = data.get("total_value", 0)
+                lines.append(f"| {stage_name} | {count} | ${val:,.0f} |")
+    else:
+        lines.append("No deals in pipeline.")
+    return "\n".join(lines)
 
 
 class RequestPipeline:
@@ -410,6 +451,40 @@ class RequestPipeline:
             if self._redis is not None and self._redis.available:
                 await self._redis.dedup_store(_redis_dedup_key, shaped, ttl_seconds=300)
             return shaped, ["fast_path"]
+
+        # ── 2.55 QUICK PIPELINE ───────────────────────────────────────
+        if self._crm is not None and _is_quick_pipeline_query(resolved_input):
+            try:
+                if on_progress:
+                    await on_progress({"type": "quick_pipeline"})
+                summary = await self._crm.get_pipeline_summary()
+                _qp_raw = _format_pipeline_summary_md(summary)
+                logger.info("QUICK PIPELINE | short-circuit")
+                if on_progress:
+                    await on_progress({"type": "shaping"})
+                _qp_shaped = await self._voice.shape_response(_qp_raw, channel)
+                _record_stage("route")
+                _record_stage("shape")
+                await self._learn(
+                    contact_email=contact_email,
+                    channel=channel,
+                    raw_input=raw_input,
+                    raw_response=_qp_raw,
+                    route_method="quick_pipeline",
+                    agents_used=["quick_pipeline"],
+                    active_goal=active_goal,
+                    resolved_input=resolved_input,
+                )
+                _record_stage("learn")
+                _push_timings()
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                logger.info("RETURN (quick_pipeline) | %s | %.0fms", contact_email, elapsed_ms)
+                self._recent_messages[_fingerprint] = (_qp_shaped, _now)
+                if self._redis is not None and self._redis.available:
+                    await self._redis.dedup_store(_redis_dedup_key, _qp_shaped, ttl_seconds=300)
+                return _qp_shaped, ["quick_pipeline"]
+            except (DatabaseError, IraError, Exception):
+                logger.debug("Quick pipeline failed (non-critical), continuing", exc_info=True)
 
         # ── 2.7 SPHINX GATE ──────────────────────────────────────────
         _SPHINX_TIMEOUT = 15

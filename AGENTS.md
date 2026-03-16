@@ -109,6 +109,7 @@ poetry run ira dream      # memory consolidation
 poetry run ira board      # board meeting
 poetry run ira ingest     # document ingestion
 poetry run ira health     # vital signs
+poetry run ira crm sync-apollo   # sync CRM with Apollo (contacts + companies enrichment)
 poetry run ira feedback "Correction text"        # record a correction
 
 # Email commands
@@ -334,6 +335,7 @@ Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used wh
 | GET | `/api/pipeline` | Sales pipeline summary |
 | GET | `/api/agents` | List agents and status |
 | POST | `/api/ingest` | Ingest a document |
+| POST | `/api/crm/sync-apollo` | Sync CRM with Apollo (contacts + companies enrichment) |
 | POST | `/api/reingest-scanned` | Re-OCR scanned PDFs via Document AI |
 | POST | `/api/board-meeting` | Trigger a board meeting |
 | GET | `/api/dream-report` | Trigger dream cycle and return report |
@@ -363,7 +365,7 @@ use in Cursor, Claude Desktop, or any MCP-compatible client:
 | **Pipeline** | `query_ira`, `search_knowledge`, `search_crm`, `get_pipeline_summary`, `ask_agent` |
 | **Email** | `search_emails`, `read_email_thread`, `draft_email` |
 | **Memory** | `recall_memory`, `store_memory`, `get_conversation_history`, `check_relationship`, `check_goals` |
-| **CRM** | `get_deal`, `list_deals`, `create_contact`, `update_deal`, `get_stale_leads` |
+| **CRM** | `get_deal`, `list_deals`, `create_contact`, `update_deal`, `get_stale_leads`, `sync_crm_apollo` |
 | **Knowledge Graph** | `find_related_entities`, `find_company_contacts`, `find_company_quotes` |
 | **Corrections** | `submit_correction` — log factual corrections for Nemesis to process during Dream Mode |
 | **Dream Mode** | `trigger_dream_mode` — run the 12-stage memory consolidation cycle on demand (includes cursor session learning) |

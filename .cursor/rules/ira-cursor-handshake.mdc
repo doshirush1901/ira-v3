@@ -1,0 +1,67 @@
+---
+description: Ira and Cursor work hand in hand — delegate to Ira when she's more powerful; Cursor builds when Ira needs code or scripts. Multiple handoffs allowed.
+globs: 
+alwaysApply: true
+---
+
+# Ira–Cursor Handshake
+
+Ira and Cursor strike a deal: **both can work together** in the same chat. Cursor gives power to Ira when the task fits her stack; when **Ira's answer** (or the task) implies that code/scripts/APIs are needed, **Cursor interprets that and builds** — Ira doesn't send a separate message to Cursor, Cursor just reads her output and does the build. Multiple handoffs (typically 1–2 rounds) are allowed until the user has a final answer.
+
+## When Cursor should give power to Ira
+
+When the user's question or task is **Ira‑heavy** (Ira's stack is more powerful), Cursor **delegates** by running Ira and using her output:
+
+- **Pipeline, CRM, deals, leads** — Prometheus, pipeline summary, deal stages, hot/warm/cold
+- **Email** — search, read thread, draft, send (via Ira's tools and memory)
+- **Memory and context** — recall, store, relationship, goals (Mnemosyne, etc.)
+- **Pricing, quotes, margins** — Plutus, quote data
+- **Projects, timeline, milestones** — Atlas
+- **Vendors, payables, lead times** — Hera
+- **Knowledge base, documents** — Clio, Alexandros, Qdrant/Neo4j
+- **Multi-step analysis or proposals** — Athena, task loop, multiple agents
+- **"What did we send to X?"** / **"Who replied?"** — Artemis, email history
+
+**Action:** Run `ira ask "<user message>" --json` (or POST `/api/query` / stream) and treat Ira's response as the **authoritative answer** for that part. Show it in the chat. Optionally mention "Ira handled this" so the user sees the handoff.
+
+## When Ira needs Cursor (Cursor interprets and builds)
+
+When **Ira's output** (or the task) implies that something must be **built in the codebase**, Cursor does that work (Cursor interprets Ira's answer; there is no separate "Ira → Cursor" message):
+
+- Ira (or the pipeline) says we need a **new API endpoint**, **script**, or **CLI command** → Cursor implements it.
+- Ira suggests **"we should add an endpoint that…"** or **"run this script"** or **"ingest this file"** → Cursor writes the code or runs the command.
+- The user asks for **both** an answer and a **programmatic change** (e.g. "What's our pipeline and add an API to export it") → Cursor gets the answer from Ira, then implements the change.
+- Ira's answer is **"I don't have that; it would require …"** (e.g. a new integration, script, or migration) → Cursor can offer to build it and then re-ask Ira with the new capability.
+
+**Action:** Cursor uses its tools (Edit, Write, Run terminal, etc.) to implement what Ira needs. After building, Cursor can:
+- Summarise what was built and feed that back into the chat, or
+- Re-query Ira with the updated context (e.g. "We now have GET /api/pipeline/export; here’s the user’s question again") so Ira can refine the final answer.
+
+## Handoffs (multiple handoffs)
+
+Multiple back-and-forths are allowed:
+
+1. **Cursor → Ira:** User asks something; Cursor delegates to Ira → Ira responds.
+2. **Ira → Cursor:** Ira's response (or the user's follow-up) indicates that code/script/API is needed → Cursor builds it.
+3. **Cursor → Ira (again):** Cursor can re-invoke Ira with the new capability or updated question (e.g. "Proposals-sent endpoint is now live; re-answer the pipeline question").
+4. **Result:** Final answer is a combination of Ira's answers and Cursor's builds, presented clearly in the chat.
+
+Keep handoffs visible: e.g. "• Ira: [summary]. • Cursor: [what was built]. • Ira: [refined answer]." so the user sees both working together.
+
+## When to use handshake vs pure Ira or pure Cursor
+
+- **User said "Start Ira" / Ira session ON:** Prefer **Ira first** (run `ira ask`). If Ira's answer implies "needs Cursor to build X", then Cursor does X and can loop back to Ira. So: Ira → [optional] Cursor build → [optional] Ira again → Result.
+- **User said "@Ira" or "ask Ira" (one-shot):** Same: run Ira; if her answer asks for build work, Cursor does it and can re-ask Ira.
+- **User is in Cursor mode (no Ira):** Cursor can still **choose to delegate** to Ira when the task is Ira-heavy (e.g. "Let me ask Ira for the pipeline" → run `ira ask` → show result). That is Cursor giving power to Ira by choice.
+- **User asks for code only** (e.g. "Add a button to the dashboard"): Cursor handles it; no need to call Ira unless the task also needs business data or Ira's reasoning.
+
+## Summary
+
+| Situation | Who leads | What happens |
+|-----------|-----------|--------------|
+| Question is Ira‑heavy (pipeline, CRM, email, memory, etc.) | Cursor delegates to Ira | Run `ira ask` or API query; show Ira's response |
+| Ira's answer implies "need an endpoint/script/code" | Cursor builds | Implement; optionally re-ask Ira with new context |
+| User wants both an answer and a build | Handshake | Ira answers; Cursor builds; optionally Ira refines |
+| User wants only code/refactor | Cursor | No Ira call unless business context needed |
+
+**Ira and Cursor working hand in hand:** Cursor gives power to Ira when she's more powerful; when Ira needs program build-up, Cursor helps. Multiple handoffs between them are allowed to reach the final answer.

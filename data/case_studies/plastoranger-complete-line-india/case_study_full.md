@@ -37,6 +37,6 @@ The installation of the complete production line has enabled Plastoranger to str
 
 ---
 
-*A $200M automotive group streamlined production with our complete thermoforming line delivered in just 5 weeks.*
+*A thermoforming leader in India streamlined production with our complete thermoforming line delivered in just 5 weeks.*
 
 #thermoforming #plastics #CNC #turnkey #manufacturing #India #production #automation #industrial #engineering

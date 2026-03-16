@@ -48,6 +48,9 @@ class QdrantConfig(BaseSettings):
     cloud_url: str = ""
     cloud_api_key: SecretStr = SecretStr("")
 
+    # When APP__USE_SPARSE_HYBRID=true, this collection is used (dense + sparse vectors). Re-ingest to populate.
+    collection_hybrid: str = "ira_knowledge_hybrid"
+
 
 class Neo4jConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NEO4J_", **_COMMON)
@@ -114,12 +117,28 @@ class ExternalAPIsConfig(BaseSettings):
     api_key: SecretStr = SecretStr("")
 
 
+class ApolloConfig(BaseSettings):
+    """Apollo.io API for contact/company enrichment. Uses credits per enrichment."""
+
+    model_config = SettingsConfigDict(env_prefix="APOLLO_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
+
+
 class SearchConfig(BaseSettings):
     model_config = SettingsConfigDict(**_COMMON)
 
     tavily_api_key: SecretStr = SecretStr("")
     searchapi_api_key: SecretStr = SecretStr("")
     serper_api_key: SecretStr = SecretStr("")
+
+
+class JinaConfig(BaseSettings):
+    """Jina Reader (r.jina.ai) and optional Jina Search (s.jina.ai). When set, improves rate limits."""
+
+    model_config = SettingsConfigDict(env_prefix="JINA_", **_COMMON)
+
+    api_key: SecretStr = SecretStr("")
 
 
 class PdfCoConfig(BaseSettings):
@@ -211,6 +230,12 @@ class AppConfig(BaseSettings):
     # Optional override for Hugging Face hub cache (e.g. when default cache disk is full)
     hf_cache_dir: str = ""
 
+    # PII: when True, redact email/phone in ingested chunks before storing in Qdrant.
+    redact_pii_at_ingest: bool = False
+
+    # When True, use dense + sparse hybrid in Qdrant (new collection, RRF). Requires re-ingest to populate sparse.
+    use_sparse_hybrid: bool = False
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -231,7 +256,9 @@ class Settings(BaseSettings):
     redis: RedisConfig = RedisConfig()
     google: GoogleConfig = GoogleConfig()
     external_apis: ExternalAPIsConfig = ExternalAPIsConfig()
+    apollo: ApolloConfig = ApolloConfig()
     search: SearchConfig = SearchConfig()
+    jina: JinaConfig = JinaConfig()
     langfuse: LangfuseConfig = LangfuseConfig()
     helicone: HeliconeConfig = HeliconeConfig()
     firecrawl: FirecrawlConfig = FirecrawlConfig()

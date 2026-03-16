@@ -18,15 +18,16 @@ industrial machine for large-format thermoforming applications.
 - **Year:** 2025
 
 ## Technical Specifications
-- **Heater Load:** 516 kW
+- **Heater Load:** 516 kW (top & bottom combined)
 - **Servo Load:** 86 kW
 - **Connected Load:** 602 kW total
 - **Vacuum:** 300 m³/hr
 - **Heater Type:** IR Ceramic SSR (Solid State Relay controlled)
-- **Autoloader:** Yes
-- **Universal Frames:** Yes
+- **Sheet thickness:** 2–12 mm
+- **Sheet loading:** Manual or with autoloader (as ordered)
+- **Universal Frames:** Sheet size changeover system (for quick size changeover)
 - **Central Cooling:** Yes (12 cooling outlets)
-- **Lead Time:** 26 weeks
+- **Lead Time:** 6 months+
 - **Late Penalty:** 0.5% per week, max 2.5%
 
 ## Story Angle
@@ -39,12 +40,12 @@ heaters. Built in India, for India's growing manufacturing ambitions.
 ## Key Proof Points
 - 5000 x 2800 mm forming area (one of the largest PF1 machines ever)
 - 602 kW connected load (industrial-scale power)
-- 516 kW heater load with SSR control (precise temperature management)
+- 516 kW heater (top + bottom combined) with SSR control (precise temperature management)
 - 300 m³/hr vacuum capacity
+- Sheet 2–12 mm; loading manual or autoloader; universal frames = sheet size changeover system
 - 12 cooling outlets with central cooling system
 - ₹3.94 Crore order value (Machinecraft's premium domestic segment)
 - 1000mm max depth (deep draw capability)
-- Full automation: autoloader + universal frames
 
 ## Applications
 - Large format thermoforming

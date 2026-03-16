@@ -262,6 +262,46 @@ async def get_pipeline_summary() -> str:
 
 
 @mcp.tool()
+async def sync_crm_apollo(
+    dry_run: bool = False,
+    limit: int = 0,
+    contacts_only: bool = False,
+) -> str:
+    """Sync CRM with Apollo.io: enrich contacts (role, LinkedIn) and companies (industry, website, employees, region).
+
+    Uses Apollo credits. Set limit to 0 for no limit, or a positive number to process only that many contacts.
+    Set dry_run=True to only report what would be updated. Set contacts_only=True to skip company enrichment.
+    """
+    await _ensure_initialized()
+    if _crm is None:
+        return "CRM not available."
+
+    try:
+        from ira.config import get_settings
+        if not get_settings().apollo.api_key.get_secret_value():
+            return "APOLLO_API_KEY not set; cannot run Apollo sync."
+        from ira.systems.apollo_crm_sync import sync_crm_with_apollo
+
+        result = await sync_crm_with_apollo(
+            _crm,
+            dry_run=dry_run,
+            limit=limit or None,
+            contact_type=None,
+            contacts_only=contacts_only,
+        )
+        if result.get("contact_type_error"):
+            return result["contact_type_error"]
+        return (
+            f"Apollo sync done. Contacts updated: {result['contacts_updated']}, "
+            f"companies updated: {result['companies_updated']}, "
+            f"skipped (no email): {result['skipped_no_email']}, no match: {result['no_match']}, errors: {result['errors']}."
+        )
+    except Exception as exc:
+        logger.exception("MCP sync_crm_apollo failed")
+        return f"Error: {exc}"
+
+
+@mcp.tool()
 async def draft_email(to: str, subject: str, context: str) -> str:
     """Draft a professional email using Ira's writing agent (Calliope).
 

@@ -21,6 +21,10 @@ Produce a **single, send-ready email** that is:
 
 **Sound human, warm, curious — not here to sell, here to chat about the industry.** Every lead email should feel like a person reaching out to talk shop: industry chat, curious questions, small talk, and genuine interest in their situation. We mention machines and specs in context of the conversation, not as a pitch. Default to “fellow industry person” not “salesperson”.
 
+### 1c. Writeup logic (draft structure)
+
+**Every lead email writeup must:** (1) be **plain text** in the body (no HTML; mobile-friendly line breaks). (2) Include **one clear CTA** (e.g. web call, reply with dates). (3) Avoid **pipe tables** in the body except the allowed India PF1-C vs PF1-X comparison table. (4) Be generated from the **pre-draft bundle** (logic tree, quote block if any, playbook specs, region refs). (5) Include a **checklist** in the draft file (e.g. TO_SEND.md or draft_email_*.md) tying each requirement to §8 / workflow so the scorer can verify. The writeup is the email body plus subject and checklist; the commit that stores it should live in the same repo as the workflow docs so the logic is versioned.
+
 ---
 
 ## 2. Inputs

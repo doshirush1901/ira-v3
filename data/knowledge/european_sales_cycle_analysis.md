@@ -18,7 +18,7 @@
 | JoPlast | Denmark | €290,000 | 36 | 38 days | 1.3 |
 | Soehner | Germany | €270,000 | 15 | <30 days | <1 |
 | Thermic | Germany | €180,000 | 40 | 69 days | 2.3 |
-| Batelaan | Netherlands | €150,000 | 51 | 902 days | 30.1 |
+| Batelaan | Netherlands | €150,000 | — | Purchases **2018 and 2019** (no 2022) | — |
 | Ridat | UK | €100,000 | 18 | 9 days | <1 |
 | BD-Plastindustri | Sweden | €90,000 | 40 | 1548 days | 51.6 |
 | Donite | Ireland | €90,000 | 19 | 14 days | <1 |
@@ -96,7 +96,7 @@ Extended relationships that eventually converted:
 |----------|--------|---------|
 | DutchTides (Netherlands) | 19.9 | Startup scaling, waited for funding |
 | Anatomic Sitt (Sweden) | 24.0 | Product development timeline |
-| Batelaan (Netherlands) | 30.1 | Capacity planning cycle |
+| Batelaan (Netherlands) | 2018–2019 | Customer bought machines in 2018 and 2019; no 2022 sale |
 | BD-Plastindustri (Sweden) | 51.6 | Multiple expansion phases |
 
 ---

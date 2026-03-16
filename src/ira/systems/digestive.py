@@ -19,7 +19,11 @@ from typing import Any
 
 from langfuse.decorators import observe
 
-from ira.brain.document_ingestor import DocumentIngestor, chunk_text
+from ira.brain.document_ingestor import (
+    DocumentIngestor,
+    chunk_text,
+    get_chunk_params_for_doc_type,
+)
 from ira.brain.embeddings import EmbeddingService
 from ira.brain.knowledge_graph import KnowledgeGraph
 from ira.brain.quality_filter import QualityFilter
@@ -281,24 +285,46 @@ class DigestiveSystem:
         source_category: str,
         source_id: str = "",
         entity_refs: list[tuple[str, str]] | None = None,
+        doc_type: str = "",
     ) -> tuple[int, list[KnowledgeItem]]:
         """Chunk protein + carbs and upsert into Qdrant. Returns (count, upserted items).
 
         If entity_refs is provided, each item's metadata gets graph_entity_ids for
-        Qdrant–Neo4j linking (denser retrieval).
+        Qdrant–Neo4j linking (denser retrieval). *doc_type* selects chunk_size/overlap.
         """
         protein_text = "\n".join(nutrients.get("protein", []))
         carbs_text = "\n".join(nutrients.get("carbs", []))
+        chunk_size, overlap = get_chunk_params_for_doc_type(doc_type)
 
         items: list[KnowledgeItem] = []
         graph_entity_ids = [f"{label}:{key}" for label, key in (entity_refs or [])]
 
+        def _first_sentence(text: str, max_chars: int = 200) -> str:
+            """First sentence or first max_chars for parent_summary."""
+            s = (text or "").strip()
+            if not s:
+                return ""
+            for sep in (". ", ".\n", "\n"):
+                idx = s.find(sep)
+                if idx != -1:
+                    s = s[: idx + 1].strip()
+                    break
+            return s[:max_chars].strip() or ""
+
+        from ira.brain.pii_redact import redact_pii, should_redact_pii
+        do_redact = should_redact_pii()
+
         if protein_text.strip():
-            for i, chunk in enumerate(chunk_text(protein_text)):
+            for i, chunk in enumerate(chunk_text(protein_text, chunk_size=chunk_size, overlap=overlap)):
+                content = chunk
+                if do_redact:
+                    content, _ = redact_pii(chunk)
                 meta: dict[str, Any] = {
                     "nutrient": "protein",
                     "chunk_index": i,
                     "source_id": source_id,
+                    "parent_summary": _first_sentence(content),
+                    "window": content,
                 }
                 if graph_entity_ids:
                     meta["graph_entity_ids"] = graph_entity_ids
@@ -306,17 +332,22 @@ class DigestiveSystem:
                     KnowledgeItem(
                         source=source,
                         source_category=source_category,
-                        content=chunk,
+                        content=content,
                         metadata=meta,
                     )
                 )
 
         if carbs_text.strip():
-            for i, chunk in enumerate(chunk_text(carbs_text)):
+            for i, chunk in enumerate(chunk_text(carbs_text, chunk_size=chunk_size, overlap=overlap)):
+                content = chunk
+                if do_redact:
+                    content, _ = redact_pii(chunk)
                 meta = {
                     "nutrient": "carbs",
                     "chunk_index": i,
                     "source_id": source_id,
+                    "parent_summary": _first_sentence(content),
+                    "window": content,
                 }
                 if graph_entity_ids:
                     meta["graph_entity_ids"] = graph_entity_ids
@@ -324,7 +355,7 @@ class DigestiveSystem:
                     KnowledgeItem(
                         source=source,
                         source_category=source_category,
-                        content=chunk,
+                        content=content,
                         metadata=meta,
                     )
                 )
@@ -423,8 +454,12 @@ class DigestiveSystem:
         source: str,
         source_category: str,
         source_id: str = "",
+        doc_type: str = "",
     ) -> dict[str, Any]:
-        """Run the full ingestion pipeline on raw text."""
+        """Run the full ingestion pipeline on raw text.
+
+        *doc_type* (e.g. quote, manual, contract) is used to choose chunk size and overlap.
+        """
         start = time.monotonic()
 
         if not raw_data or not raw_data.strip():
@@ -457,6 +492,7 @@ class DigestiveSystem:
                 source_category,
                 source_id=source_id,
                 entity_refs=entity_refs,
+                doc_type=doc_type,
             )
 
             # Link each Qdrant chunk to Neo4j (Chunk node + DESCRIBES edges)
@@ -500,6 +536,7 @@ class DigestiveSystem:
                 source_category,
                 source_id=source_id,
                 entity_refs=entity_refs,
+                doc_type=doc_type,
             )
             for item in upserted_items:
                 if entity_refs:

@@ -1076,12 +1076,95 @@ async def pipeline_summary() -> dict[str, Any]:
     return {"pipeline": summary}
 
 
+@app.get("/api/pipeline/proposals-sent")
+async def pipeline_proposals_sent() -> dict[str, Any]:
+    """Return count and list of proposals/quotes sent (from quotes table + outbound interactions).
+
+    Use this to correct the pipeline: deals in PROPOSAL stage may be fewer than
+    actual proposals sent (email/quote records).
+    """
+    from ira.data.models import Direction
+    from ira.data.quotes import QuoteStatus
+
+    crm = _svc(SK.CRM)
+    quotes = _services.get(SK.QUOTES)
+    out: dict[str, Any] = {"by_quotes_table": [], "by_outbound_email": [], "total_proposals_sent": 0}
+    sent_quote_count = 0
+    if quotes is not None:
+        try:
+            sent_quotes = await quotes.list_quotes(filters={"status": QuoteStatus.SENT})
+            sent_quote_count = len(sent_quotes)
+            for q in sent_quotes:
+                out["by_quotes_table"].append({
+                    "company": q.company_name,
+                    "machine_model": q.machine_model,
+                    "estimated_value": float(q.estimated_value) if q.estimated_value else None,
+                    "sent_at": q.sent_at.isoformat() if q.sent_at else None,
+                })
+        except Exception as e:
+            logger.warning("List quotes SENT failed: %s", e)
+    outbound_proposal_count = 0
+    if crm is not None:
+        try:
+            outbound = await crm.list_interactions(
+                filters={"direction": Direction.OUTBOUND},
+                limit=500,
+            )
+            for i in outbound:
+                subj = (i.subject or "").lower()
+                if "proposal" in subj or "quote" in subj or "quotation" in subj:
+                    outbound_proposal_count += 1
+                    contact = await crm.get_contact(str(i.contact_id)) if i.contact_id else None
+                    cdict = contact.to_dict() if contact else {}
+                    out["by_outbound_email"].append({
+                        "subject": (i.subject or "")[:120],
+                        "company": cdict.get("company_name"),
+                        "contact_email": cdict.get("email"),
+                        "created_at": i.created_at.isoformat() if i.created_at else None,
+                    })
+        except Exception as e:
+            logger.warning("List outbound for proposals failed: %s", e)
+    out["total_proposals_sent"] = sent_quote_count + len(out["by_outbound_email"])
+    out["quotes_sent_count"] = sent_quote_count
+    out["outbound_proposal_email_count"] = len(out["by_outbound_email"])
+    return out
+
+
 @app.get("/api/crm/list")
 async def crm_list(limit: int = 200) -> dict[str, Any]:
     """Return CRM list: deals with contact and company for Command Center."""
     crm = _svc(SK.CRM)
     deals = await crm.list_deals_with_details(limit=limit)
     return {"deals": deals, "count": len(deals)}
+
+
+class SyncApolloRequest(BaseModel):
+    """Optional body for POST /api/crm/sync-apollo."""
+
+    dry_run: bool = False
+    limit: int | None = None
+    contact_type: str | None = None
+    contacts_only: bool = False
+
+
+@app.post("/api/crm/sync-apollo")
+async def crm_sync_apollo(body: SyncApolloRequest | None = None) -> dict[str, Any]:
+    """Sync CRM with Apollo.io: enrich contacts (role, LinkedIn) and companies (industry, website, employees, region).
+
+    Uses Apollo credits. Requires APOLLO_API_KEY in .env. Optional body: dry_run, limit, contact_type, contacts_only.
+    """
+    opts = body or SyncApolloRequest()
+    crm = _svc(SK.CRM)
+    from ira.systems.apollo_crm_sync import sync_crm_with_apollo
+
+    result = await sync_crm_with_apollo(
+        crm,
+        dry_run=opts.dry_run,
+        limit=opts.limit,
+        contact_type=opts.contact_type,
+        contacts_only=opts.contacts_only,
+    )
+    return result
 
 
 @app.get("/api/deals")
@@ -1093,6 +1176,18 @@ async def deals_list(
     crm = _svc(SK.CRM)
     sort_heat = "desc" if sort == "heat_desc" else "asc"
     deals = await crm.list_deals_with_heat(limit=limit, sort_heat=sort_heat)
+    return {"deals": deals, "count": len(deals)}
+
+
+@app.get("/api/deals/ranked")
+async def deals_ranked(
+    limit: int = 200,
+    sort_by_score: str = "desc",
+) -> dict[str, Any]:
+    """Return deals with 0–100 lead score (order size, interest, stage, existing customer, meeting/web call).
+    Sorted by lead_score descending by default. Formula: data/knowledge/lead_ranker_formula.md"""
+    crm = _svc(SK.CRM)
+    deals = await crm.list_deals_with_lead_score(limit=limit, sort_by_score=sort_by_score)
     return {"deals": deals, "count": len(deals)}
 
 
@@ -1282,6 +1377,7 @@ async def ingest_file(file: UploadFile) -> dict[str, Any]:
 class ReingestRequest(BaseModel):
     min_file_size_mb: int = 5
     base_path: str = "data/imports"
+    min_chars_per_page: int = 25
 
 
 _reingest_status: dict[str, Any] = {"running": False, "last_result": None}
@@ -1310,6 +1406,7 @@ async def reingest_scanned(req: ReingestRequest | None = None) -> dict[str, Any]
             summary = await ingestor.reingest_scanned_pdfs(
                 base_path=params.base_path,
                 min_file_size=min_bytes,
+                min_chars_per_page=params.min_chars_per_page,
             )
             _reingest_status["last_result"] = summary
             logger.info("Scanned PDF re-ingestion complete: %s", summary)

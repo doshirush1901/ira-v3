@@ -1,18 +1,21 @@
-"""Google Docs & Drive integration for Ira.
+"""Google Docs, Drive & Calendar integration for Ira.
 
 Provides :class:`GoogleDocsService`, an async wrapper around the Google
-Docs API (v1) and Drive API (v3) that any agent or subsystem can use to:
+Docs API (v1), Drive API (v3), and Calendar API (v3) that any agent or
+subsystem can use to:
 
 * **Read** existing Google Docs (full text or structured content).
 * **Create** new Google Docs with initial content.
 * **Update** existing Docs (append, insert, or replace text).
 * **Search** Google Drive for files by name, type, or folder.
 * **List** files in a specific Drive folder.
+* **List** upcoming Calendar events (primary calendar).
 
 The service authenticates via OAuth2 using the same credential files as
-the EmailProcessor.  It requests Docs + Drive scopes and stores a
-separate token file (``token_docs.json``) so it doesn't invalidate the
-Gmail token.
+the EmailProcessor.  It requests Docs + Drive + Calendar scopes and
+stores a separate token file (``token_docs.json``) so it doesn't
+invalidate the Gmail token.  If you add Calendar after existing tokens,
+delete ``token_docs.json`` and re-run so the new scope is granted.
 
 Constructed once at startup and injected via the service locator
 (``ServiceKey.GOOGLE_DOCS``).  All operations degrade gracefully — a
@@ -39,6 +42,7 @@ logger = logging.getLogger(__name__)
 _SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/calendar.readonly",
 ]
 
 _TOKEN_FILE = "token_docs.json"
@@ -49,7 +53,7 @@ class GoogleDocsError(Exception):
 
 
 class GoogleDocsService:
-    """Async Google Docs and Drive client."""
+    """Async Google Docs, Drive and Calendar client."""
 
     def __init__(self, config: GoogleConfig | None = None) -> None:
         cfg = config or get_settings().google
@@ -57,15 +61,16 @@ class GoogleDocsService:
         self._token_path = Path(_TOKEN_FILE)
         self._docs_service: Any | None = None
         self._drive_service: Any | None = None
+        self._calendar_service: Any | None = None
 
     # ── authentication ─────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """Authenticate and build both Docs and Drive service objects."""
+        """Authenticate and build Docs, Drive and Calendar service objects."""
         if self._docs_service is not None:
             return
 
-        def _authenticate() -> tuple[Any, Any]:
+        def _authenticate() -> tuple[Any, Any, Any]:
             creds: Credentials | None = None
 
             if self._token_path.exists():
@@ -89,26 +94,36 @@ class GoogleDocsService:
 
             docs = build("docs", "v1", credentials=creds)
             drive = build("drive", "v3", credentials=creds)
-            return docs, drive
+            calendar = build("calendar", "v3", credentials=creds)
+            return docs, drive, calendar
 
         try:
-            self._docs_service, self._drive_service = await asyncio.to_thread(
-                _authenticate,
+            self._docs_service, self._drive_service, self._calendar_service = (
+                await asyncio.to_thread(_authenticate)
             )
-            logger.info("Google Docs/Drive services connected")
+            logger.info("Google Docs/Drive/Calendar services connected")
         except Exception as exc:
-            logger.error("Google Docs/Drive authentication failed: %s", exc)
+            logger.error("Google Docs/Drive/Calendar authentication failed: %s", exc)
             raise GoogleDocsError(str(exc)) from exc
 
     @property
     def available(self) -> bool:
-        return self._docs_service is not None and self._drive_service is not None
+        return (
+            self._docs_service is not None
+            and self._drive_service is not None
+            and self._calendar_service is not None
+        )
+
+    @property
+    def calendar_available(self) -> bool:
+        return self._calendar_service is not None
 
     async def close(self) -> None:
         """Release service objects."""
         self._docs_service = None
         self._drive_service = None
-        logger.info("Google Docs/Drive services closed")
+        self._calendar_service = None
+        logger.info("Google Docs/Drive/Calendar services closed")
 
     async def _ensure_connected(self) -> None:
         if not self.available:
@@ -351,6 +366,63 @@ class GoogleDocsService:
             raise GoogleDocsError(
                 f"Failed to move {file_id} to folder {folder_id}: {exc}"
             ) from exc
+
+    # ── calendar ───────────────────────────────────────────────────────
+
+    async def list_upcoming_events(
+        self,
+        *,
+        days: int = 7,
+        max_results: int = 20,
+        calendar_id: str = "primary",
+    ) -> list[dict[str, Any]]:
+        """List upcoming events from the primary (or given) calendar.
+
+        Returns a list of event dicts with summary, start, end, and optional
+        location/link. All-day events have date; timed events have datetime.
+        """
+        await self._ensure_connected()
+        if not self._calendar_service:
+            return []
+
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        time_min = now.isoformat()
+        time_max = (now + timedelta(days=days)).isoformat()
+
+        def _list() -> list[dict[str, Any]]:
+            resp = (
+                self._calendar_service.events()
+                .list(
+                    calendarId=calendar_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
+            return resp.get("items", [])
+
+        try:
+            raw = await asyncio.to_thread(_list)
+        except Exception as exc:
+            raise GoogleDocsError(f"Calendar list failed: {exc}") from exc
+
+        events: list[dict[str, Any]] = []
+        for ev in raw:
+            start = ev.get("start", {}) or {}
+            end = ev.get("end", {}) or {}
+            events.append({
+                "summary": ev.get("summary", "(No title)"),
+                "start": start.get("dateTime") or start.get("date", ""),
+                "end": end.get("dateTime") or end.get("date", ""),
+                "location": ev.get("location", ""),
+                "htmlLink": ev.get("htmlLink", ""),
+            })
+        return events
 
     # ── health ─────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ Based on complete email thread analysis - tracking first contact to order confir
 |----------|---------|-------|---------------|------------|-------|-----------|
 | **DutchTides** | Netherlands | €650K | Aug/Sep 2022 | Jul 2024 | **~22 months** | K2022 trade show |
 | **JoPlast** | Denmark | €290K | Oct 2022 | May 2023 | **~7-8 months** | K2022 trade show |
-| **Batelaan** | Netherlands | €150K | Oct 2022 | Dec 2022 | **~2-3 months** | K2022 trade show |
+| **Batelaan** | Netherlands | €150K | Pre-2018 | 2018, 2019 | Machines bought **2018 and 2019**; no 2022 sale | Customer since 2018 |
 | **Thermic** | Germany | €180K | May 2022 | Late 2023 | **~18 months** | Long negotiation |
 | **Donite** | Ireland | €90K | Apr 2023 | Mid 2024 | **~12-15 months** | Gradual process |
 
@@ -52,16 +52,12 @@ Oct 2024     - Delivery complete
 ```
 **Key insight:** Quick decision once specifications matched needs.
 
-### Batelaan (€150,000) - 2-3 Months
+### Batelaan (€150,000) - Purchases in 2018 and 2019
 ```
-Oct 16, 2022 - K2022 meeting request (met at trade show)
-Oct 19, 2022 - K2022 discussions
-Nov 9, 2022  - Quote for thermoforming machine
-Nov-Dec 2022 - Technical discussions, drawings
-Dec 6, 2022  - Revised offer
-Dec 2022     - ORDER CONFIRMED
+Batelaan bought machines from Machinecraft in 2018 and 2019.
+There was no order in 2022. (Corrected March 2026 — previous docs incorrectly stated a 2022 K-Show lead and Dec 2022 order.)
 ```
-**Key insight:** Trade show meeting accelerated the process significantly.
+**Key insight:** Batelaan was a customer in 2018–2019. As of 2026 the company is closed (sold); do not offer as a reference site.
 
 ### Thermic (€180,000) - 18 Months
 ```
@@ -88,7 +84,7 @@ Oct 2024     - Delivery
 | Metric | Old (Incorrect) | New (Verified) |
 |--------|-----------------|----------------|
 | Average Cycle | 408 days (13.6 mo) | **~6-12 months** |
-| Fast Close | 6 days | **2-3 months** (Batelaan) |
+| Fast Close | 6 days | **2-3 months** (e.g. trade-show leads) |
 | Longest Cycle | 1548 days (51 mo) | **~22 months** (DutchTides) |
 
 Note: Even K2022 trade show leads took 2-24 months to close.
@@ -96,7 +92,7 @@ Note: Even K2022 trade show leads took 2-24 months to close.
 ## True Sales Cycle Patterns
 
 ### Fast Closers (1-3 months)
-- **Trade show leads** (K-Show, Elmia): Batelaan, JoPlast
+- **Trade show leads** (K-Show, Elmia): JoPlast (Batelaan bought in 2018–2019, not from K2022)
 - **Partner referrals**: DutchTides (via FRIMO)
 - **Urgent replacements**: Customer has broken machine
 
