@@ -33,6 +33,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError as GmailHttpError
 
 from ira.config import EmailMode, get_settings
 from ira.data.models import Channel, DealStage, Direction, Email
@@ -93,28 +94,60 @@ def _is_non_business_sender(email_addr: str) -> bool:
     return any(local.startswith(p) for p in _NON_BUSINESS_PREFIXES)
 
 
+def _resolve_google_path(path: Path | str) -> Path:
+    """Resolve credentials/token path: if relative, resolve against repo root."""
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    repo_root = Path(__file__).resolve().parents[3]
+    return (repo_root / p).resolve()
+
+
+def _client_config_from_env(client_id: str, client_secret: str) -> dict[str, Any]:
+    """Build OAuth client config dict for InstalledAppFlow.from_client_config."""
+    return {
+        "installed": {
+            "client_id": client_id.strip(),
+            "client_secret": client_secret,
+            "redirect_uris": ["http://localhost"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        }
+    }
+
+
 async def send_simple_notification(to: str, subject: str, body: str) -> dict[str, Any]:
     """Send a single plain-text email via Gmail using project credentials.
 
-    Uses GOOGLE_* env (credentials_path, token_path). Requires token to have
-    gmail.send scope (e.g. from OPERATIONAL mode or a send script). On failure
-    logs and re-raises; caller may catch and warn without failing the main task.
+    Uses GOOGLE_* env (credentials_path, token_path). Resolves paths relative to
+    repo root. Uses OPERATIONAL_SCOPES so the same token works for read and send.
+    On failure logs and re-raises; caller may catch and warn without failing.
     """
     settings = get_settings()
     cfg = settings.google
-    creds_path = Path(cfg.credentials_path)
-    token_path = Path(cfg.token_path)
+    creds_path = _resolve_google_path(cfg.credentials_path)
+    token_path = _resolve_google_path(cfg.token_path)
+    client_id = (cfg.oauth_client_id or "").strip()
+    client_secret = (cfg.oauth_client_secret.get_secret_value() or "").strip()
+    use_env_creds = bool(client_id and client_secret)
 
     def _authenticate() -> Any:
         creds: Credentials | None = None
         if token_path.exists():
-            creds = Credentials.from_authorized_user_file(str(token_path), _SEND_SCOPES)
+            creds = Credentials.from_authorized_user_file(str(token_path), _OPERATIONAL_SCOPES)
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         elif not creds or not creds.valid:
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _SEND_SCOPES)
+            if use_env_creds:
+                flow = InstalledAppFlow.from_client_config(
+                    _client_config_from_env(client_id, client_secret), _OPERATIONAL_SCOPES,
+                )
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _OPERATIONAL_SCOPES)
             creds = flow.run_local_server(port=0)
+        token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(creds.to_json())
         return build("gmail", "v1", credentials=creds)
 
@@ -186,39 +219,84 @@ class EmailProcessor:
     # ── Gmail authentication ──────────────────────────────────────────────
 
     async def _build_gmail_service(self) -> Any:
-        """Authenticate with Gmail API and cache the service."""
+        """Authenticate with Gmail API and cache the service.
+
+        Always uses OPERATIONAL_SCOPES (read + send) so one token works for both reading and sending.
+        Paths are resolved relative to repo root when not absolute.
+        """
         if self._service is not None:
             return self._service
 
-        scopes = (
-            _OPERATIONAL_SCOPES
-            if self._mode is EmailMode.OPERATIONAL
-            else _TRAINING_SCOPES
-        )
-
-        creds_path = Path(self._google.credentials_path)
-        token_path = Path(self._google.token_path)
+        creds_path = _resolve_google_path(self._google.credentials_path)
+        token_path = _resolve_google_path(self._google.token_path)
+        client_id = (self._google.oauth_client_id or "").strip()
+        client_secret = (self._google.oauth_client_secret.get_secret_value() or "").strip()
+        use_env_creds = bool(client_id and client_secret)
 
         def _authenticate() -> Any:
             creds: Credentials | None = None
 
-            if token_path.exists():
-                creds = Credentials.from_authorized_user_file(
-                    str(token_path), scopes,
+            if not creds_path.exists() and not use_env_creds:
+                raise IraError(
+                    f"Gmail credentials not found: {creds_path}. "
+                    "Either set GOOGLE_CREDENTIALS_PATH to a credentials.json file, or set "
+                    "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in .env (OAuth client from Google Cloud Console, Gmail API)."
                 )
+
+            if token_path.exists():
+                try:
+                    creds = Credentials.from_authorized_user_file(
+                        str(token_path), _OPERATIONAL_SCOPES,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to load token %s: %s. Will re-authenticate.", token_path, e)
+                    creds = None
 
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            elif not creds or not creds.valid:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(creds_path), scopes,
-                )
-                creds = flow.run_local_server(port=0)
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    logger.warning("Token refresh failed: %s. Will re-authenticate.", e)
+                    creds = None
 
+            if not creds or not creds.valid:
+                if token_path.exists():
+                    raise IraError(
+                        "Gmail token expired or invalid. Delete token file and re-run (e.g. poetry run ira email sync) "
+                        f"to re-authenticate in the browser. Token path: {token_path}"
+                    )
+                if use_env_creds:
+                    client_config = _client_config_from_env(client_id, client_secret)
+                    flow = InstalledAppFlow.from_client_config(
+                        client_config, _OPERATIONAL_SCOPES,
+                    )
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        str(creds_path), _OPERATIONAL_SCOPES,
+                    )
+                try:
+                    creds = flow.run_local_server(port=0)
+                except Exception as e:
+                    raise IraError(
+                        f"Gmail OAuth failed: {e}. "
+                        "Run from a machine with a browser to complete sign-in. "
+                        "Ensure your OAuth client (Google Cloud Console) has Gmail API enabled and type is Desktop/Installed."
+                    ) from e
+
+            token_path.parent.mkdir(parents=True, exist_ok=True)
             token_path.write_text(creds.to_json())
             return build("gmail", "v1", credentials=creds)
 
-        self._service = await asyncio.to_thread(_authenticate)
+        try:
+            self._service = await asyncio.to_thread(_authenticate)
+        except IraError:
+            raise
+        except Exception as e:
+            logger.exception("Gmail authentication failed")
+            raise IraError(
+                f"Gmail auth failed: {e}. Check credentials.json and token.json paths (GOOGLE_CREDENTIALS_PATH, GOOGLE_TOKEN_PATH). "
+                "Delete token.json and restart to re-authenticate in the browser."
+            ) from e
         logger.info("Gmail service built (mode=%s)", self._mode.value)
         return self._service
 
@@ -964,6 +1042,7 @@ class EmailProcessor:
         from_address: str = "",
         to_address: str = "",
         subject: str = "",
+        label: str = "",
         query: str = "",
         after: str = "",
         before: str = "",
@@ -973,6 +1052,7 @@ class EmailProcessor:
 
         Parameters build a Gmail ``q`` string.  For example
         ``from_address="contact@acme-corp.com"`` becomes ``from:contact@acme-corp.com``.
+        ``label`` filters by Gmail label/folder (e.g. "HR" or "Recruitment CVs"); quoted if it contains spaces.
         ``query`` is appended verbatim for free-form Gmail search operators.
         ``after`` / ``before`` accept ``YYYY/MM/DD`` strings.
         """
@@ -983,6 +1063,10 @@ class EmailProcessor:
             parts.append(f"to:{to_address}")
         if subject:
             parts.append(f"subject:{subject}")
+        if label:
+            # Gmail search: label with spaces must be quoted
+            qlabel = f'label:"{label}"' if " " in label or "," in label else f"label:{label}"
+            parts.append(qlabel)
         if after:
             parts.append(f"after:{after}")
         if before:
@@ -1003,21 +1087,36 @@ class EmailProcessor:
                 .list(userId="me", q=q, maxResults=max_results)
                 .execute()
             )
-            stubs = resp.get("messages", [])
+            stubs = resp.get("messages") or []
             results: list[dict[str, Any]] = []
             for stub in stubs:
-                msg = (
-                    service.users()
-                    .messages()
-                    .get(userId="me", id=stub["id"], format="full")
-                    .execute()
-                )
-                results.append(msg)
+                msg_id = stub.get("id")
+                if not msg_id:
+                    continue
+                try:
+                    msg = (
+                        service.users()
+                        .messages()
+                        .get(userId="me", id=msg_id, format="full")
+                        .execute()
+                    )
+                    results.append(msg)
+                except GmailHttpError as e:
+                    logger.warning("Gmail get message %s failed: %s", msg_id, e)
             return results
 
-        raw_messages = await asyncio.to_thread(_search)
+        try:
+            raw_messages = await asyncio.to_thread(_search)
+        except GmailHttpError as e:
+            raise IraError(f"Gmail search failed: {e}") from e
         logger.info("Gmail search q=%r returned %d results", q, len(raw_messages))
-        return [self._parse_message(m) for m in raw_messages]
+        emails: list[Email] = []
+        for m in raw_messages:
+            try:
+                emails.append(self._parse_message(m))
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skip malformed message %s: %s", m.get("id"), e)
+        return emails
 
     # ── Thread retrieval ──────────────────────────────────────────────────
 
@@ -1033,12 +1132,169 @@ class EmailProcessor:
                 .execute()
             )
 
-        thread_data = await asyncio.to_thread(_fetch_thread)
-        raw_messages = thread_data.get("messages", [])
-
-        emails = [self._parse_message(msg) for msg in raw_messages]
+        try:
+            thread_data = await asyncio.to_thread(_fetch_thread)
+        except GmailHttpError as e:
+            raise IraError(f"Gmail thread {thread_id!r} failed: {e}") from e
+        raw_messages = thread_data.get("messages") or []
+        emails: list[Email] = []
+        for msg in raw_messages:
+            try:
+                emails.append(self._parse_message(msg))
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skip malformed message in thread %s: %s", thread_id, e)
         emails.sort(key=lambda e: e.received_at)
         return emails
+
+    # ── Thread with attachment text (for CV/resume parsing) ─────────────────
+
+    @staticmethod
+    def _collect_attachment_infos(payload: dict[str, Any]) -> list[tuple[str, str, str]]:
+        """Recursively collect (attachment_id, filename, mime_type) from a Gmail message payload."""
+        out: list[tuple[str, str, str]] = []
+        att_id = (payload.get("body") or {}).get("attachmentId")
+        if att_id:
+            filename = (payload.get("filename") or "").strip() or "attachment"
+            mime = (payload.get("mimeType") or "application/octet-stream").lower()
+            out.append((att_id, filename, mime))
+        for part in payload.get("parts", []):
+            out.extend(EmailProcessor._collect_attachment_infos(part))
+        return out
+
+    @staticmethod
+    def _extract_text_from_attachment_bytes(
+        data: bytes,
+        filename: str,
+        mime_type: str,
+    ) -> str:
+        """Extract plain text from PDF or DOCX attachment bytes. Returns empty string on failure or unsupported type."""
+        mime = (mime_type or "").lower()
+        name_lower = (filename or "").lower()
+        if "pdf" in mime or name_lower.endswith(".pdf"):
+            try:
+                from io import BytesIO
+                from pypdf import PdfReader
+                reader = PdfReader(BytesIO(data))
+                return "\n".join(p.extract_text() or "" for p in reader.pages)
+            except Exception as e:
+                logger.warning("PDF text extraction failed for %s: %s", filename, e)
+                return ""
+        if "wordprocessingml" in mime or "msword" in mime or name_lower.endswith(".docx") or name_lower.endswith(".doc"):
+            try:
+                from io import BytesIO
+                from docx import Document
+                doc = Document(BytesIO(data))
+                return "\n".join(p.text for p in doc.paragraphs)
+            except Exception as e:
+                logger.warning("DOCX text extraction failed for %s: %s", filename, e)
+                return ""
+        return ""
+
+    async def get_thread_with_attachment_text(
+        self,
+        thread_id: str,
+        *,
+        max_attachment_chars: int = 50000,
+        save_attachments_under: Path | None = None,
+        from_address: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch thread and extract text from PDF/DOCX attachments for each message.
+
+        Returns a list of dicts with keys: id, from_address, to_address, subject,
+        body, received_at, thread_id, attachment_texts (list of extracted text strings).
+
+        If save_attachments_under and from_address are set, PDF/DOCX attachment bytes
+        are written to save_attachments_under / sanitized(from_address) / filename
+        so recruitment scripts can keep a local copy of CVs.
+        """
+        service = await self._build_gmail_service()
+
+        def _fetch_thread() -> dict[str, Any]:
+            return (
+                service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="full")
+                .execute()
+            )
+
+        try:
+            thread_data = await asyncio.to_thread(_fetch_thread)
+        except GmailHttpError as e:
+            raise IraError(f"Gmail thread {thread_id!r} failed: {e}") from e
+
+        raw_messages = thread_data.get("messages") or []
+        result: list[dict[str, Any]] = []
+        save_dir: Path | None = None
+        if save_attachments_under and from_address:
+            safe_folder = re.sub(r"[^\w\-.]", "_", from_address.strip().lower())
+            save_dir = Path(save_attachments_under) / safe_folder
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+        for msg in raw_messages:
+            try:
+                email = self._parse_message(msg)
+            except (KeyError, TypeError, ValueError) as e:
+                logger.warning("Skip malformed message in thread %s: %s", thread_id, e)
+                continue
+
+            attachment_texts: list[str] = []
+            payload = msg.get("payload", {})
+            for att_id, filename, mime in self._collect_attachment_infos(payload):
+                try:
+
+                    def _get_att() -> dict[str, Any]:
+                        return (
+                            service.users()
+                            .messages()
+                            .attachments()
+                            .get(userId="me", messageId=msg["id"], id=att_id)
+                            .execute()
+                        )
+
+                    att_resp = await asyncio.to_thread(_get_att)
+                    b64 = att_resp.get("data")
+                    if not b64:
+                        continue
+                    data = base64.urlsafe_b64decode(b64)
+                    # Save PDF/DOCX to workspace when requested (e.g. for CVs)
+                    if save_dir and filename and mime:
+                        mime_lower = (mime or "").lower()
+                        name_lower = (filename or "").lower()
+                        if "pdf" in mime_lower or name_lower.endswith(".pdf"):
+                            safe_name = re.sub(r'[^\w\-.]', "_", Path(filename).name) or "attachment.pdf"
+                            dest = save_dir / safe_name
+                            await asyncio.to_thread(dest.write_bytes, data)
+                            logger.info("Saved attachment to %s", dest)
+                        elif "wordprocessingml" in mime_lower or "msword" in mime_lower or name_lower.endswith((".docx", ".doc")):
+                            safe_name = re.sub(r'[^\w\-.]', "_", Path(filename).name) or "attachment.docx"
+                            dest = save_dir / safe_name
+                            await asyncio.to_thread(dest.write_bytes, data)
+                            logger.info("Saved attachment to %s", dest)
+                    text = self._extract_text_from_attachment_bytes(data, filename, mime)
+                    if text.strip():
+                        attachment_texts.append(text[:max_attachment_chars])
+                except Exception as e:
+                    logger.warning(
+                        "Attachment %s in message %s: %s",
+                        att_id,
+                        msg.get("id"),
+                        e,
+                        exc_info=False,
+                    )
+
+            result.append({
+                "id": email.id,
+                "from_address": email.from_address,
+                "to_address": email.to_address,
+                "subject": email.subject,
+                "body": email.body,
+                "received_at": email.received_at.isoformat(),
+                "thread_id": email.thread_id,
+                "attachment_texts": attachment_texts,
+            })
+
+        result.sort(key=lambda x: x["received_at"])
+        return result
 
     # ── Polling ───────────────────────────────────────────────────────────
 

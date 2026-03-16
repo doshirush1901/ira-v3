@@ -35,7 +35,11 @@ When the user says "Cursor" or "Cursor mode" or "switch to Cursor", treat it as 
 ## When the user says "start Ira" (or equivalent)
 
 1. Run the **start-Ira steps** from `ira-api.mdc` (Docker check, then `docker compose -f docker-compose.local.yml up -d` from project root, verify containers). This ensures Ira's stack is up.
-2. **Prince of Persia–style startup animation:** Run the splash so the user sees Ira "waking up" and all engines start one by one:
+2. **Health check before "Ira is started":** Run a health check **before** showing the splash or status card. Never say "Ira is running" without having run a health check first.
+   - If the **API server is already running:** `curl -s http://localhost:8000/api/health` (or `GET /api/deep-health`). If you get 200 and the response shows services, use it. Optionally call `POST /api/llm/reset-breakers` so that after a wallet reload the next LLM request is attempted (clears circuit breakers).
+   - If **no API server:** From project root run `poetry run ira health` and read the output (Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage, etc.).
+   - **Only after** the health check: if critical services are healthy (or only non-critical are unhealthy), proceed to step 3. If **OpenAI or another critical service is unhealthy**, still show the status card but add a clear warning line, e.g. *"⚠️ OpenAI unreachable (quota or circuit breaker). Ira will retry in a few minutes; or restart Ira / call POST /api/llm/reset-breakers after reloading your wallet."*
+3. **Prince of Persia–style startup animation (only after health check):** Run the splash so the user sees Ira "waking up" and all engines start one by one:
    - From project root run: `poetry run ira splash` (optional: run in a terminal the user can see so they get the full animation: dungeon frames, then each engine lighting up, then "All engines ready" and "What would you like to do today with Ira?"). Use `ira splash --no-engines` for a shorter animation.
    - In the **chat reply**, display the following splash (in a code block to preserve alignment), then the status card:
 
@@ -82,7 +86,7 @@ When the user says "Cursor" or "Cursor mode" or "switch to Cursor", treat it as 
    - Ask for both an answer and a build — Ira and Cursor can hand off (see ira-cursor-handshake.mdc).
 
    If a container failed (e.g. Qdrant), mention it in one line under the status card (e.g. *Qdrant container exited; using cloud or fallback.*)
-3. Do **not** run `ira ask` for the "start Ira" message itself.
+4. Do **not** run `ira ask` for the "start Ira" message itself.
 
 ## When the user says "end Ira" or "switch to Cursor" (or equivalent)
 
@@ -110,6 +114,8 @@ Phrases that mean switch to Cursor / end Ira session: **"End Ira"**, **"Cursor"*
    - **If the API server is running** (e.g. `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health` returns `200`): POST to `http://localhost:8000/api/query/stream` with `{"query": "<user message>", "user_id": "cursor_user"}` and read the SSE stream. For each event (before `final_answer`), append to a **steps block**:
      - `perceiving` → "• Perceiving input"
      - `remembering` → "• Recalling memory"
+     - `sphinx_checking` → "• Sphinx: checking query clarity"
+     - `sphinx_clarifying` → "• Sphinx: clarification needed" (and show the clarification questions in the steps block or immediately below so the user sees Sphinx's counter-questions)
      - `routing` → "• Routing (Athena)"
      - `agent_started` → "▶ {agent} — {role}"
      - `tool_called` → "  ↳ {agent} → {tool}"

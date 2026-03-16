@@ -7,7 +7,7 @@ Ira v3 codebase. For Ira's identity and behavioral principles, see
 ## Repository Overview
 
 Ira is a multi-agent AI system built for Machinecraft. It processes requests
-through a 17-step pipeline, delegates to 31 specialist agents, and maintains
+through a 17-step pipeline, delegates to 32 specialist agents, and maintains
 persistent memory across conversations. Inside Cursor, Ira runs as a
 **Cursor-native agentic experience** using an Explore → Think → Act → Loop
 → Result flow with bounded execution, parallel sub-agents, and progressive
@@ -15,7 +15,7 @@ disclosure of reasoning.
 
 ```
 src/ira/
-  agents/       # 31 specialist agents + BaseAgent
+  agents/       # 32 specialist agents + BaseAgent
   brain/        # Retrieval, embeddings, graph, routing, pricing,
                 #   entity extraction (GLiNER), guardrails (32 modules)
   memory/       # 10 memory subsystems + dream mode + goal sweep
@@ -42,6 +42,7 @@ docs/           # ARCHITECTURE.md, SYSTEM_AUDIT.md
 
 | Agent | Role | Domain |
 |:------|:-----|:-------|
+| **Anu** | AI Recruiter | Resume parsing (PDF → JSON), candidate scoring, mentor chat, profile export |
 | **Athena** | Orchestrator | Routes requests, delegates, synthesizes multi-agent responses |
 | **Alexandros** | Librarian | Raw document archive (data/imports/), fallback when KB is empty |
 | **Arachne** | Content Scheduler | Newsletter assembly, content calendar, LinkedIn scheduling |
@@ -329,6 +330,8 @@ Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used wh
 |:-------|:-----|:------------|
 | POST | `/api/query` | Send a message to Ira |
 | POST | `/api/query/stream` | SSE streaming query with live progress events |
+| POST | `/api/query/agent` | Call a single agent by name (e.g. `themis`, `calliope`). Use when Ira must contribute a minimum share; bypasses pipeline routing. Body: `{"query": "...", "agent_name": "themis", "user_id": "..."}`. |
+| POST | `/api/llm/reset-breakers` | Clear OpenAI and Anthropic circuit breakers so the next LLM request is attempted. Use after reloading the OpenAI wallet or when starting Ira. |
 | POST | `/api/feedback` | Submit a correction |
 | GET | `/api/health` | Quick health check |
 | GET | `/api/deep-health` | Detailed service-by-service health |
@@ -354,6 +357,17 @@ Queries are normally run via the CLI (`ira ask`, `ira task`). The API is used wh
 | GET | `/api/vendors/payables` | Payables summary across all vendors |
 | GET | `/api/vendors/overdue` | Overdue vendor payables |
 | POST | `/api/vendors/payables` | Record a new vendor payable/invoice |
+
+**Recruitment (Anu backend)** — PostgreSQL tables `recruitment_candidates` and `recruitment_stage_events`; same DB as CRM. Run `alembic upgrade head` to create tables.
+
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| GET | `/api/anu/candidates` | List candidates (optional: `role_applied`, `stage` query params) |
+| GET | `/api/anu/candidates/by-email` | Get candidate by email (includes `stage_events`) |
+| PATCH | `/api/anu/candidates/by-email` | Update CV-parsed profile (body: `candidate_profile`) |
+| POST | `/api/recruitment/candidates` | Upsert candidate (body: email, name, phone, role_applied, profile, cv_parsed, score, ctc_current, etc.) |
+| PATCH | `/api/recruitment/candidates/by-email` | Update candidate (body: ctc_current, notes, name, phone, role_applied) |
+| POST | `/api/recruitment/candidates/by-email/events` | Record stage event (body: stage, event_at?, metadata?) |
 
 ## MCP Tools (Cursor Integration)
 

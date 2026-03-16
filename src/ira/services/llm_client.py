@@ -557,3 +557,11 @@ def reset_llm_client() -> None:
     """Reset the singleton — useful for tests."""
     global _client
     _client = None
+
+
+def reset_llm_circuit_breakers() -> None:
+    """Clear OpenAI and Anthropic circuit breakers so the next request is attempted.
+    Use after reloading the OpenAI wallet or when starting Ira so prior 429s don't block."""
+    client = get_llm_client()
+    client._openai_breaker.reset()
+    client._anthropic_breaker.reset()

@@ -55,6 +55,14 @@ class QueryResponse(BaseModel):
     agents_consulted: list[str] | None = None
 
 
+class QueryAgentRequest(BaseModel):
+    """Ask a specific agent directly (bypasses pipeline routing). Use for Cursor/Ira flows where Ira must contribute a minimum share."""
+    query: str
+    agent_name: str  # e.g. "themis", "calliope", "clio"
+    user_id: str | None = None
+    context: dict[str, Any] | None = None
+
+
 class BoardMeetingRequest(BaseModel):
     topic: str
     participants: list[str] | None = None
@@ -79,6 +87,7 @@ class EmailSearchRequest(BaseModel):
     from_address: str = ""
     to_address: str = ""
     subject: str = ""
+    label: str = ""
     query: str = ""
     after: str = ""
     before: str = ""
@@ -139,6 +148,78 @@ class TaskAbortRequest(BaseModel):
 class TaskRetryRequest(BaseModel):
     task_id: str
     from_phase: int | None = None
+
+
+# ── Anu (AI Recruiter) ─────────────────────────────────────────────────────
+
+class AnuScoreRequest(BaseModel):
+    candidate_profile: dict[str, Any]
+    job_description: str = ""
+
+
+class AnuChatRequest(BaseModel):
+    candidate_profile: dict[str, Any]
+    message: str
+    conversation_history: list[dict[str, str]] | None = None
+
+
+class AnuParseTextRequest(BaseModel):
+    resume_text: str
+
+
+class AnuCvParsedUpdateRequest(BaseModel):
+    """Body for updating a candidate's CV-parsed profile (from Anu parse-resume)."""
+
+    candidate_profile: dict[str, Any]
+
+
+class AnuDraftRecruitmentStage2Request(BaseModel):
+    """Inputs for drafting Stage 2 recruitment email (case study + DICE + skills)."""
+
+    candidate_name: str = ""
+    role: str = ""
+    case_study_text: str = ""
+    dice_questions: str = ""
+    skills_questions: str = ""
+    company_intro_short: str = ""
+    job_description_or_context: str = ""
+
+
+class AnuExportRequest(BaseModel):
+    candidate_profile: dict[str, Any]
+    scoring: dict[str, Any] | None = None
+    format: str = "text"  # "text" or "pdf"
+
+
+class RecruitmentUpsertRequest(BaseModel):
+    """Upsert a candidate in the recruitment database."""
+    email: str
+    name: str | None = None
+    phone: str | None = None
+    role_applied: str | None = None
+    profile: dict[str, Any] | None = None
+    cv_parsed: dict[str, Any] | None = None
+    score: dict[str, Any] | None = None
+    ctc_current: str | None = None
+    source_type: str | None = None
+    source_id: str | None = None
+    notes: str | None = None
+
+
+class RecruitmentStageEventRequest(BaseModel):
+    """Record a stage event for a candidate (e.g. stage2_sent, call_invited)."""
+    stage: str
+    event_at: str | None = None  # ISO datetime; default now
+    metadata: dict[str, Any] | None = None
+
+
+class RecruitmentCandidateUpdateRequest(BaseModel):
+    """Update candidate fields (ctc_current, notes, etc.)."""
+    ctc_current: str | None = None
+    notes: str | None = None
+    name: str | None = None
+    phone: str | None = None
+    role_applied: str | None = None
 
 
 # ── Service registry ──────────────────────────────────────────────────────
@@ -229,7 +310,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         redis_cache = RedisCache()
         await redis_cache.connect()
         _services[SK.REDIS] = redis_cache
-        from ira.services.llm_client import get_llm_client
+        from ira.services.llm_client import get_llm_client, reset_llm_circuit_breakers
         get_llm_client().set_redis_cache(redis_cache)
     
         # ── Google Docs / Drive ──────────────────────────────────────────
@@ -957,6 +1038,34 @@ async def query_stream(req: QueryRequest) -> EventSourceResponse:
     return EventSourceResponse(_event_generator())
 
 
+@app.post("/api/query/agent", response_model=QueryResponse)
+async def query_agent(req: QueryAgentRequest) -> QueryResponse:
+    """Call a single agent by name. Use when you need Ira (e.g. Themis, Calliope) to contribute directly; bypasses Sphinx and pipeline routing."""
+    pantheon = _services.get(SK.PANTHEON)
+    if pantheon is None:
+        return QueryResponse(
+            response="Pantheon not available.",
+            agents_consulted=[],
+        )
+    agent = pantheon.get_agent(req.agent_name.strip().lower())
+    if agent is None:
+        return QueryResponse(
+            response=f"Agent '{req.agent_name}' not found.",
+            agents_consulted=[],
+        )
+    ctx = (req.context or {}).copy()
+    if req.user_id:
+        unified_context = _services.get("unified_context")
+        if unified_context is not None:
+            ctx["cross_channel_history"] = unified_context.recent_history(req.user_id, limit=5)
+    try:
+        response = await agent.handle(req.query, ctx)
+    except Exception as e:
+        logger.exception("Agent %s failed", req.agent_name)
+        response = f"(Agent '{req.agent_name}' failed: {e!s})"
+    return QueryResponse(response=response or "(No response)", agents_consulted=[req.agent_name.strip().lower()])
+
+
 @app.post("/api/feedback", response_model=FeedbackResponse)
 async def feedback(req: FeedbackRequest) -> FeedbackResponse:
     """Process a user correction through the feedback pipeline.
@@ -1066,6 +1175,19 @@ async def deep_health_check() -> dict[str, Any]:
 
     all_healthy = all(_is_ok(v) for v in checks.values())
     return {"status": "ok" if all_healthy else "degraded", "services": checks}
+
+
+@app.post("/api/llm/reset-breakers")
+async def reset_llm_breakers() -> dict[str, str]:
+    """Clear OpenAI and Anthropic circuit breakers so the next LLM request is attempted.
+    Use after reloading the OpenAI wallet or when starting Ira so prior 429s don't block."""
+    try:
+        from ira.services.llm_client import reset_llm_circuit_breakers
+        reset_llm_circuit_breakers()
+        return {"status": "ok", "message": "Circuit breakers reset. Next LLM request will be attempted."}
+    except Exception as exc:
+        logger.exception("Reset LLM breakers failed")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/pipeline")
@@ -1183,11 +1305,15 @@ async def deals_list(
 async def deals_ranked(
     limit: int = 200,
     sort_by_score: str = "desc",
+    engagement_only: bool = True,
 ) -> dict[str, Any]:
     """Return deals with 0–100 lead score (order size, interest, stage, existing customer, meeting/web call).
-    Sorted by lead_score descending by default. Formula: data/knowledge/lead_ranker_formula.md"""
+    Sorted by lead_score descending by default. Formula: data/knowledge/lead_ranker_formula.md.
+    engagement_only=True (default): only include leads who have replied at least once; excludes list-import / no-thread records."""
     crm = _svc(SK.CRM)
-    deals = await crm.list_deals_with_lead_score(limit=limit, sort_by_score=sort_by_score)
+    deals = await crm.list_deals_with_lead_score(
+        limit=limit, sort_by_score=sort_by_score, engagement_only=engagement_only
+    )
     return {"deals": deals, "count": len(deals)}
 
 
@@ -1520,15 +1646,25 @@ async def memory_store(req: MemoryStoreRequest) -> dict[str, Any]:
 async def email_search(req: EmailSearchRequest) -> dict[str, Any]:
     """Search Gmail using native query filters (from, subject, date, etc.)."""
     ep = _svc(SK.EMAIL_PROCESSOR)
-    emails = await ep.search_emails(
-        from_address=req.from_address,
-        to_address=req.to_address,
-        subject=req.subject,
-        query=req.query,
-        after=req.after,
-        before=req.before,
-        max_results=req.max_results,
-    )
+    try:
+        emails = await ep.search_emails(
+            from_address=req.from_address,
+            to_address=req.to_address,
+            subject=req.subject,
+            label=req.label,
+            query=req.query,
+            after=req.after,
+            before=req.before,
+            max_results=req.max_results,
+        )
+    except IraError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Gmail search failed")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gmail search unavailable: {e}",
+        ) from e
     return {
         "count": len(emails),
         "emails": [
@@ -1546,11 +1682,69 @@ async def email_search(req: EmailSearchRequest) -> dict[str, Any]:
     }
 
 
+@app.get("/api/email/thread/{thread_id}/with-attachments")
+async def email_thread_with_attachments(
+    thread_id: str,
+    max_attachment_chars: int = 50000,
+    save_to_dir: str | None = None,
+    from_email: str | None = None,
+) -> dict[str, Any]:
+    """Fetch thread and extract text from PDF/DOCX attachments (e.g. CVs).
+
+    If save_to_dir and from_email are set, PDF/DOCX attachments are also written
+    to save_to_dir / sanitized(from_email) / filename (resolved relative to cwd).
+    """
+    ep = _svc(SK.EMAIL_PROCESSOR)
+    save_path: Path | None = None
+    if save_to_dir and from_email:
+        save_path = Path(save_to_dir).resolve()
+    try:
+        messages = await ep.get_thread_with_attachment_text(
+            thread_id,
+            max_attachment_chars=max_attachment_chars,
+            save_attachments_under=save_path,
+            from_address=from_email if save_path else None,
+        )
+    except IraError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Gmail thread with attachments failed for %s", thread_id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gmail thread unavailable: {e}",
+        ) from e
+    return {
+        "thread_id": thread_id,
+        "message_count": len(messages),
+        "messages": [
+            {
+                "id": m["id"],
+                "from": m["from_address"],
+                "to": m["to_address"],
+                "subject": m["subject"],
+                "date": m["received_at"],
+                "body": m["body"],
+                "attachment_texts": m.get("attachment_texts", []),
+            }
+            for m in messages
+        ],
+    }
+
+
 @app.get("/api/email/thread/{thread_id}")
 async def email_thread(thread_id: str) -> dict[str, Any]:
     """Fetch a full email thread by its Gmail thread ID."""
     ep = _svc(SK.EMAIL_PROCESSOR)
-    emails = await ep.get_thread(thread_id)
+    try:
+        emails = await ep.get_thread(thread_id)
+    except IraError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Gmail get_thread failed for %s", thread_id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gmail thread unavailable: {e}",
+        ) from e
     return {
         "thread_id": thread_id,
         "message_count": len(emails),
@@ -1653,6 +1847,7 @@ async def email_send(req: EmailSendRequest) -> dict[str, Any]:
                         logger.info("Logged outbound email to CRM for contact %s", to_email)
             except Exception as log_exc:
                 logger.warning("Failed to log outbound email to CRM: %s", log_exc)
+        result = result or {}
         return {
             "sent": True,
             "message_id": result.get("id"),
@@ -1661,6 +1856,296 @@ async def email_send(req: EmailSendRequest) -> dict[str, Any]:
         }
     except IraError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Email send failed")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Email send failed: {exc!s}. Check Gmail token has send scopes and GOOGLE_IRA_EMAIL if set.",
+        ) from exc
+
+
+# ── Anu (AI Recruiter Agent) ───────────────────────────────────────────────
+
+@app.get("/api/anu/candidates")
+async def anu_list_candidates(
+    limit: int = 100,
+    offset: int = 0,
+    role_applied: str | None = None,
+    stage: str | None = None,
+) -> dict[str, Any]:
+    """List applicant datasheets (recruitment database)."""
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    try:
+        rows = await store.list_candidates(
+            limit=limit, offset=offset, role_applied=role_applied, stage=stage
+        )
+        total = await store.count()
+        return {"total": total, "candidates": rows}
+    except Exception as e:
+        logger.exception("Anu list candidates failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.get("/api/anu/candidates/by-email")
+async def anu_get_candidate(email: str) -> dict[str, Any]:
+    """Get one applicant datasheet by email (for drafting replies via Rushabh's email)."""
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    try:
+        c = await store.get_by_email(email)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        return c
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Anu get candidate failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.patch("/api/anu/candidates/by-email")
+async def anu_update_candidate_cv_parsed(
+    email: str,
+    req: AnuCvParsedUpdateRequest,
+) -> dict[str, Any]:
+    """Store CV-parsed profile for a candidate (from Anu parse-resume-text)."""
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    try:
+        await store.update_cv_parsed(email, req.candidate_profile)
+        c = await store.get_by_email(email)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        return c
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Anu update cv_parsed failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+# ── Recruitment database API (Anu backend) ───────────────────────────────────
+
+@app.post("/api/recruitment/candidates")
+async def recruitment_upsert_candidate(req: RecruitmentUpsertRequest) -> dict[str, Any]:
+    """Upsert a candidate in the recruitment database (by email)."""
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    try:
+        candidate = await store.upsert_candidate(
+            req.email,
+            name=req.name,
+            phone=req.phone,
+            role_applied=req.role_applied,
+            profile=req.profile,
+            cv_parsed=req.cv_parsed,
+            score=req.score,
+            ctc_current=req.ctc_current,
+            source_type=req.source_type,
+            source_id=req.source_id,
+            notes=req.notes,
+        )
+        return candidate.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Recruitment upsert candidate failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/recruitment/candidates/by-email/events")
+async def recruitment_add_stage_event(
+    email: str,
+    req: RecruitmentStageEventRequest,
+) -> dict[str, Any]:
+    """Record a stage event for a candidate (e.g. stage1_sent, stage2_replied, call_invited)."""
+    from datetime import datetime
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    event_at = None
+    if req.event_at:
+        try:
+            event_at = datetime.fromisoformat(req.event_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid event_at ISO datetime")
+    try:
+        event = await store.add_stage_event(
+            email, req.stage, event_at=event_at, metadata=req.metadata
+        )
+        if event is None:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        return event.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Recruitment add stage event failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.patch("/api/recruitment/candidates/by-email")
+async def recruitment_update_candidate(
+    email: str,
+    req: RecruitmentCandidateUpdateRequest,
+) -> dict[str, Any]:
+    """Update candidate fields (ctc_current, notes, name, phone, role_applied)."""
+    from ira.data.recruitment import RecruitmentStore
+    store = RecruitmentStore()
+    try:
+        candidate = await store.upsert_candidate(
+            email,
+            ctc_current=req.ctc_current,
+            notes=req.notes,
+            name=req.name,
+            phone=req.phone,
+            role_applied=req.role_applied,
+        )
+        return candidate.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Recruitment update candidate failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/draft-recruitment-stage2")
+async def anu_draft_recruitment_stage2(
+    req: AnuDraftRecruitmentStage2Request,
+) -> dict[str, Any]:
+    """Draft Stage 2 recruitment email (subject + body) with case study, DICE, and skills questions."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+    try:
+        result = await anu.draft_recruitment_stage2(
+            candidate_name=req.candidate_name,
+            role=req.role,
+            case_study_text=req.case_study_text,
+            dice_questions=req.dice_questions,
+            skills_questions=req.skills_questions,
+            company_intro_short=req.company_intro_short,
+            job_description_or_context=req.job_description_or_context,
+        )
+        return result
+    except Exception as e:
+        logger.exception("Anu draft-recruitment-stage2 failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/parse-resume")
+async def anu_parse_resume(file: UploadFile) -> dict[str, Any]:
+    """Parse a PDF resume into structured candidate profile (JSON)."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported for resume parsing")
+
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {_MAX_UPLOAD_BYTES} bytes)")
+
+    try:
+        profile = await anu.parse_resume_from_pdf_bytes(content)
+        return {"candidate_profile": profile.model_dump()}
+    except Exception as e:
+        logger.exception("Anu parse-resume failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/parse-resume-text")
+async def anu_parse_resume_text(req: AnuParseTextRequest) -> dict[str, Any]:
+    """Parse plain resume text into structured candidate profile (JSON)."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+    try:
+        profile = await anu.parse_resume_from_text(req.resume_text)
+        return {"candidate_profile": profile.model_dump()}
+    except Exception as e:
+        logger.exception("Anu parse-resume-text failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/score")
+async def anu_score(req: AnuScoreRequest) -> dict[str, Any]:
+    """Score a candidate (1-5) with optional job description."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+    try:
+        score = await anu.score_candidate(
+            req.candidate_profile,
+            job_description=req.job_description,
+        )
+        return {"score": score.model_dump()}
+    except Exception as e:
+        logger.exception("Anu score failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/chat")
+async def anu_chat(req: AnuChatRequest) -> dict[str, Any]:
+    """Mentor-style chat: reply given candidate profile and conversation history."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+    try:
+        reply = await anu.mentor_reply(
+            req.candidate_profile,
+            message=req.message,
+            conversation_history=req.conversation_history,
+        )
+        return {"reply": reply}
+    except Exception as e:
+        logger.exception("Anu chat failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/anu/export")
+async def anu_export(req: AnuExportRequest):
+    """Generate profile summary; optionally return as PDF."""
+    pantheon = _svc(SK.PANTHEON)
+    anu = pantheon.get_agent("anu") if pantheon else None
+    if anu is None:
+        raise HTTPException(status_code=503, detail="Anu agent not available")
+
+    try:
+        summary = await anu.generate_profile_summary(
+            req.candidate_profile,
+            scoring=req.scoring,
+        )
+    except Exception as e:
+        logger.exception("Anu export summary failed")
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    if (req.format or "text").lower() == "pdf":
+        pdfco = _svc(SK.PDFCO)
+        if pdfco is None or not getattr(pdfco, "available", False):
+            return {"format": "text", "summary": summary}
+        try:
+            escaped = (summary or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            html = f"<html><body><pre style='font-family: sans-serif; white-space: pre-wrap;'>{escaped}</pre></body></html>"
+            pdf_bytes = await pdfco.html_to_pdf(html, name="candidate_profile.pdf")
+            from fastapi.responses import Response
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={"Content-Disposition": "attachment; filename=candidate_profile.pdf"},
+            )
+        except Exception as e:
+            logger.warning("PDF export failed, returning text: %s", e)
+            return {"format": "text", "summary": summary}
+
+    return {"format": "text", "summary": summary}
 
 
 @app.post("/api/outbound/campaigns/draft")

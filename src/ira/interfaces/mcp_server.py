@@ -419,6 +419,7 @@ async def ask_agent(agent_name: str, question: str) -> str:
 async def search_emails(
     from_address: str = "",
     subject: str = "",
+    label: str = "",
     query: str = "",
     after: str = "",
     before: str = "",
@@ -426,8 +427,8 @@ async def search_emails(
 ) -> str:
     """Search Machinecraft's Gmail inbox.
 
-    Filter by sender address, subject keywords, free-form query,
-    and date range (YYYY/MM/DD format). Returns matching emails
+    Filter by sender address, subject keywords, Gmail label/folder (e.g. HR, Recruitment CVs),
+    free-form query, and date range (YYYY/MM/DD format). Returns matching emails
     with id, from, to, subject, date, and thread_id.
     """
     await _ensure_initialized()
@@ -438,6 +439,7 @@ async def search_emails(
         emails = await _email_processor.search_emails(
             from_address=from_address,
             subject=subject,
+            label=label,
             query=query,
             after=after,
             before=before,

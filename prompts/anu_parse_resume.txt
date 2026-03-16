@@ -1,0 +1,13 @@
+Extract the candidate's key details from the resume text below and output structured data.
+
+Rules:
+- Use only information explicitly stated or clearly implied in the resume.
+- Leave fields empty or use empty list if not found.
+- For skills, list technologies, tools, and domains (e.g. SolidWorks, AutoCAD, mechanical design).
+- For education, list degree and institution (e.g. "BTech Mechanical, XYZ College").
+- experience_years: infer if mentioned (e.g. "5 years" or "2018-2023") or leave null.
+
+Resume text:
+---
+{resume_text}
+---

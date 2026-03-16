@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 IMPORTS_07 = PROJECT_ROOT / "data" / "imports" / "07_Leads_and_Contacts"
+LEAD_EXCLUSION_LIST = PROJECT_ROOT / "data" / "knowledge" / "lead_campaign_exclusion_list.txt"
 API_URL = "http://localhost:8000"
 API_KEY = ""
 
@@ -301,6 +302,18 @@ def search_emails_from(from_address: str, max_results: int = 50) -> list[dict[st
         return []
 
 
+def load_lead_campaign_excluded_emails() -> set[str]:
+    """Emails to exclude from lead campaigns (agency/partner, not customers). One per line; # = comment."""
+    excluded: set[str] = set()
+    if not LEAD_EXCLUSION_LIST.exists():
+        return excluded
+    for line in LEAD_EXCLUSION_LIST.read_text(encoding="utf-8").splitlines():
+        s = line.strip().lower()
+        if s and not s.startswith("#") and "@" in s:
+            excluded.add(s)
+    return excluded
+
+
 def has_communicated(email: str) -> tuple[bool, int, int]:
     """(communicated, total_from_them, genuine_count)."""
     emails = search_emails_from(email)
@@ -385,6 +398,12 @@ def main() -> None:
     if not httpx:
         print("Install httpx to call Ira API: poetry add httpx", file=sys.stderr)
         return
+
+    # Exclude leads on the campaign exclusion list (agency/partner, not customers)
+    excluded_emails = load_lead_campaign_excluded_emails()
+    if excluded_emails:
+        leads_no_customers = [L for L in leads_no_customers if (L.get("email") or "").strip().lower() not in excluded_emails]
+        print(f"  After excluding lead_campaign_exclusion_list: {len(leads_no_customers)}")
 
     to_check = leads_no_customers if args.limit <= 0 else leads_no_customers[: args.limit]
     communicated: list[dict[str, Any]] = []

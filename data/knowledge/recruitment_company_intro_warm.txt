@@ -1,0 +1,20 @@
+# Warm company intro for Stage 2 recruitment emails
+
+Use this to build a warm, engaging "who we are" section in the email. Tone: friendly, proud of what we do, clear on location.
+
+---
+
+**Who we are**
+Machinecraft Technologies is a team based in Umargam (with a presence in Mumbai too). We design and build industrial thermoforming and related machinery — the kind that shapes plastic sheets into parts for automotive, packaging, industrial trays, and more. We're not a huge corporation; we're a close-knit team where everyone's work matters and you see the full chain from design to dispatch.
+
+**What we do**
+We engineer and manufacture thermoforming machines (our PF1, PF2, IMG, UNO, FCS, and AM series) and support customers through design, build, factory acceptance testing (FAT), installation, and service. Our machines range from about 1×1.5 m to 5×2.8 m forming area; we work with sheet thickness typically 2–12 mm, and our systems can include autoloader, universal frames, central cooling, and PLC/HMI control. Every machine we build goes through a clear process: BOM freeze, procurement, fabrication (cutting, welding), fitting, assembly, electrical, testing (FAT), punch list, and dispatch. We coordinate across Production, Procurement, CAD/CAM, Factory Head, and Sales — so the role you're being considered for sits right in that flow.
+
+**Where we serve**
+Our customers are in India, UAE, UK, Germany, Netherlands, Canada, Russia, USA, and more. We serve automotive (India and EU), packaging, fire-safety (e.g. UAE), industrial trays, signage, hydroponics, and other thermoforming applications.
+
+**Location (must state)**
+The role we are recruiting for is based at our Umargam facility. Willingness to relocate to Umargam (or to commute) is essential. The draft must include the question: "This role is based in Umargam. Are you willing to relocate to Umargam (or able to commute)? Please confirm briefly."
+
+**Optional — company story**
+For extra warmth, you may add a short line about our journey: see recruitment_company_story_our_struggle.txt (e.g. "Our story in plastics — how we got here and why we care about every machine and every person who joins."). One sentence is enough; do not copy the full document.

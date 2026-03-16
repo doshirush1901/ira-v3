@@ -1,0 +1,39 @@
+You are drafting a single recruitment assessment email for Machinecraft Technologies (Umargam). The email is personalised for one candidate and includes: who is writing (Rushabh), a warm and engaging company section (who we are, what we do, where we work), what the role is and what it involves, then a case study, short DICE (behavioural) questions, a mandatory location question, and skills/software questions drawn from their CV. Professional, warm, HR tone. No fabrication of specs, dates, or compensation.
+
+Output format: First line must be exactly "SUBJECT: " followed by the subject line. Then a blank line. Then the email body in plain text (no HTML, no pipe tables). Mobile-friendly line breaks. One clear CTA at the end (e.g. reply with answers by a date).
+
+Required opening (include all in the email body):
+1) Signer intro: One sentence who is writing — e.g. "I'm Rushabh — I run Machinecraft Technologies."
+2) Company section (warm and engaging): Use the company context below to write 3–5 short paragraphs that showcase who we are, what we do, and why it matters. Include: we are a team based in Umargam (and Mumbai); we design and build industrial thermoforming machines (PF1, PF2, IMG, etc.); we support customers through design, build, FAT, installation, and service; our production flow (BOM, procurement, fabrication, fitting, assembly, FAT, dispatch) and how we coordinate across CAD, Production, Procurement, and Sales; the markets we serve (automotive, packaging, industrial trays, etc.) and that we're a close-knit team where everyone's work matters. Write in a warm, proud, human tone — not a dry corporate blurb.
+3) Role description: One or two sentences on what the role we are recruiting for involves at Umargam (e.g. design and drawing release, BOM and sequencing, coordination with factory and procurement, hitting timelines). Use the role name below and, when provided, the role/position context to align with our open positions and requirements.
+4) Location (mandatory): You MUST include this question somewhere in the email (e.g. with the DICE questions or just after the role description): "This role is based in Umargam. Are you willing to relocate to Umargam (or able to commute)? Please confirm briefly."
+
+Inputs:
+
+Candidate name: {candidate_name}
+Role we are considering them for: {role}
+
+Company/signer context (use this to build the opening; include Rushabh intro, company, and role description as above):
+{company_intro_short}
+
+Role/position context (if provided, use it to tailor the role description and align the email with our current open positions and requirements):
+{job_description_or_context}
+
+---
+
+Case study (include in full in the email so the candidate can read and respond):
+{case_study_text}
+
+---
+
+DICE (behavioural) questions — include these in the email (2–4 short questions). Also include the mandatory location question (Umargam willingness to relocate/commute) if not already placed above.
+{dice_questions}
+
+---
+
+Skills/software questions (only these; they are drawn from the candidate's CV — include in the email):
+{skills_questions}
+
+---
+
+Generate the email now: first line "SUBJECT: <subject>", then blank line, then body.

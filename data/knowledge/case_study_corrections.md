@@ -2,6 +2,23 @@
 
 Corrections applied so Ira and content do not repeat wrong claims.
 
+## REINRAUM-MIETEN / hassa@reinraum-mieten.de (March 2026) — NOT A LEAD
+
+- **Mistake:** We sent an outbound email to REINRAUM-MIETEN (Hassa, hassa@reinraum-mieten.de) treating them as a hot lead.
+- **Correct:** REINRAUM-MIETEN is a **cleanroom rental** company (Germany). They did **not** inquire about thermoforming; the deal was a list-import / CRM record with **no email thread** and **no evidence of interest**. Do **not** treat them as a lead or send further outreach.
+- **Remember:** Only treat as leads contacts who have **replied at least once** (inbound email) or have clear inquiry evidence. Ranked pipeline now uses `engagement_only=True` by default and **`data/knowledge/lead_campaign_exclusion_list.txt`** to exclude list-only and agency/partner contacts. When drafting/sending to "next lead", always include: **why they are a lead** (inquiry, reply, proposal sent), **what proposal/email was sent if any**, and **last email subject/preview**.
+
+## THERMOFORMEUSE / info@thermoformeuse.fr (March 2026) — NOT A LEAD
+
+- **What they are:** Philippe FRANCOIS / Thermoformeuse (Formech France) — they are a **Formech sales agent**, not a customer. The relationship was about them **wanting to be a sales agent for us** (Machinecraft); we had agency-for-France discussions, Lyon meeting, etc.
+- **Why they are not a lead:** A **lead** is a (potential) **customer** — someone who might buy our machines or who is inquiring on behalf of a buyer. Philippe is not a buyer; he wanted to *sell for us* as an agent. So he’s an agency/partner contact. Per last email with them, **this relationship is of no real use** — we’re not pursuing that channel with them, so there’s no value in treating them as a sales lead. Lead list = customers and customer-side inquiries only; exclude ex–agency/partner contacts when the relationship is of no use.
+- **Correct:** Do **not** treat THERMOFORMEUSE / info@thermoformeuse.fr as a sales lead. Do not send them lead-style outbound. They are an ex–agency prospect, not a buyer of our machines. Their email is in **`data/knowledge/lead_campaign_exclusion_list.txt`** so the ranked pipeline filters them out automatically.
+- **Also:** Before drafting any "next lead" email, run `pull_contact_email_history.py` so we know context; and add agency/partner contacts (relationship of no use) to `lead_campaign_exclusion_list.txt`.
+
+## THERMOFORMEUSE (March 2026) — always check Gmail before next-lead draft
+
+- **Process lesson:** We sent a generic "first touch" to THERMOFORMEUSE without checking Gmail; CRM had almost no history. Before drafting/sending to any "next lead", **always** run `scripts/pull_contact_email_history.py --email <their_email>` and use the logic tree to see **why** we were in touch (customer inquiry vs agency vs other). Exclude contacts where the relationship is of no real use (e.g. ex–agency, Formech agent). See `data/knowledge/outgoing_marketing_email_workflow.md` § Next-lead send.
+
 ## Plastoranger Advanced Technologies (March 2026)
 
 - **Wrong (removed):** "Plastoranger is a $200M automotive group."

@@ -50,6 +50,8 @@ Produce a **single, send-ready email** that is:
 | **1. Context** | 1.1 | Pull contact email history → logic tree + recap (`pull_contact_email_history.py`). |
 | | 1.2 | (Optional) Download quote PDFs → quote summary. |
 | | 1.3 | Assemble pre-draft bundle: logic tree + one snippet from their last reply + check_relationship + recall_memory. |
+| | 1.4 | **Check lead follow-up notes:** `data/knowledge/lead_follow_up_notes.md` for contact-specific context (client catch-up, new CEO, show video, “we should get in touch”, etc.). |
+| | 1.5 | **Check drafting learnings:** `data/knowledge/lead_email_drafting_learnings_guillaume_catchup.md` — Italian lab machine video (universal frames); no unsolicited price ranges; no SAM-PF1 Lab push unless asked; avoid "new packaging format" phrasing. |
 | **2. Research** | 2.1 | Lead’s website (what they do, location, currency). |
 | | 2.2 | News (NewsData.io / Iris) for sector+geography — or decide neutral opener. |
 | | 2.3 | Machine match (sales_playbook: PF1-C vs PF1-X, size). Region refs (case_studies, Atlas). |
@@ -77,6 +79,19 @@ Produce a **single, send-ready email** that is:
 3. **Score gate:** If score &lt; 9 → redo the **skipped workflow steps** (see “Score first, then send” below), re-score; repeat until score ≥ 9. **Only when score ≥ 9** → allow send.
 4. **Before send:** Run §9 checklist (including verification / no hallucinations).
 5. **After send:** CRM log with sent_at + LLM summary. On reply, log reply with LLM summary.
+
+### Next-lead send: always attach lead context
+
+**Where to get "next lead" (good leads only):** Use **good leads** = people who have **communicated** (they replied or sent us email). Do **not** mail list-only contacts with no prior engagement. Run **`scripts/top50_hot_leads_excluding_customers.py`** (with Ira API running) to get a list of good leads; output is CSV of communicated-only, excluding customers and `lead_campaign_exclusion_list.txt`. Use that list to pick the next lead to mail. See **`data/knowledge/good_leads_definition.md`**.
+
+**Mandatory before drafting:** Run **`scripts/pull_contact_email_history.py --email <their_email>`** (or Gmail search via API) to get the full thread history. **Do not rely on CRM alone** — many legacy Gmail threads were never logged to CRM. Step 1.1 (pull contact email history) is **required**, not optional, for "next lead" drafts.
+
+When drafting or sending to "the next lead", the draft file **must** include:
+- **Why they are a lead:** e.g. website inquiry, they replied, long relationship (from Gmail history).
+- **What we sent so far:** from **Gmail history** (pull_contact_email_history output): proposals/quotes sent, last outbound subject + date, and their last reply snippet.
+- **Last email from us (if any):** subject, date, 1–2 line preview so the new email continues the thread.
+
+Use ranked pipeline with `engagement_only=true` so only contacts who have replied at least once are included. Do not treat list-import / no-reply records as leads (see `case_study_corrections.md` — REINRAUM mistake). **Exclude agency/partner contacts** where the relationship is not useful (e.g. Formech sales agent — THERMOFORMEUSE). The ranked API applies an **exclusion list**: `data/knowledge/lead_campaign_exclusion_list.txt` — one email per line (comments with #). Contacts in this file are filtered out of `GET /api/deals/ranked`. Add emails there when a contact is not a potential customer (agency/partner, relationship of no use).
 
 ### Score first, then send (mandatory)
 

@@ -1,0 +1,10 @@
+# Lead campaign exclusion list
+# One email per line (lowercase). These contacts are excluded from "next lead" / ranked pipeline
+# because they are not potential customers (e.g. agency/partner, relationship of no use).
+# See case_study_corrections.md for why each is excluded.
+#
+# REINRAUM-MIETEN: cleanroom rental, never inquired about thermoforming (list-import only)
+hassa@reinraum-mieten.de
+#
+# THERMOFORMEUSE: Formech sales agent, wanted to be our agent; relationship of no real use
+info@thermoformeuse.fr

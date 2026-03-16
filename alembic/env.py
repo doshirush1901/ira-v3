@@ -16,6 +16,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from ira.data.crm import Base
 from ira.data.quotes import QuoteModel  # noqa: F401 — registers table on Base.metadata
+from ira.data.recruitment import (  # noqa: F401 — registers recruitment tables on Base.metadata
+    RecruitmentCandidateModel,
+    RecruitmentStageEventModel,
+)
 
 config = context.config
 

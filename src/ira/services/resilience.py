@@ -49,6 +49,11 @@ class CircuitBreaker:
             return True
         return (time.time() - self._opened_at) >= self._window_seconds
 
+    def reset(self) -> None:
+        """Clear failure state so the next attempt is allowed. Use after wallet reload or 'start Ira'."""
+        self._failures.clear()
+        self._opened_at = None
+
 
 def _backoff_delay(attempt: int, policy: RetryPolicy) -> float:
     base = min(policy.base_delay_seconds * (2 ** max(0, attempt - 1)), policy.max_delay_seconds)

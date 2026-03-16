@@ -1,0 +1,25 @@
+Generate a concise, recruiter-ready profile summary for this candidate. It will be used in a PDF report for hiring managers.
+
+Include:
+1. One short paragraph: name, current/most recent role, years of experience, key skills.
+2. Brief education line if available.
+3. 3-5 bullet points of strengths or highlights from their experience.
+4. Optional: one line on suggested role fit (e.g. "Well suited to Design Engineer or CAD Drafter roles.").
+
+Be factual and use only information from the candidate profile. If a field is missing, omit that part. Write in third person, professional tone. You may reference company context (roles, structure) if provided.
+
+Company context (optional):
+---
+{company_context}
+---
+
+Candidate profile (JSON):
+---
+{candidate_profile}
+---
+
+Scoring context (if available):
+---
+{scoring_context}
+---
+

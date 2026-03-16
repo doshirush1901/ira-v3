@@ -50,6 +50,7 @@ Only **one** Ira process should use a given data directory at a time. Ira enforc
 1. **Use either CLI or server, not both** on the same machine/data dir. To query from Cursor or scripts, use `poetry run ira ask "..." --json` (no server). To use the web UI or streaming API, start the server and do not run `ira ask`/`ira chat`/`ira task` in parallel.
 2. **Separate data dirs:** To run CLI and server at the same time (e.g. different repos or copies), set `IRA_DATA_DIR` to a different path for one of them so each process has its own `data/` and lock file.
 3. **Stale lock:** If a process crashed without releasing the lock, the lock file is released by the OS when the process exits. Restart the other process.
+4. **404 on /api/anu/candidates (or other new routes):** The running server was started before those routes were added. Stop the existing Ira process (e.g. `pkill -f "uvicorn ira.interfaces.server"`), then start the server again so it loads the current code.
 
 ## RuntimeError: Event loop is closed
 
@@ -69,3 +70,36 @@ Can appear during shutdown if a background task is still running. Often harmless
    poetry run ira graph backfill-from-qdrant --resume
    ```
 3. **Re-run from the start.** Without `--resume`, the backfill starts from the beginning. The backfill uses MERGE in Neo4j, so it is idempotent and safe to re-run; state is cleared on successful completion.
+
+## Gmail send fails (502, SSL, or “Check Gmail token has send scopes”)
+
+**What it is:** `POST /api/email/send` returns 502 with a message like “Email send failed: … Check Gmail token has send scopes and GOOGLE_IRA_EMAIL if set.”
+
+**Causes:**
+
+1. **Token created with read-only scopes**  
+   The Gmail token (e.g. `.credentials/token.json`) was created by a flow that only requested `gmail.readonly` (e.g. `scripts/download_email_attachments.py`, `scripts/crm_gmail_sync.py`). Sending requires `gmail.send` (and related) scopes.
+
+2. **GOOGLE_IRA_EMAIL mismatch**  
+   If `GOOGLE_IRA_EMAIL` is set in `.env`, the token must be for **that** account. If the token is for a different Google account, send will fail after the code checks the “From” identity.
+
+3. **Network/SSL**  
+   Rarely, an SSL/TLS or proxy issue between your machine and Google can surface as a generic SSL error.
+
+**What to do:**
+
+1. **Give the token send scopes**  
+   Delete the existing Gmail token so Ira creates a new one with send access:
+   - Remove the token file (e.g. `rm .credentials/token.json` from project root).
+   - Start the API server or run a command that uses the email processor (e.g. `poetry run ira email sync`). When the browser opens, sign in with the **account you want to send from** and approve the requested permissions (Ira’s flow asks for `gmail.modify`, `gmail.compose`, `gmail.send`).
+   - Do **not** create the token again with a read-only script; use Ira’s flow so the token has send scopes.
+
+2. **Set GOOGLE_IRA_EMAIL to the sending address**  
+   In `.env` set:
+   ```bash
+   GOOGLE_IRA_EMAIL=your-send-from@example.com
+   ```
+   Use the exact address of the Google account that will sign in when the token is created. If you change this later, delete the token and re-run the auth flow with the correct account.
+
+3. **Check network**  
+   If the error is clearly an SSL handshake failure and you use a proxy/VPN, try without it or ensure the proxy allows TLS to `*.googleapis.com`.

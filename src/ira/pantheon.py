@@ -13,6 +13,7 @@ import json
 import logging
 from typing import Any, Callable, Awaitable
 
+from ira.agents.anu import Anu
 from ira.agents.aegis import Aegis
 from ira.agents.aletheia import Aletheia
 from ira.agents.alexandros import Alexandros
@@ -62,7 +63,7 @@ _AGENT_CLASSES: list[type[BaseAgent]] = [
     Calliope, Tyche, Delphi, Sphinx, Vera, Sophia, Iris, Mnemosyne,
     Nemesis, Arachne, Alexandros, Hera, Atlas, Asclepius, Chiron,
     Cadmus, Quotebuilder, Artemis, Populator, Gapper, Mnemon,
-    Aegis, Aletheia, Graphe, Metis,
+    Aegis, Aletheia, Graphe, Metis, Anu,
 ]
 
 

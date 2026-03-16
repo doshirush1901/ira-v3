@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum as PyEnum
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -50,6 +51,23 @@ from ira.exceptions import IraError
 _str_uuid = lambda: str(uuid4())  # noqa: E731
 
 logger = logging.getLogger(__name__)
+
+_LEAD_EXCLUSION_LIST_PATH = Path(__file__).resolve().parents[3] / "data" / "knowledge" / "lead_campaign_exclusion_list.txt"
+
+
+def _load_lead_campaign_excluded_emails() -> set[str]:
+    """Load emails excluded from lead campaigns (agency/partner, not customers). One email per line; # = comment."""
+    excluded: set[str] = set()
+    if not _LEAD_EXCLUSION_LIST_PATH.exists():
+        return excluded
+    try:
+        for line in _LEAD_EXCLUSION_LIST_PATH.read_text(encoding="utf-8").splitlines():
+            s = line.strip().lower()
+            if s and not s.startswith("#") and "@" in s:
+                excluded.add(s)
+    except Exception as e:
+        logger.warning("Could not load lead exclusion list %s: %s", _LEAD_EXCLUSION_LIST_PATH, e)
+    return excluded
 
 
 # ── SQLAlchemy declarative base ──────────────────────────────────────────────
@@ -672,18 +690,21 @@ class CRMDatabase:
         self,
         limit: int = 200,
         sort_by_score: str = "desc",
+        engagement_only: bool = True,
     ) -> list[dict[str, Any]]:
         """List deals with contact/company and a 0–100 lead score (order size, interest, stage, customer, meeting).
 
         Uses lead_ranker formula; see data/knowledge/lead_ranker_formula.md.
         sort_by_score: 'desc' = hottest first.
+        engagement_only: if True, only include deals where the lead has replied at least once (inbound email).
+        Excludes list-import / no-thread records that are not genuine leads.
         """
         from ira.brain.lead_ranker import (
             had_meeting_or_web_call,
             score_lead,
         )
 
-        deals = await self.list_deals_with_details(limit=limit * 2)
+        deals = await self.list_deals_with_details(limit=limit * 3)
         if not deals:
             return []
 
@@ -772,6 +793,15 @@ class CRMDatabase:
             d["last_email_sent_at"] = last_out.get("last_email_sent_at") if last_out else None
             d["last_email_subject"] = last_out.get("last_email_subject") if last_out else None
             d["last_email_preview"] = last_out.get("last_email_preview") if last_out else None
+
+        if engagement_only:
+            # Only include deals where the lead has replied at least once (genuine lead).
+            deals = [d for d in deals if (contact_inbound_count.get(d.get("contact_id") or "", 0) or 0) >= 1]
+
+        # Exclude contacts on the lead-campaign exclusion list (agency/partner, not customers).
+        excluded_emails = _load_lead_campaign_excluded_emails()
+        if excluded_emails:
+            deals = [d for d in deals if (d.get("contact_email") or "").strip().lower() not in excluded_emails]
 
         reverse = sort_by_score.lower() == "desc"
         deals.sort(key=lambda x: (x.get("lead_score") or 0, x.get("updated_at") or ""), reverse=reverse)

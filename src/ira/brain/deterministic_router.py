@@ -224,6 +224,8 @@ _PATTERNS: list[_Pattern] = _compile([
     (r"\bemployee", IntentCategory.HR_OVERVIEW, 1.5),
     (r"\bheadcount\b", IntentCategory.HR_OVERVIEW, 2.0),
     (r"\bhiring\b", IntentCategory.HR_OVERVIEW, 1.5),
+    (r"\binterview\s+questions?\b", IntentCategory.HR_OVERVIEW, 2.0),
+    (r"\brecruit(ing|ment)?\b", IntentCategory.HR_OVERVIEW, 1.5),
 
     # Production
     (r"\bproduction\b", IntentCategory.PRODUCTION_STATUS, 1.5),

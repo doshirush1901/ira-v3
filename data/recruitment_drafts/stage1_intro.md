@@ -1,0 +1,17 @@
+Subject: Re: Your application — Machinecraft Technologies (Umargam)
+
+---
+
+Machinecraft Technologies designs and builds industrial thermoforming and related machinery. We are based at Umargam (and Mumbai); the role we are recruiting for is at our Umargam facility.
+
+What we do: We engineer and manufacture thermoforming machines (PF1, PF2, IMG, UNO, FCS, AM series) and support customers through design, build, FAT, installation, and service. Our machines range from about 1×1.5 m to 5×2.8 m forming area, with sheet thickness 2–12 mm typical; options include autoloader, universal frames, central cooling, and PLC/HMI control.
+
+Markets we serve: Automotive (India, EU), packaging, fire-safety (e.g. UAE), industrial trays, signage, hydroponics, and other thermoforming applications. Customers are in India, UAE, UK, Germany, Netherlands, Canada, Russia, USA, and more.
+
+Our typical production process: BOM freeze → procurement (Order/Receive/Send/Back-Return) → fabrication (cutting, welding) → fitting → assembly → electrical → testing (FAT) → punch list → dispatch. We coordinate across Production, Procurement, CAD/CAM, Factory Head, and Sales, using task codes and gates (e.g. Asana) for tracking.
+
+We are currently looking for: CAD, Production Planning, Plant Manager, PLC, Procurement, CAM
+
+Location of role: Umargam.
+
+If you're still interested, reply with a short note and we'll send role-specific next steps.

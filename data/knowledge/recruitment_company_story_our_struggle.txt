@@ -1,0 +1,12 @@
+# Our Struggle in Plastics — company story (short version for recruitment)
+
+Use this as an optional, short "why we exist" or "our journey" paragraph in recruitment emails when you want to add warmth and context. Do not copy the full document; use 2–4 sentences.
+
+---
+
+**Short version (for emails):**
+Machinecraft’s journey in plastics and thermoforming started from the ground up — building machines, learning from the shop floor, and growing with our customers. "Our Struggle in Plastics" is our story: how we got here and why we care about every machine we build and every person who joins the team. We use it in recruitment to share context with candidates who want to know who we are beyond the job description.
+
+**When to include:** Optional. If the draft already has a strong company section from recruitment_company_intro_warm.txt, you can add one sentence referencing "our story in plastics" or skip. For senior or culture-fit–focused candidates, a sentence or two from this file can reinforce authenticity.
+
+**Full source:** The full narrative lives in the PDF "Our Struggle in Plastics" under data/imports/22_HR Data; after ingest, retrieval can pull more detail if needed.

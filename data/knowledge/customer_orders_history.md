@@ -13,6 +13,26 @@ This document contains detailed information about actual customer orders and pur
 
 ## Confirmed Orders by Customer
 
+### KKNAG — India (Quote / Spec)
+**Contact:** Mahesh — mahesh.mane04@gmail.com  
+**Company:** KKNAG  
+**Machine:** PF1-X Series  
+**Value:** INR 60 lakhs | Optional: Additional individual heater control INR 8 lakh
+
+**Technical Specifications**:
+- Max Forming Area: 1100 x 1300 mm
+- Frame: Fixed welded frames
+- Loading / Unloading: Manual
+- Tool Clamp: Bolts
+- Bottom Table: Servo
+- Top Plug: Pneumatic
+- Sheet Temperature Reader: Yes
+- Heater Movement: Pneumatic
+
+**Note:** For internal accuracy only — do not mention universal frames to this lead; spec is fixed welded frames.
+
+---
+
 ### 1. IAC International Automotive India (2024)
 **PO Number**: 4500013438
 **Machine**: MC-IMG-1608 (In-Mold Graining Machine)
