@@ -31,6 +31,7 @@ import mailbox
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
@@ -4000,6 +4001,85 @@ def pipeline(
         console.print(f"\n[bold]Total deals:[/bold] {total_count}  |  [bold]Total value:[/bold] ${total_value:,.0f}")
 
     _run(_pipeline())
+
+
+# ── Splash (control room animation) ────────────────────────────────────────
+
+
+# Control-room indicators: (label, short name for status)
+_SPLASH_INDICATORS = [
+    ("Qdrant", "Vectors"),
+    ("Neo4j", "Graph"),
+    ("Postgres", "CRM"),
+    ("Redis", "Cache"),
+    ("OpenAI", "LLM"),
+    ("Voyage", "Embed"),
+    ("Mem0", "Memory"),
+    ("Gmail", "Mail"),
+    ("Pantheon", "Agents"),
+]
+
+
+def _control_room_frame(on_count: int) -> Table:
+    """Build one frame of the control room: first on_count indicators ON, rest OFF."""
+    t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    t.add_column("", style="dim", width=6)
+    t.add_column("System", style="cyan", width=12)
+    t.add_column("Role", style="dim", width=8)
+    for i, (label, sub) in enumerate(_SPLASH_INDICATORS):
+        if i < on_count:
+            t.add_row("[green]● ON[/green]", f"[cyan]{label}[/cyan]", sub)
+        else:
+            t.add_row("[dim]○ OFF[/dim]", f"[dim]{label}[/dim]", f"[dim]{sub}[/dim]")
+    return t
+
+
+@app.command()
+def splash(
+    delay: float = typer.Option(0.28, "--delay", "-d", help="Seconds between each indicator lighting up."),
+    no_animation: bool = typer.Option(False, "--no-engines", help="Skip per-indicator animation; show final state only."),
+) -> None:
+    """Pilot's control room: power-on animation. Run after 'start Ira' or with 'ira splash'."""
+    from rich.live import Live
+    from rich.panel import Panel
+
+    out = Console(force_terminal=True)
+
+    if no_animation:
+        out.print()
+        panel = Panel(
+            _control_room_frame(len(_SPLASH_INDICATORS)),
+            title="[bold cyan]MACHINECRAFT — IRA CONTROL[/bold cyan]",
+            subtitle="[green]All systems nominal[/green]",
+            border_style="dim",
+        )
+        out.print(panel)
+        out.print("  [bold green]● Ira is running.[/bold green]  This chat → Ira until you say \"end Ira\".")
+        out.print()
+        return
+
+    # Animate: start with all OFF, then light up one by one
+    out.print()
+    with Live(console=out, refresh_per_second=8, transient=False) as live:
+        for on_count in range(0, len(_SPLASH_INDICATORS) + 1):
+            title = "[bold cyan]MACHINECRAFT — IRA CONTROL[/bold cyan]"
+            if on_count == 0:
+                subtitle = "[dim]Power-on sequence…[/dim]"
+            elif on_count < len(_SPLASH_INDICATORS):
+                subtitle = f"[dim]Bringing systems online… {on_count}/{len(_SPLASH_INDICATORS)}[/dim]"
+            else:
+                subtitle = "[green]All systems nominal — Ira is running[/green]"
+            panel = Panel(
+                _control_room_frame(on_count),
+                title=title,
+                subtitle=subtitle,
+                border_style="dim",
+            )
+            live.update(panel)
+            if on_count <= len(_SPLASH_INDICATORS) - 1:
+                time.sleep(delay)
+    out.print("  [bold green]● Ira is running.[/bold green]  This chat → Ira until you say \"end Ira\".")
+    out.print()
 
 
 # ── Health ────────────────────────────────────────────────────────────────

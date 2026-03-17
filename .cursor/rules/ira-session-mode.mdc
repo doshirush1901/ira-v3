@@ -39,23 +39,26 @@ When the user says "Cursor" or "Cursor mode" or "switch to Cursor", treat it as 
    - If the **API server is already running:** `curl -s http://localhost:8000/api/health` (or `GET /api/deep-health`). If you get 200 and the response shows services, use it. Optionally call `POST /api/llm/reset-breakers` so that after a wallet reload the next LLM request is attempted (clears circuit breakers).
    - If **no API server:** From project root run `poetry run ira health` and read the output (Qdrant, Neo4j, PostgreSQL, OpenAI, Voyage, etc.).
    - **Only after** the health check: if critical services are healthy (or only non-critical are unhealthy), proceed to step 3. If **OpenAI or another critical service is unhealthy**, still show the status card but add a clear warning line, e.g. *"⚠️ OpenAI unreachable (quota or circuit breaker). Ira will retry in a few minutes; or restart Ira / call POST /api/llm/reset-breakers after reloading your wallet."*
-3. **Prince of Persia–style startup animation (only after health check):** Run the splash so the user sees Ira "waking up" and all engines start one by one:
-   - From project root run: `poetry run ira splash` (optional: run in a terminal the user can see so they get the full animation: dungeon frames, then each engine lighting up, then "All engines ready" and "What would you like to do today with Ira?"). Use `ira splash --no-engines` for a shorter animation.
-   - In the **chat reply**, display the following splash (in a code block to preserve alignment), then the status card:
+3. **Pilot's control room animation (only after health check):** Run the splash so the user sees indicators power on one by one (all OFF → then each system lights up as ON).
+   - From project root run: `poetry run ira splash` so the user sees the control-room animation in the terminal (each indicator turns from ○ OFF to ● ON in sequence). Use `ira splash --no-engines` for an instant summary with no animation.
+   - In the **chat reply**, display the **control room** (final state: all indicators ON) in a code block, then the status card:
 
    ```
-   ╔═══════════════════════════════════════╗
-   ║  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ║
-   ║  ░     │ ▐▌            ▐▌ │     ░  ║
-   ║  ░     │  ▄▄▄ ▄▄▄ ▄▄▄  │     ░  ║
-   ║  ░     │  █   █   █   │     ░  ║
-   ║  ░     ▓  ▀▀▀ ▀▀▀ ▀▀▀  ▓     ░  ║
-   ║  ░  ● Ira is running        ░  ║
-   ║  ░  Full stack · This chat → Ira  ░  ║
-   ╚═══════════════════════════════════════╝
+   ╭──────────── MACHINECRAFT — IRA CONTROL ─────────────╮
+   │         System        Role                         │
+   │  ● ON    Qdrant        Vectors                      │
+   │  ● ON    Neo4j         Graph                        │
+   │  ● ON    Postgres      CRM                          │
+   │  ● ON    Redis         Cache                        │
+   │  ● ON    OpenAI        LLM                          │
+   │  ● ON    Voyage        Embed                        │
+   │  ● ON    Mem0          Memory                       │
+   │  ● ON    Gmail         Mail                         │
+   │  ● ON    Pantheon      Agents                       │
+   ╰────────── All systems nominal — Ira is running ─────╯
    ```
 
-   Then show the **Ira running status card** (use this exact block):
+   Then show the **Ira running status card**:
 
    ```
    ┌──────────────────────────────────────────────────┐
@@ -75,7 +78,7 @@ When the user says "Cursor" or "Cursor mode" or "switch to Cursor", treat it as 
    | Redis    | Cache · sessions |
    | Mem0     | Long-term memory |
    | Gmail    | Email · read & draft |
-   | Pantheon | 31 agents |
+   | Pantheon | 32 agents |
 
    Then **always** add the startup prompt so the user knows what to do next:
 
